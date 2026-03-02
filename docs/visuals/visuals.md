@@ -30,4 +30,4 @@ No rendering dependency is required.
 
 ## Current TODO/UNKNOWN
 
-- `MILESTONES.md` has conflicting Rugo status text: the matrix marks M1-M5 as done, while sections M1-M5 say `Rugo evidence: Not started`.
+- None currently.

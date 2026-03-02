@@ -56,7 +56,6 @@ flowchart LR
     source --> r1
     source --> r2
     source --> r3
-    source -. "TODO/UNKNOWN: M1-M5 sections still say 'Rugo evidence: Not started'" .-> todo["Reconcile status text in MILESTONES.md"]
 ```
 
 ### Boot and test flow
@@ -87,8 +86,6 @@ Tiny visual summary:
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
 Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7] [G1] complete  [G2] not started
 ```
-
-`TODO/UNKNOWN`: `MILESTONES.md` is internally inconsistent. Its "Milestone status matrix" marks Rugo M1-M5 as done, while milestone sections M1-M5 still contain `Rugo evidence: Not started`. Clarify and reconcile in `MILESTONES.md`.
 
 ## Repo layout
 
