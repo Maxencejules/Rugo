@@ -32,6 +32,7 @@ ISO_SVC_OVERWRITE_PATH = os.path.join(REPO_ROOT, "out", "os-svc-overwrite.iso")
 # Backward-compatible alias
 ISO_IPC_SVC_OVERWRITE_PATH = ISO_SVC_OVERWRITE_PATH
 ISO_SVC_FULL_PATH = os.path.join(REPO_ROOT, "out", "os-svc-full.iso")
+ISO_SVC_BAD_ENDPOINT_PATH = os.path.join(REPO_ROOT, "out", "os-svc-bad-endpoint.iso")
 ISO_SHM_PATH = os.path.join(REPO_ROOT, "out", "os-shm.iso")
 ISO_PRESSURE_SHM_PATH = os.path.join(REPO_ROOT, "out", "os-pressure-shm.iso")
 ISO_QUOTA_ENDPOINTS_PATH = os.path.join(REPO_ROOT, "out", "os-quota-endpoints.iso")
@@ -277,6 +278,14 @@ def qemu_serial_svc_full():
     if not os.path.isfile(ISO_SVC_FULL_PATH):
         pytest.skip(f"ISO not built: {ISO_SVC_FULL_PATH}")
     return _boot_iso(ISO_SVC_FULL_PATH)
+
+
+@pytest.fixture
+def qemu_serial_svc_bad_endpoint():
+    """Boot the SVC bad-endpoint test OS image and return captured serial output."""
+    if not os.path.isfile(ISO_SVC_BAD_ENDPOINT_PATH):
+        pytest.skip(f"ISO not built: {ISO_SVC_BAD_ENDPOINT_PATH}")
+    return _boot_iso(ISO_SVC_BAD_ENDPOINT_PATH)
 
 
 @pytest.fixture

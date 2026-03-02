@@ -46,7 +46,7 @@ indicates an error.
 | 8 | sys_ipc_send | rdi=endpoint, rsi=buf, rdx=len | 0 or -1 | **Implemented (R4)** | Send message to IPC endpoint (`len` must be 1..256; no truncation) |
 | 9 | sys_ipc_recv | rdi=endpoint, rsi=buf, rdx=cap | bytes_received or -1 | **Implemented (R4)** | Receive from IPC endpoint (blocks if empty; second waiter is rejected) |
 | 10 | sys_time_now | -- | tick count | Implemented (M3) | Current monotonic tick count |
-| 11 | sys_svc_register | rdi=name_ptr, rsi=name_len, rdx=endpoint | 0 or -1 | **Implemented (R4)** | Register service name → endpoint mapping |
+| 11 | sys_svc_register | rdi=name_ptr, rsi=name_len, rdx=endpoint | 0 or -1 | **Implemented (R4)** | Register service name → endpoint mapping (endpoint must be active) |
 | 12 | sys_svc_lookup | rdi=name_ptr, rsi=name_len | endpoint or -1 | **Implemented (R4)** | Lookup service endpoint by name |
 | 13 | sys_blk_read | rdi=lba, rsi=buf, rdx=len | bytes_read or -1 | **Implemented (M5)** | Read sectors from VirtIO block device |
 | 14 | sys_blk_write | rdi=lba, rsi=buf, rdx=len | bytes_written or -1 | **Implemented (M5)** | Write sectors to VirtIO block device |
@@ -130,10 +130,11 @@ contents. Sender and receiver agree on format by convention.
 - Kernel-side name→endpoint lookup table (4 slots max).
 - `sys_svc_register` stores a mapping; `sys_svc_lookup` retrieves it.
 - Names are compared byte-for-byte (up to 16 bytes).
+- `sys_svc_register` returns -1 unless `endpoint` refers to an active IPC endpoint.
 - Duplicate registrations deterministically overwrite the endpoint value of
   the existing entry and return 0. No additional slot is consumed.
 - If the name is new and all 4 slots are occupied, returns -1.
-- Acceptance variants: `svc_overwrite_test` and `svc_full_test`.
+- Acceptance variants: `svc_overwrite_test`, `svc_full_test`, and `svc_bad_endpoint_test`.
 
 ## Quota limits (R4 hardening)
 

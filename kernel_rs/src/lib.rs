@@ -19,7 +19,7 @@ macro_rules! cfg_user {
         $(
             #[cfg(any(
                 feature = "user_hello_test", feature = "syscall_test", feature = "syscall_invalid_test", feature = "stress_syscall_test", feature = "yield_test", feature = "user_fault_test",
-                feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "blk_test", feature = "fs_test",
+                feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "blk_test", feature = "fs_test",
                 feature = "go_test",
             ))]
             $item
@@ -31,7 +31,7 @@ macro_rules! cfg_user {
 macro_rules! cfg_r4 {
     ($($item:item)*) => {
         $(
-            #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
+            #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
             $item
         )*
     };
@@ -447,14 +447,14 @@ extern "C" { static stack_top: u8; }
 
 unsafe fn handle_user_fault(frame: *mut u64) {
     // R4: kill current task and switch to next
-    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
+    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
     {
         r4_kill_and_switch(frame);
         return;
     }
 
     // M3: kill user task and return to kernel
-    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
+    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
     {
         serial_write(b"USER: killed\n");
         let kstack = &stack_top as *const u8 as u64;
@@ -498,7 +498,7 @@ unsafe fn syscall_dispatch(frame: *mut u64) {
     }
 
     // R4 dispatch
-    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
+    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
     {
         if nr == 98 {
             qemu_exit(arg1 as u8);
@@ -523,7 +523,7 @@ unsafe fn syscall_dispatch(frame: *mut u64) {
     }
 
     // M3 dispatch
-    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
+    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
     {
         #[cfg(any(feature = "syscall_invalid_test", feature = "stress_syscall_test", feature = "yield_test"))]
         {
@@ -1437,6 +1437,10 @@ cfg_r4! {
         if n == 0 || n > 16 { return 0xFFFF_FFFF_FFFF_FFFF; }
         let mut name = [0u8; 16];
         if copyin_user(&mut name[..n], name_ptr, n).is_err() { return 0xFFFF_FFFF_FFFF_FFFF; }
+        let ep = endpoint as usize;
+        if ep >= R4_MAX_ENDPOINTS || !R4_ENDPOINTS[ep].active {
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         // Overwrite if name already registered
         for i in 0..R4_MAX_SERVICES {
             if R4_SERVICES[i].active && R4_SERVICES[i].name_len == n
@@ -2492,6 +2496,36 @@ static SVC_BADPTR_BLOB: [u8; 70] = [
     // Data @55: "SVC: badptr ok\n"
     b'S', b'V', b'C', b':', b' ', b'b', b'a', b'd', b'p', b't',
     b'r', b' ', b'o', b'k', b'\n',
+];
+
+// Service registry bad-endpoint blob (single task: register with inactive endpoint -> expect -1)
+#[cfg(feature = "svc_bad_endpoint_test")]
+static SVC_BAD_ENDPOINT_BLOB: [u8; 84] = [
+    // sys_svc_register("bad", 3, endpoint=7)
+    0x48, 0x8D, 0x3D, 0x35, 0x00, 0x00, 0x00,   // lea rdi, [rip+0x35] -> name@60
+    0xBE, 0x03, 0x00, 0x00, 0x00,               // mov esi, 3
+    0xBA, 0x07, 0x00, 0x00, 0x00,               // mov edx, 7
+    0xB8, 0x0B, 0x00, 0x00, 0x00,               // mov eax, 11
+    0xCD, 0x80,                                   // int 0x80
+    // cmp rax, -1; jne fail
+    0x48, 0x83, 0xF8, 0xFF,                       // cmp rax, -1
+    0x75, 0x1D,                                   // jne +29 (fail@59)
+    // sys_debug_write("SVC: bad endpoint ok\n", 21)
+    0x48, 0x8D, 0x3D, 0x1A, 0x00, 0x00, 0x00,   // lea rdi, [rip+0x1A] -> msg@63
+    0xBE, 0x15, 0x00, 0x00, 0x00,               // mov esi, 21
+    0x31, 0xC0,                                   // xor eax, eax
+    0xCD, 0x80,                                   // int 0x80
+    // sys_debug_exit(0x31)
+    0xBF, 0x31, 0x00, 0x00, 0x00,               // mov edi, 0x31
+    0xB8, 0x62, 0x00, 0x00, 0x00,               // mov eax, 98
+    0xCD, 0x80,                                   // int 0x80
+    0xF4,                                         // hlt
+    // fail:
+    0xF4,                                         // hlt
+    // Data
+    b'b', b'a', b'd',
+    b'S', b'V', b'C', b':', b' ', b'b', b'a', b'd', b' ', b'e',
+    b'n', b'd', b'p', b'o', b'i', b'n', b't', b' ', b'o', b'k', b'\n',
 ];
 
 // IPC buffer-full blob (single task: send1 ok, send2 → -1, recv → msg1 intact)
@@ -3843,7 +3877,11 @@ pub extern "C" fn kmain() -> ! {
         tss_init(kstack);
         setup_r4_pages(&SVC_OVERWRITE_BLOB, &SVC_OVERWRITE_BLOB);
 
-        // Single task (no endpoints needed — registry stores values only)
+        // Pre-create endpoints referenced by the test payload (1, 2)
+        R4_ENDPOINTS[1].active = true;
+        R4_ENDPOINTS[2].active = true;
+
+        // Single task
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP);
         R4_TASKS[0].state = R4State::Running;
@@ -3859,7 +3897,30 @@ pub extern "C" fn kmain() -> ! {
         tss_init(kstack);
         setup_r4_pages(&SVC_FULL_BLOB, &SVC_FULL_BLOB);
 
-        // Single task (no endpoints needed — registry stores values only)
+        // Pre-create endpoints referenced by the test payload (0..4)
+        R4_ENDPOINTS[0].active = true;
+        R4_ENDPOINTS[1].active = true;
+        R4_ENDPOINTS[2].active = true;
+        R4_ENDPOINTS[3].active = true;
+        R4_ENDPOINTS[4].active = true;
+
+        // Single task
+        R4_NUM_TASKS = 1;
+        r4_init_task(0, USER_CODE_VA, USER_STACK_TOP);
+        R4_TASKS[0].state = R4State::Running;
+        R4_CURRENT = 0;
+
+        enter_ring3_at(USER_CODE_VA, USER_STACK_TOP);
+    }
+
+    // R4: svc_bad_endpoint_test — single task verifies register rejects inactive endpoint
+    #[cfg(feature = "svc_bad_endpoint_test")]
+    unsafe {
+        let kstack = &stack_top as *const u8 as u64;
+        tss_init(kstack);
+        setup_r4_pages(&SVC_BAD_ENDPOINT_BLOB, &SVC_BAD_ENDPOINT_BLOB);
+
+        // Single task; no endpoints are pre-created on purpose.
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP);
         R4_TASKS[0].state = R4State::Running;
@@ -4205,6 +4266,7 @@ pub extern "C" fn kmain() -> ! {
         feature = "ipc_badptr_svc_test",
         feature = "stress_ipc_test",
         feature = "svc_full_test",
+        feature = "svc_bad_endpoint_test",
         feature = "shm_test",
         feature = "quota_endpoints_test",
         feature = "quota_shm_test",

@@ -29,6 +29,7 @@ endif
        build-ipc-waiter-busy image-ipc-waiter-busy \
        build-ipc-svc-overwrite image-ipc-svc-overwrite \
        build-svc-full image-svc-full \
+       build-svc-bad-endpoint image-svc-bad-endpoint \
        build-shm image-shm \
        build-quota-endpoints image-quota-endpoints \
        build-quota-shm image-quota-shm \
@@ -237,6 +238,12 @@ build-svc-full: $(ASM_OBJS) boot/linker.ld
 	cd kernel_rs && $(CARGO) build --release --features svc_full_test
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-svc-full.elf $(ASM_OBJS) $(KERNEL_LIB)
 
+# --- R4: SVC invalid-endpoint test kernel -------------------------------------
+
+build-svc-bad-endpoint: $(ASM_OBJS) boot/linker.ld
+	cd kernel_rs && $(CARGO) build --release --features svc_bad_endpoint_test
+	$(LD) $(LDFLAGS) -o $(OUT)/kernel-svc-bad-endpoint.elf $(ASM_OBJS) $(KERNEL_LIB)
+
 # --- R4: SHM bulk test kernel ------------------------------------------------
 
 build-shm: $(ASM_OBJS) boot/linker.ld
@@ -363,6 +370,9 @@ image-ipc-svc-overwrite: build-ipc-svc-overwrite
 image-svc-full: build-svc-full
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-svc-full.elf ISO_NAME=os-svc-full.iso bash tools/mkimage.sh
 
+image-svc-bad-endpoint: build-svc-bad-endpoint
+	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-svc-bad-endpoint.elf ISO_NAME=os-svc-bad-endpoint.iso bash tools/mkimage.sh
+
 image-blk: build-blk
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-blk.elf ISO_NAME=os-blk.iso bash tools/mkimage.sh
 
@@ -429,7 +439,7 @@ image-go: build-go
 run: image
 	./tools/run_qemu.sh
 
-test-qemu: image image-panic image-pf image-idt image-sched image-user-hello image-syscall image-syscall-invalid image-stress-syscall image-stress-ipc image-stress-blk image-pressure-shm image-yield image-user-fault image-ipc image-ipc-badptr-send image-ipc-badptr-recv image-svc-badptr image-ipc-buffer-full image-ipc-waiter-busy image-ipc-svc-overwrite image-svc-full image-shm image-quota-endpoints image-quota-shm image-quota-threads image-blk image-blk-badlen image-blk-badptr image-blk-invariants image-fs image-fs-badmagic image-pkg-hash image-net image-go
+test-qemu: image image-panic image-pf image-idt image-sched image-user-hello image-syscall image-syscall-invalid image-stress-syscall image-stress-ipc image-stress-blk image-pressure-shm image-yield image-user-fault image-ipc image-ipc-badptr-send image-ipc-badptr-recv image-svc-badptr image-ipc-buffer-full image-ipc-waiter-busy image-ipc-svc-overwrite image-svc-full image-svc-bad-endpoint image-shm image-quota-endpoints image-quota-shm image-quota-threads image-blk image-blk-badlen image-blk-badptr image-blk-invariants image-fs image-fs-badmagic image-pkg-hash image-net image-go
 	$(PYTHON) -m pytest tests/ -v
 
 repro-check:

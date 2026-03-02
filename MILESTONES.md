@@ -262,6 +262,7 @@ Track B: Full Go port (long-term)
 - Two user processes can exchange messages through kernel IPC endpoints.
 - Shared memory can be created and mapped by two processes.
 - A service registry exists for name-to-endpoint resolution.
+- Service registration rejects inactive or out-of-range endpoint IDs.
 
 ### Acceptance tests
 
@@ -279,7 +280,7 @@ Track B: Full Go port (long-term)
 ### Rugo evidence
 
 - `tests/ipc/test_ping_pong.py`, `tests/ipc/test_shm_bulk.py`
-- `tests/ipc/test_svc_overwrite.py`, `tests/ipc/test_svc_full.py`
+- `tests/ipc/test_svc_overwrite.py`, `tests/ipc/test_svc_full.py`, `tests/ipc/test_svc_bad_endpoint.py`
 - `kernel_rs/src/lib.rs` (IPC, SHM, and service-registry syscall paths)
 
 ---
