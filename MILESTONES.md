@@ -456,6 +456,8 @@ stops churning.
   (`GOOS=rugo`, `GOARCH=amd64` contract).
 - Minimal spike binary target wired: `tools/build_go_std_spike.sh`,
   `make image-go-std`, and kernel `go_std_test` feature (embeds `out/gostd.bin`).
+- Execution backlog for G2 closure: `docs/G2_EXECUTION_BACKLOG.md`
+  (three-PR sequence from kernel primitives to stock-Go path).
 - Full runtime/toolchain porting remains blocked on M3+ ABI/process-model stability.
 
 ---

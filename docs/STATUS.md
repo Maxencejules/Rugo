@@ -98,5 +98,7 @@ G2 prep freeze is active from 2026-03-03 through 2026-03-17 (or 2 releases):
   and syscall bridge points for the std-port candidate lane.
 - `make image-go-std` builds the minimal spike artifact path used by
   `tests/go/test_std_go_binary.py`.
+- Execution plan for G2 completion is tracked in `docs/G2_EXECUTION_BACKLOG.md`
+  (PR-1 kernel primitives, PR-2 runtime bridge hardening, PR-3 stock-Go path).
 
 
