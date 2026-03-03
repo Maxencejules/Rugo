@@ -48,7 +48,7 @@ flowchart LR
     subgraph rugo_lane["Rugo lane (repo root)"]
         r1["M0-M7: done"]
         r2["G1: done"]
-        r3["G2: not started"]
+        r3["G2: in progress (prep)"]
     end
 
     source --> l1
@@ -78,13 +78,13 @@ Source of truth: [MILESTONES.md](MILESTONES.md)
 | Lane | Kernel milestones | Go milestones |
 |------|-------------------|---------------|
 | Legacy (`legacy/`) | M0-M7: done | G0: done |
-| Rugo (repo root) | M0-M7: done | G1: done, G2: not started |
+| Rugo (repo root) | M0-M7: done | G1: done, G2: in progress (prep) |
 
 Tiny visual summary:
 
 ```text
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
-Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7] [G1] complete  [G2] not started
+Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7] [G1] complete  [G2] in progress (prep)
 ```
 
 ## Repo layout

@@ -38,9 +38,9 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M7** VirtIO net + UDP | ✅ | ✅ | Rugo: `tests/net/test_udp_echo.py` (`NET: udp echo`). Legacy: `legacy/tests/net/test_udp_echo.py` |
 | **G0** Go kernel entry | ✅ | n/a | `legacy/tests/boot/test_go_entry.py` (`GO: kmain ok`). Legacy-only. Re-verified 2026-02-18 via Docker. |
 | **G1** Go services (TinyGo) | n/a | ✅ | Rugo: `tests/go/test_go_user_service.py` (`GOUSR: ok`). TinyGo bare-metal x86_64. |
-| **G2** Full Go port | n/a | ⬜ | Rugo-only. Long-term. |
+| **G2** Full Go port | n/a | ◐ | Rugo-only. In progress (prep): `tests/go/test_std_go_binary.py` scaffold for `GOSTD: ok`. Long-term. |
 
-✅ done &ensp; ◐ partial &ensp; ⬜ not started &ensp; n/a not applicable
+✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
 ## Legacy verification
 

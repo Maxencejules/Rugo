@@ -52,6 +52,7 @@ FS_BADMAGIC_DISK_IMG = os.path.join(REPO_ROOT, "out", "fs-badmagic.img")
 ISO_PKG_HASH_PATH = os.path.join(REPO_ROOT, "out", "os-pkg-hash.iso")
 ISO_NET_PATH = os.path.join(REPO_ROOT, "out", "os-net.iso")
 ISO_GO_PATH = os.path.join(REPO_ROOT, "out", "os-go.iso")
+ISO_GO_STD_PATH = os.path.join(REPO_ROOT, "out", "os-go-std.iso")
 QEMU_TIMEOUT = 10  # seconds
 NET_TIMEOUT = 15   # longer timeout for networking
 
@@ -526,3 +527,14 @@ def qemu_serial_go():
     if not os.path.isfile(ISO_GO_PATH):
         pytest.skip(f"ISO not built: {ISO_GO_PATH}")
     return _boot_iso(ISO_GO_PATH)
+
+
+@pytest.fixture
+def qemu_serial_go_std():
+    """Boot the G2 standard-Go scaffold OS image."""
+    if not os.path.isfile(ISO_GO_STD_PATH):
+        pytest.skip(
+            "G2 prep: standard-Go image not built yet "
+            f"(expected {ISO_GO_STD_PATH})"
+        )
+    return _boot_iso(ISO_GO_STD_PATH)

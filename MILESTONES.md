@@ -72,9 +72,9 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M7 | VirtIO net + UDP echo | ✅ | ✅ | Legacy: `legacy/tests/net/test_udp_echo.py`. Rugo: `tests/net/test_udp_echo.py` (`NET: udp echo`). |
 | G0 | Go kernel entry (gccgo) | ✅ | n/a | Legacy: `legacy/tests/boot/test_go_entry.py`. Legacy-only milestone. |
 | G1 | Go services (TinyGo) | n/a | ✅ | Rugo: `tests/go/test_go_user_service.py` (`GOUSR: ok`). TinyGo bare-metal x86_64. |
-| G2 | Full Go port | n/a | — | Rugo-only milestone. Not started. Long-term. |
+| G2 | Full Go port | n/a | ◐ | Rugo-only milestone. In progress (prep). Long-term. |
 
-Legend: ✅ = done with passing tests, — = not started, n/a = not applicable to this lane.
+Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
 
@@ -445,7 +445,8 @@ stops churning.
 
 ### Rugo evidence
 
-- Not started. Depends on M3+ stability.
+- Prep in progress: `tests/go/test_std_go_binary.py` scaffold added (`GOSTD: ok` marker).
+- Full runtime/toolchain porting remains blocked on M3+ ABI/process-model stability.
 
 ---
 
