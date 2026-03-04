@@ -2,6 +2,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -53,6 +54,10 @@ FS_DISK_IMG = os.path.join(REPO_ROOT, "out", "fs-test.img")
 ISO_FS_BADMAGIC_PATH = os.path.join(REPO_ROOT, "out", "os-fs-badmagic.iso")
 FS_BADMAGIC_DISK_IMG = os.path.join(REPO_ROOT, "out", "fs-badmagic.img")
 ISO_PKG_HASH_PATH = os.path.join(REPO_ROOT, "out", "os-pkg-hash.iso")
+FS_EXTERNAL_DISK_IMG = os.path.join(REPO_ROOT, "out", "fs-external.img")
+PKG_V1_PATH = os.path.join(REPO_ROOT, "out", "hello.pkgv1")
+PKG_REPO_V1_PATH = os.path.join(REPO_ROOT, "out", "repo-v1.json")
+PKG_BOOTSTRAP_V1_TOOL = os.path.join(REPO_ROOT, "tools", "pkg_bootstrap_v1.py")
 ISO_NET_PATH = os.path.join(REPO_ROOT, "out", "os-net.iso")
 ISO_GO_PATH = os.path.join(REPO_ROOT, "out", "os-go.iso")
 ISO_GO_STD_PATH = os.path.join(REPO_ROOT, "out", "os-go-std.iso")
@@ -470,6 +475,59 @@ def qemu_serial_pkg_hash():
     if not os.path.isfile(FS_DISK_IMG):
         pytest.skip(f"Disk image not built: {FS_DISK_IMG}")
     return _boot_iso_with_disk(ISO_PKG_HASH_PATH, FS_DISK_IMG)
+
+
+@pytest.fixture
+def external_pkg_disk_img():
+    """Build an external app package/repo image via the v1 bootstrap tool."""
+    if not os.path.isfile(PKG_BOOTSTRAP_V1_TOOL):
+        pytest.skip(f"Bootstrap tool missing: {PKG_BOOTSTRAP_V1_TOOL}")
+    os.makedirs(os.path.dirname(FS_EXTERNAL_DISK_IMG), exist_ok=True)
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                PKG_BOOTSTRAP_V1_TOOL,
+                "--pkg-out",
+                PKG_V1_PATH,
+                "--repo-out",
+                PKG_REPO_V1_PATH,
+                "--disk-out",
+                FS_EXTERNAL_DISK_IMG,
+                "--app-name",
+                "hello",
+                "--app-version",
+                "1.0.0",
+                "--app-message",
+                "APP: hello world\n",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=QEMU_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("pkg_bootstrap_v1.py timed out")
+
+    if result.returncode != 0:
+        pytest.fail(
+            "pkg_bootstrap_v1.py failed:\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    if not os.path.isfile(FS_EXTERNAL_DISK_IMG):
+        pytest.fail(f"External package disk image not created: {FS_EXTERNAL_DISK_IMG}")
+
+    return FS_EXTERNAL_DISK_IMG
+
+
+@pytest.fixture
+def qemu_serial_pkg_external(external_pkg_disk_img):
+    """Boot the external-package disk image against the pkg hash kernel ISO."""
+    if not os.path.isfile(ISO_PKG_HASH_PATH):
+        pytest.skip(f"ISO not built: {ISO_PKG_HASH_PATH}")
+    return _boot_iso_with_disk(ISO_PKG_HASH_PATH, external_pkg_disk_img)
 
 
 def _find_free_udp_port():

@@ -19,14 +19,14 @@ M8 source of truth remains `MILESTONES.md`, `docs/abi/*`, and this backlog.
 - M0-M7 and G1-G2 are complete and stable in QEMU.
 - ABI docs now include v1 contracts (`docs/abi/syscall_v1.md`, `docs/abi/process_thread_model_v1.md`).
 - App execution now has a documented compatibility-profile v1 baseline for loader/process/fd primitives.
-- Compatibility Profile v1 document and executable conformance subset exist under `docs/abi/*` and `tests/compat/`.
-- No package/repository contract for third-party app distribution exists yet.
+- Compatibility Profile v1 document and executable conformance suite now covers loader/process/fd/time/signal/socket under `tests/compat/`.
+- Package/repository v1 bootstrap contract and external app lane now exist (`docs/pkg/package_format_v1.md`, `tools/pkg_bootstrap_v1.py`, `tests/pkg/test_pkg_external_apps.py`).
 
 ## Execution Result
 
 - PR-1: complete (2026-03-04)
 - PR-2: complete (2026-03-04)
-- PR-3: pending
+- PR-3: complete (2026-03-04)
 
 ## PR-1: ABI v1 Contract + Compatibility Test Skeleton
 

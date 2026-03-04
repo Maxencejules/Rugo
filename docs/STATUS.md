@@ -111,8 +111,18 @@ M8 execution update (2026-03-04):
     - `tests/compat/test_process_lifecycle.py`
     - `tests/compat/test_process_wait.py`
     - `tests/compat/test_fd_table.py`
-- PR-3 remains pending.
-- M8 remains in progress (not done).
+- PR-3 complete (subset closure + package/bootstrap lane + CI gate):
+  - executable time/signal/socket closure:
+    - `tests/compat/test_time_signal_subset.py`
+    - `tests/compat/test_socket_api_subset.py`
+    - `tests/compat/test_posix_subset.py`
+  - package/repository v1 bootstrap:
+    - `docs/pkg/package_format_v1.md`
+    - `tools/pkg_bootstrap_v1.py`
+    - `tests/pkg/test_pkg_external_apps.py`
+  - release-gating CI lane:
+    - `.github/workflows/ci.yml` compatibility profile v1 gate step
+- M8 is done.
 
 Post-G2 planning and execution:
 - Extended roadmap (M8-M14): `docs/POST_G2_EXTENDED_MILESTONES.md`

@@ -69,3 +69,10 @@ jobs:
 
       - name: QEMU smoke tests
         run: make test-qemu
+
+      - name: Compatibility profile v1 gate
+        env:
+          RUGO_COMPAT_STRICT: "1"
+        run: |
+          python3 -m pytest tests/compat -v
+          python3 -m pytest tests/pkg/test_pkg_external_apps.py -v

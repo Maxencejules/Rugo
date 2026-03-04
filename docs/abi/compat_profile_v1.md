@@ -6,8 +6,8 @@ Rugo (Rust kernel + Go user space).
 
 ## Status
 
-Draft profile established in M8 PR-1 on 2026-03-04. This document defines the
-target surface that M8 PR-2/PR-3 must implement and gate in CI.
+Compatibility Profile v1 closed in M8 PR-3 on 2026-03-04. Required profile
+surfaces are now executable in `tests/compat/` and release-gated in CI.
 
 ## Goal
 
@@ -54,7 +54,8 @@ Conformance coverage:
 - Minimal signal handling (`sigaction`, `kill`) for selected signals.
 - Deterministic interruption/restart behavior where documented.
 
-Conformance skeleton (PR-3 target): `tests/compat/test_time_signal_subset.py`.
+Conformance coverage:
+- `tests/compat/test_time_signal_subset.py`
 
 ### Socket API subset (`required`)
 
@@ -63,7 +64,8 @@ Conformance skeleton (PR-3 target): `tests/compat/test_time_signal_subset.py`.
 - `shutdown` baseline behavior.
 - `poll` or equivalent readiness wait primitive baseline.
 
-Conformance skeleton (PR-3 target): `tests/compat/test_socket_api_subset.py`.
+Conformance coverage:
+- `tests/compat/test_socket_api_subset.py`
 
 ## Explicit unsupported list for v1
 
@@ -84,9 +86,13 @@ silently mapped to partial behavior.
 
 - Profile conformance is tracked by `tests/compat/`.
 - M8 PR-1 delivered deterministic skeleton tests with TODO markers.
-- M8 PR-2 replaces loader/process/fd skeletons with executable checks.
-- M8 PR-3 will close remaining time/signal/socket TODOs and promote the full
-  profile to release-gating CI.
+- M8 PR-2 replaced loader/process/fd skeletons with executable checks.
+- M8 PR-3 closed remaining time/signal/socket coverage and added
+  `tests/compat/test_posix_subset.py` plus external package lane checks in
+  `tests/pkg/test_pkg_external_apps.py`.
+- CI release gate must run:
+  - `python -m pytest tests/compat -v`
+  - `python -m pytest tests/pkg/test_pkg_external_apps.py -v`
 
 ## Relationship to syscall contract
 

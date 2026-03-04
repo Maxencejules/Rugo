@@ -78,19 +78,21 @@ Source of truth: [MILESTONES.md](MILESTONES.md)
 | Lane | Kernel milestones | Go milestones |
 |------|-------------------|---------------|
 | Legacy (`legacy/`) | M0-M7: done | G0: done |
-| Rugo (repo root) | M0-M7: done | G1: done, G2: done |
+| Rugo (repo root) | M0-M8: done | G1: done, G2: done |
 
 Tiny visual summary:
 
 ```text
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
-Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7] [G1] complete  [G2] complete
+Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8] [G1] complete  [G2] complete
 ```
 
 ## Post-G2 roadmap
 
 - Research roadmap (M8-M14): [docs/POST_G2_EXTENDED_MILESTONES.md](docs/POST_G2_EXTENDED_MILESTONES.md)
-- Active execution backlog (next step): `docs/M8_EXECUTION_BACKLOG.md`
+- M8 execution backlog (completed): `docs/M8_EXECUTION_BACKLOG.md`
+- Compatibility profile v1 contract: [docs/abi/compat_profile_v1.md](docs/abi/compat_profile_v1.md)
+- Package/repository v1 contract: [docs/pkg/package_format_v1.md](docs/pkg/package_format_v1.md)
 
 ## Repo layout
 
@@ -115,5 +117,9 @@ make build
 make image
 make run
 make test-qemu
+
+# Compatibility Profile v1 + external package bootstrap lane
+python3 tools/pkg_bootstrap_v1.py --disk-out out/fs-external.img
+python3 -m pytest tests/compat tests/pkg/test_pkg_external_apps.py -v
 ```
 

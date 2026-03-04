@@ -458,9 +458,9 @@ Milestone status: done (2026-03-04).
 
 ---
 
-## M8: Compatibility Profile v1 (in progress)
+## M8: Compatibility Profile v1
 
-Milestone status: in progress (PR-1 and PR-2 complete on 2026-03-04).
+Milestone status: done (2026-03-04).
 
 ### PR-1 deliverables completed
 
@@ -485,9 +485,18 @@ Milestone status: in progress (PR-1 and PR-2 complete on 2026-03-04).
   - updated `tests/compat/test_file_io_subset.py`
 - Backlog execution status updated: `docs/M8_EXECUTION_BACKLOG.md`.
 
-### Next step (remaining M8 PR)
+### PR-3 deliverables completed
 
-- PR-3: close remaining POSIX subset (time/signal/socket) and package/bootstrap gate.
+- Remaining POSIX subset closure (time/signal/socket):
+  - `tests/compat/test_time_signal_subset.py`
+  - `tests/compat/test_socket_api_subset.py`
+  - `tests/compat/test_posix_subset.py`
+- Package/repository v1 bootstrap:
+  - `docs/pkg/package_format_v1.md`
+  - `tools/pkg_bootstrap_v1.py`
+  - `tests/pkg/test_pkg_external_apps.py`
+- Compatibility/profile gating promoted to CI:
+  - `.github/workflows/ci.yml` explicit compatibility profile v1 gate step
 
 ---
 
