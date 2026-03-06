@@ -122,6 +122,20 @@ jobs:
           name: compat-v2-junit
           path: out/pytest-compat-v2.xml
 
+      - name: Storage reliability v2 gate
+        run: |
+          make test-storage-reliability-v2
+
+      - name: Upload storage reliability v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-reliability-v2-artifacts
+          path: |
+            out/pytest-storage-reliability-v2.xml
+            out/storage-recovery-v2.json
+            out/storage-powerfail-v2.json
+
       - name: Security baseline v1 gate
         run: |
           make image-sec-rights image-sec-filter

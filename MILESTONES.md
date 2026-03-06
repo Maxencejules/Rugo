@@ -83,6 +83,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M15 | Hardware Enablement Matrix v2 | n/a | done | Rugo: `tests/hw/*_v2`, `make test-hw-matrix-v2`, CI `Hardware matrix v2 gate`, docs in `docs/hw/*_v2`, `docs/M15_EXECUTION_BACKLOG.md`. |
 | M16 | Process + Scheduler Model v2 | n/a | done | Rugo: `tests/sched/*_v2`, `tests/user/*_v2`, `make test-process-scheduler-v2`, CI `Process scheduler v2 gate`, docs in `docs/abi/*_v2`, `docs/M16_EXECUTION_BACKLOG.md`. |
 | M17 | Compatibility Profile v2 | n/a | done | Rugo: `tests/compat/*_v2` + tier gate tests, `make test-compat-v2`, CI `Compatibility profile v2 gate`, docs in `docs/abi/*_v2`, `docs/runtime/syscall_coverage_matrix_v2.md`, `docs/M17_EXECUTION_BACKLOG.md`. |
+| M18 | Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, `docs/M18_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -922,6 +923,49 @@ Milestone status: done (2026-03-06).
 - Release gating:
   - `Makefile` target `test-compat-v2`
   - `.github/workflows/ci.yml` step `Compatibility profile v2 gate`
+
+---
+
+## M18: Storage Reliability v2
+
+Milestone status: done (2026-03-06).
+
+### Definition of done
+
+- Storage v2 contract docs freeze journaling, durability, and recovery semantics.
+- Recovery and power-fail artifacts are deterministic and machine-readable.
+- Storage v2 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/storage/test_journal_recovery_v2.py` | recovery report schema + mountability and journal state invariants |
+| `tests/storage/test_metadata_integrity_v2.py` | metadata corruption detection, bounds checks, and doc contract tokens |
+| `tests/storage/test_powerfail_campaign_v2.py` | deterministic power-fail campaign thresholds and report schema |
+| `tests/storage/test_storage_gate_v2.py` | make/ci/docs gate wiring and closure |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/storage/fs_v2.md`
+  - `docs/storage/durability_model_v2.md`
+  - `docs/storage/write_ordering_policy_v2.md`
+  - `docs/storage/recovery_playbook_v2.md`
+  - `docs/storage/fault_campaign_v2.md`
+- Tooling:
+  - `tools/storage_recover_v2.py`
+  - `tools/run_storage_powerfail_campaign_v2.py`
+- Test gate:
+  - `tests/storage/test_journal_recovery_v2.py`
+  - `tests/storage/test_metadata_integrity_v2.py`
+  - `tests/storage/test_powerfail_campaign_v2.py`
+  - `tests/storage/test_storage_gate_v2.py`
+- Execution history:
+  - `docs/M18_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-storage-reliability-v2`
+  - `.github/workflows/ci.yml` step `Storage reliability v2 gate`
 
 ---
 

@@ -51,7 +51,7 @@ endif
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 \
-       test-storage-reliability-v1 test-release-engineering-v1 \
+       test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 \
        test-firmware-attestation-v1 test-update-trust-v1 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 repro-check clean legacy docker-all docker-legacy
@@ -547,6 +547,11 @@ test-storage-reliability-v1: image-fs image-fs-badmagic
 	$(PYTHON) tools/storage_recover_v1.py --check --out $(OUT)/storage-recovery-v1.json
 	$(PYTHON) tools/run_storage_fault_campaign_v1.py --seed 20260304 --out $(OUT)/storage-fault-campaign-v1.json
 	$(PYTHON) -m pytest tests/storage -v
+
+test-storage-reliability-v2: image-fs image-fs-badmagic
+	$(PYTHON) tools/storage_recover_v2.py --check --out $(OUT)/storage-recovery-v2.json
+	$(PYTHON) tools/run_storage_powerfail_campaign_v2.py --seed 20260304 --out $(OUT)/storage-powerfail-v2.json
+	$(PYTHON) -m pytest tests/storage/test_journal_recovery_v2.py tests/storage/test_powerfail_campaign_v2.py tests/storage/test_metadata_integrity_v2.py tests/storage/test_storage_gate_v2.py -v --junitxml=$(OUT)/pytest-storage-reliability-v2.xml
 
 test-release-engineering-v1: image
 	$(PYTHON) tools/release_contract_v1.py --out $(OUT)/release-contract-v1.json

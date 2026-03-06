@@ -2,7 +2,7 @@
 
 Date: 2026-03-06  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: planned
+Status: done
 
 ## Goal
 
@@ -20,9 +20,9 @@ M18 source of truth remains `docs/M15_M20_MULTIPURPOSE_PLAN.md`,
 
 ## Execution Result
 
-- PR-1: planned
-- PR-2: planned
-- PR-3: planned
+- PR-1: complete (2026-03-06)
+- PR-2: complete (2026-03-06)
+- PR-3: complete (2026-03-06)
 
 ## PR-1: Storage Contract + Journaling Policy v2
 
@@ -56,6 +56,17 @@ Freeze v2 durability and write-ordering semantics before campaign updates.
 
 - Storage v2 contracts are explicit, versioned, and test-referenced.
 - Crash-consistency guarantees have no unowned placeholders.
+
+### PR-1 completion summary
+
+- Added storage v2 contract docs for:
+  - journaling phases,
+  - durability classes,
+  - deterministic recovery/failure semantics.
+- Added executable checks for:
+  - journal recovery report schema + mountability invariants,
+  - metadata corruption and bounds-integrity detection,
+  - v2 doc contract tokens.
 
 ## PR-2: Recovery + Power-Fail Campaign v2
 
@@ -93,6 +104,18 @@ Validate deterministic recovery behavior under power-fault scenarios.
 - Recovery and power-fail artifacts are machine-readable and deterministic.
 - Campaign thresholds are explicit and regression-trackable.
 
+### PR-2 completion summary
+
+- Added deterministic tooling:
+  - `tools/storage_recover_v2.py`
+  - `tools/run_storage_powerfail_campaign_v2.py`
+- Added deterministic artifact schemas:
+  - `rugo.storage_recovery_report.v2`
+  - `rugo.storage_powerfail_campaign_report.v2`
+- Added campaign and playbook docs:
+  - `docs/storage/recovery_playbook_v2.md`
+  - `docs/storage/fault_campaign_v2.md`
+
 ## PR-3: Storage v2 Gate + Milestone Closure
 
 ### Objective
@@ -125,8 +148,19 @@ Promote storage reliability v2 checks to release-blocking status.
 - Storage v2 gate is required in local and CI release lanes.
 - M18 status can be marked done with linked evidence.
 
+### PR-3 completion summary
+
+- Added aggregate gate test:
+  - `tests/storage/test_storage_gate_v2.py`
+- Added local gate:
+  - `make test-storage-reliability-v2`
+  - JUnit output: `out/pytest-storage-reliability-v2.xml`
+- Added CI gate + artifact upload:
+  - step: `Storage reliability v2 gate`
+  - artifact: `storage-reliability-v2-artifacts`
+- Updated milestone/status documents to mark M18 done with evidence links.
+
 ## Non-goals for M18 backlog
 
 - Full snapshot/online-resize filesystem feature parity.
 - Broad storage hardware expansion beyond scoped matrix targets.
-

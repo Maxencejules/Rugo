@@ -20,6 +20,7 @@ make test-process-scheduler-v2
 make test-compat-v2
 make test-network-stack-v1
 make test-storage-reliability-v1
+make test-storage-reliability-v2
 make test-release-engineering-v1
 
 # Legacy (build + QEMU smoke tests, 16 tests)
@@ -55,6 +56,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M15** Hardware Enablement Matrix v2 | n/a | done | Rugo: `tests/hw/*_v2`, `make test-hw-matrix-v2`, CI `Hardware matrix v2 gate`, docs in `docs/hw/*_v2` and `docs/M15_EXECUTION_BACKLOG.md`. |
 | **M16** Process + Scheduler Model v2 | n/a | done | Rugo: `tests/sched/*_v2`, `tests/user/*_v2`, `make test-process-scheduler-v2`, CI `Process scheduler v2 gate`, docs in `docs/abi/*_v2` and `docs/M16_EXECUTION_BACKLOG.md`. |
 | **M17** Compatibility Profile v2 | n/a | done | Rugo: `tests/compat/*_v2` + tier gate tests, `make test-compat-v2`, CI `Compatibility profile v2 gate`, docs in `docs/abi/*_v2`, `docs/runtime/syscall_coverage_matrix_v2.md`, and `docs/M17_EXECUTION_BACKLOG.md`. |
+| **M18** Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, and `docs/M18_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -332,9 +334,28 @@ M17 execution update (2026-03-06):
   - `.github/workflows/ci.yml` step `Compatibility profile v2 gate`
 - M17 is done.
 
+M18 execution update (2026-03-06):
+- PR-1 complete (storage contract + journaling policy v2):
+  - `docs/storage/fs_v2.md`
+  - `docs/storage/durability_model_v2.md`
+  - `docs/storage/write_ordering_policy_v2.md`
+  - `tests/storage/test_journal_recovery_v2.py`
+  - `tests/storage/test_metadata_integrity_v2.py`
+- PR-2 complete (recovery + power-fail tooling and campaign):
+  - `tools/storage_recover_v2.py`
+  - `tools/run_storage_powerfail_campaign_v2.py`
+  - `docs/storage/recovery_playbook_v2.md`
+  - `docs/storage/fault_campaign_v2.md`
+  - `tests/storage/test_powerfail_campaign_v2.py`
+- PR-3 complete (storage reliability v2 gate + closure wiring):
+  - `tests/storage/test_storage_gate_v2.py`
+  - `Makefile` target `test-storage-reliability-v2`
+  - `.github/workflows/ci.yml` step `Storage reliability v2 gate`
+- M18 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M15-M20): `docs/M15_M20_MULTIPURPOSE_PLAN.md`
-- Last completed backlog (M17): `docs/M17_EXECUTION_BACKLOG.md`
-- Post-M17 focus: keep compatibility profile v2 gate stable before starting M18.
+- Last completed backlog (M18): `docs/M18_EXECUTION_BACKLOG.md`
+- Post-M18 focus: start network stack v2 execution backlog (M19).
 
 
