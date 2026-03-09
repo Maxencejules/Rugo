@@ -251,3 +251,17 @@ jobs:
             out/installer-v2.json
             out/upgrade-recovery-v2.json
             out/support-bundle-v2.json
+
+      - name: ABI stability v3 gate
+        run: |
+          make test-abi-stability-v3
+
+      - name: Upload ABI stability v3 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-stability-v3-artifacts
+          path: |
+            out/pytest-abi-stability-v3.xml
+            out/abi-diff-v3.json
+            out/syscall-compat-v3.json

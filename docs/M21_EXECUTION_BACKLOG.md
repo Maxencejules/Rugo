@@ -2,7 +2,7 @@
 
 Date: 2026-03-06  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: planned
+Status: done
 
 ## Goal
 
@@ -20,9 +20,9 @@ M21 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 
 ## Execution Result
 
-- PR-1: planned
-- PR-2: planned
-- PR-3: planned
+- PR-1: complete (2026-03-09)
+- PR-2: complete (2026-03-09)
+- PR-3: complete (2026-03-09)
 
 ## PR-1: Contract Freeze
 
@@ -57,6 +57,16 @@ Define ABI/API stability v3 obligations before enforcement tooling is enabled.
 - ABI v3 contract is versioned and test-referenced.
 - Deprecation windows and obligations are explicit.
 
+### PR-1 completion summary
+
+- Added ABI stability contract docs:
+  - `docs/abi/syscall_v3.md`
+  - `docs/runtime/abi_stability_policy_v2.md`
+  - `docs/runtime/deprecation_window_policy_v1.md`
+- Added executable PR-1 checks:
+  - `tests/runtime/test_abi_docs_v3.py`
+  - `tests/runtime/test_abi_window_v3.py`
+
 ## PR-2: Compatibility Enforcement
 
 ### Objective
@@ -87,6 +97,17 @@ Automate ABI diff and syscall compatibility checks.
 
 - ABI changes are machine-diffed and policy-checked.
 - Breaking changes require explicit migration/version actions.
+
+### PR-2 completion summary
+
+- Added deterministic ABI/policy enforcement tooling:
+  - `tools/check_abi_diff_v3.py`
+  - `tools/check_syscall_compat_v3.py`
+- Added executable PR-2 checks:
+  - `tests/runtime/test_abi_diff_gate_v3.py`
+  - `tests/compat/test_abi_compat_matrix_v3.py`
+- Added compatibility-matrix schema and explicit migration-action enforcement for
+  breaking ABI diff outcomes.
 
 ## PR-3: Gate + Closure
 
@@ -120,8 +141,21 @@ Promote ABI stability v3 checks to release-blocking status.
 - ABI stability v3 gate is required in local and CI release lanes.
 - M21 can be marked done with evidence pointers.
 
+### PR-3 completion summary
+
+- Added aggregate gate test:
+  - `tests/runtime/test_abi_stability_gate_v3.py`
+- Added local gate:
+  - `make test-abi-stability-v3`
+  - JUnit output: `out/pytest-abi-stability-v3.xml`
+- Added CI gate + artifact upload:
+  - step: `ABI stability v3 gate`
+  - artifact: `abi-stability-v3-artifacts`
+- Updated closure docs:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+
 ## Non-goals for M21 backlog
 
 - Expanding ABI scope without compatibility policy ownership.
 - One-off ABI changes outside versioned release windows.
-

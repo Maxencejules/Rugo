@@ -24,6 +24,7 @@ make test-storage-reliability-v1
 make test-storage-reliability-v2
 make test-release-engineering-v1
 make test-release-ops-v2
+make test-abi-stability-v3
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -61,6 +62,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M18** Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, and `docs/M18_EXECUTION_BACKLOG.md`. |
 | **M19** Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, and `docs/M19_EXECUTION_BACKLOG.md`. |
 | **M20** Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, and `docs/M20_EXECUTION_BACKLOG.md`. |
+| **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -394,9 +396,27 @@ M20 execution update (2026-03-09):
   - `.github/workflows/ci.yml` step `Operability and release UX v2 gate`
 - M20 is done.
 
+M21 execution update (2026-03-09):
+- PR-1 complete (ABI v3 contract freeze):
+  - `docs/abi/syscall_v3.md`
+  - `docs/runtime/abi_stability_policy_v2.md`
+  - `docs/runtime/deprecation_window_policy_v1.md`
+  - `tests/runtime/test_abi_docs_v3.py`
+  - `tests/runtime/test_abi_window_v3.py`
+- PR-2 complete (compatibility enforcement tooling):
+  - `tools/check_abi_diff_v3.py`
+  - `tools/check_syscall_compat_v3.py`
+  - `tests/runtime/test_abi_diff_gate_v3.py`
+  - `tests/compat/test_abi_compat_matrix_v3.py`
+- PR-3 complete (ABI stability v3 gate + closure wiring):
+  - `tests/runtime/test_abi_stability_gate_v3.py`
+  - `Makefile` target `test-abi-stability-v3`
+  - `.github/workflows/ci.yml` step `ABI stability v3 gate`
+- M21 is done.
+
 Post-G2 planning and execution:
-- Extended roadmap (M15-M20): `docs/M15_M20_MULTIPURPOSE_PLAN.md`
-- Last completed backlog (M20): `docs/M20_EXECUTION_BACKLOG.md`
-- Post-M20 focus: start M21 ABI/API stability v3 execution backlog.
+- Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
+- Last completed backlog (M21): `docs/M21_EXECUTION_BACKLOG.md`
+- Post-M21 focus: start M22 kernel reliability + soak v1 execution backlog.
 
 

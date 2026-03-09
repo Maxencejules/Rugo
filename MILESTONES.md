@@ -86,6 +86,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M18 | Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, `docs/M18_EXECUTION_BACKLOG.md`. |
 | M19 | Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, `docs/M19_EXECUTION_BACKLOG.md`. |
 | M20 | Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, `docs/M20_EXECUTION_BACKLOG.md`. |
+| M21 | ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs and compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1055,6 +1056,49 @@ Milestone status: done (2026-03-09).
 - Release gating:
   - `Makefile` target `test-release-ops-v2`
   - `.github/workflows/ci.yml` step `Operability and release UX v2 gate`
+
+---
+
+## M21: ABI + API Stability Program v3
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- ABI/API stability v3 contracts are versioned and test-backed.
+- ABI diffs and compatibility policy checks are machine-enforced.
+- ABI stability v3 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/runtime/test_abi_docs_v3.py` | syscall v3 and policy docs include required contract tokens |
+| `tests/runtime/test_abi_window_v3.py` | deprecation-window policy values and registry alignment checks |
+| `tests/runtime/test_abi_diff_gate_v3.py` | deterministic ABI diff report schema and breaking-change detection |
+| `tests/compat/test_abi_compat_matrix_v3.py` | compatibility matrix schema and explicit migration-action policy checks |
+| `tests/runtime/test_abi_stability_gate_v3.py` | make/ci/docs gate wiring and closure |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/abi/syscall_v3.md`
+  - `docs/runtime/abi_stability_policy_v2.md`
+  - `docs/runtime/deprecation_window_policy_v1.md`
+- Enforcement tooling:
+  - `tools/check_abi_diff_v3.py`
+  - `tools/check_syscall_compat_v3.py`
+- Test gate:
+  - `tests/runtime/test_abi_docs_v3.py`
+  - `tests/runtime/test_abi_window_v3.py`
+  - `tests/runtime/test_abi_diff_gate_v3.py`
+  - `tests/compat/test_abi_compat_matrix_v3.py`
+  - `tests/runtime/test_abi_stability_gate_v3.py`
+- Execution history:
+  - `docs/M21_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-abi-stability-v3`
+  - `.github/workflows/ci.yml` step `ABI stability v3 gate`
 
 ---
 
