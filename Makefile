@@ -53,7 +53,7 @@ endif
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
-       test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
+       test-observability-v2 test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -630,10 +630,17 @@ test-vuln-response-v1:
 	$(PYTHON) tools/security_embargo_drill_v1.py --out $(OUT)/security-embargo-drill-v1.json
 	$(PYTHON) -m pytest tests/security/test_vuln_response_docs_v1.py tests/security/test_vuln_triage_sla_v1.py tests/security/test_embargo_workflow_v1.py tests/security/test_advisory_schema_v1.py tests/security/test_vuln_response_gate_v1.py -v --junitxml=$(OUT)/pytest-vuln-response-v1.xml
 
+test-observability-v2:
+	$(PYTHON) tools/collect_trace_bundle_v2.py --seed 20260309 --window-seconds 300 --out $(OUT)/trace-bundle-v2.json
+	$(PYTHON) tools/collect_diagnostic_snapshot_v2.py --seed 20260309 --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json
+	$(PYTHON) tools/collect_crash_dump_v1.py --out $(OUT)/crash-dump-v1.json
+	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
+	$(PYTHON) -m pytest tests/runtime/test_observability_docs_v2.py tests/runtime/test_trace_bundle_v2.py tests/runtime/test_diag_snapshot_v2.py tests/runtime/test_observability_gate_v2.py tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v --junitxml=$(OUT)/pytest-observability-v2.xml
+
 test-crash-dump-v1:
 	$(PYTHON) tools/collect_crash_dump_v1.py --out $(OUT)/crash-dump-v1.json
 	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
-	$(PYTHON) -m pytest tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v
+	$(PYTHON) -m pytest tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v --junitxml=$(OUT)/pytest-crash-dump-v1.xml
 
 test-supply-chain-revalidation-v1:
 	$(PYTHON) tools/generate_sbom_v1.py --out $(OUT)/sbom-v1.spdx.json

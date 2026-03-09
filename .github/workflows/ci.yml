@@ -400,3 +400,33 @@ jobs:
             out/pytest-vuln-response-v1.xml
             out/security-advisory-lint-v1.json
             out/security-embargo-drill-v1.json
+
+      - name: Observability v2 gate
+        run: |
+          make test-observability-v2
+
+      - name: Upload observability v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-v2-artifacts
+          path: |
+            out/pytest-observability-v2.xml
+            out/trace-bundle-v2.json
+            out/diagnostic-snapshot-v2.json
+            out/crash-dump-v1.json
+            out/crash-dump-symbolized-v1.json
+
+      - name: Crash dump v1 gate
+        run: |
+          make test-crash-dump-v1
+
+      - name: Upload crash dump v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-dump-v1-artifacts
+          path: |
+            out/pytest-crash-dump-v1.xml
+            out/crash-dump-v1.json
+            out/crash-dump-symbolized-v1.json

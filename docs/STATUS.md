@@ -35,6 +35,8 @@ make test-update-trust-v1
 make test-app-compat-v3
 make test-security-hardening-v3
 make test-vuln-response-v1
+make test-observability-v2
+make test-crash-dump-v1
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -80,6 +82,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M26** Package/Repo Ecosystem v3 | n/a | done | Rugo: package/repo v3 contracts + deterministic policy/rebuild/update-trust artifacts, `make test-pkg-ecosystem-v3`, `make test-update-trust-v1`, CI `Package ecosystem v3 gate` + `Update trust v1 gate`, docs in `docs/pkg/*_v3`, `docs/pkg/update_trust_model_v1.md`, and `docs/M26_EXECUTION_BACKLOG.md`. |
 | **M27** External App Compatibility Program v3 | n/a | done | Rugo: compatibility profile/tier contracts + deterministic class matrix artifacts, `make test-app-compat-v3`, CI `App compatibility v3 gate`, docs in `docs/abi/compat_profile_v3.md`, `docs/abi/app_compat_tiers_v1.md`, and `docs/M27_EXECUTION_BACKLOG.md`. |
 | **M28** Security Hardening Program v3 | n/a | done | Rugo: hardening profile/threat model contracts + deterministic attack/fuzz and vulnerability-response artifacts, `make test-security-hardening-v3`, `make test-vuln-response-v1`, CI `Security hardening v3 gate` + `Vulnerability response v1 gate`, docs in `docs/security/hardening_profile_v3.md`, `docs/security/threat_model_v2.md`, and `docs/M28_EXECUTION_BACKLOG.md`. |
+| **M29** Observability + Diagnostics v2 | n/a | done | Rugo: observability/crash contracts + deterministic trace/diagnostic/crash artifacts, `make test-observability-v2`, `make test-crash-dump-v1`, CI `Observability v2 gate` + `Crash dump v1 gate`, docs in `docs/runtime/observability_contract_v2.md`, `docs/runtime/crash_dump_contract_v1.md`, and `docs/M29_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -566,9 +569,32 @@ M28 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Security hardening v3 gate`, `Vulnerability response v1 gate`
 - M28 is done.
 
+M29 execution update (2026-03-09):
+- PR-1 complete (observability + crash/postmortem contracts):
+  - `docs/runtime/observability_contract_v2.md`
+  - `docs/runtime/crash_dump_contract_v1.md`
+  - `docs/runtime/postmortem_triage_playbook_v1.md`
+  - `tests/runtime/test_observability_docs_v2.py`
+  - `tests/runtime/test_crash_dump_docs_v1.py`
+- PR-2 complete (deterministic trace/diagnostic + crash tooling):
+  - `tools/collect_trace_bundle_v2.py`
+  - `tools/collect_diagnostic_snapshot_v2.py`
+  - `tools/collect_crash_dump_v1.py`
+  - `tools/symbolize_crash_dump_v1.py`
+  - `tests/runtime/test_trace_bundle_v2.py`
+  - `tests/runtime/test_diag_snapshot_v2.py`
+  - `tests/runtime/test_crash_dump_capture_v1.py`
+  - `tests/runtime/test_crash_dump_symbolization_v1.py`
+- PR-3 complete (observability v2 gate + crash-dump sub-gate):
+  - `tests/runtime/test_observability_gate_v2.py`
+  - `tests/runtime/test_crash_dump_gate_v1.py`
+  - `Makefile` targets `test-observability-v2`, `test-crash-dump-v1`
+  - `.github/workflows/ci.yml` steps `Observability v2 gate`, `Crash dump v1 gate`
+- M29 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M28): `docs/M28_EXECUTION_BACKLOG.md`
-- Post-M28 focus: start M29 observability and diagnostics v2 execution backlog.
+- Last completed backlog (M29): `docs/M29_EXECUTION_BACKLOG.md`
+- Post-M29 focus: start M30 installer/upgrade/recovery UX v3 execution backlog.
 
 
