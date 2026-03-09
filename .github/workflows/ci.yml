@@ -305,3 +305,17 @@ jobs:
           path: |
             out/pytest-firmware-attestation-v1.xml
             out/measured-boot-v1.json
+
+      - name: Performance regression v1 gate
+        run: |
+          make test-perf-regression-v1
+
+      - name: Upload performance regression v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-regression-v1-artifacts
+          path: |
+            out/pytest-perf-regression-v1.xml
+            out/perf-baseline-v1.json
+            out/perf-regression-v1.json

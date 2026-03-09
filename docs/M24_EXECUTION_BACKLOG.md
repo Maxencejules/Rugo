@@ -2,7 +2,7 @@
 
 Date: 2026-03-06  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: planned
+Status: done
 
 ## Goal
 
@@ -14,15 +14,15 @@ M24 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 
 ## Current State Summary
 
-- Runtime and subsystem gates exist, but unified performance budgets are absent.
-- M24 introduces v1 benchmark policy and regression budget enforcement.
-- No dedicated performance regression gate currently exists.
+- Runtime and subsystem gates now include workload-scoped performance budgets.
+- Deterministic baseline and regression artifacts are implemented and test-backed.
+- Performance regression v1 is release-gated in local and CI lanes.
 
 ## Execution Result
 
-- PR-1: planned
-- PR-2: planned
-- PR-3: planned
+- PR-1: complete (2026-03-09)
+- PR-2: complete (2026-03-09)
+- PR-3: complete (2026-03-09)
 
 ## PR-1: Budget + Benchmark Contract
 
@@ -52,6 +52,14 @@ Freeze benchmark classes and regression budget semantics.
 
 - Performance budgets are versioned and workload-scoped.
 - Benchmark policy has explicit ownership and thresholds.
+
+### PR-1 completion summary
+
+- Added performance budget and benchmark policy docs:
+  - `docs/runtime/performance_budget_v1.md`
+  - `docs/runtime/benchmark_policy_v1.md`
+- Added executable PR-1 checks:
+  - `tests/runtime/test_perf_budget_docs_v1.py`
 
 ## PR-2: Baseline + Regression Tooling
 
@@ -83,6 +91,14 @@ Implement deterministic baseline capture and regression checks.
 
 - Baseline and regression artifacts are machine-readable and deterministic.
 - Regressions above threshold are detectable and actionable.
+
+### PR-2 completion summary
+
+- Added deterministic baseline and regression tooling:
+  - `tools/run_perf_baseline_v1.py`
+  - `tools/check_perf_regression_v1.py`
+- Added executable PR-2 checks:
+  - `tests/runtime/test_perf_regression_v1.py`
 
 ## PR-3: Performance Gate + Closure
 
@@ -116,8 +132,22 @@ Promote performance regression checks to release-blocking status.
 - Performance gate is required in local and CI release lanes.
 - M24 can be marked done with regression budget evidence.
 
+### PR-3 completion summary
+
+- Added aggregate gate test:
+  - `tests/runtime/test_perf_gate_v1.py`
+- Added local gate:
+  - `make test-perf-regression-v1`
+  - JUnit output: `out/pytest-perf-regression-v1.xml`
+- Added CI gate + artifact upload:
+  - step: `Performance regression v1 gate`
+  - artifact: `perf-regression-v1-artifacts`
+- Updated closure docs:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
+
 ## Non-goals for M24 backlog
 
 - Absolute performance leadership claims across all workloads.
 - Unbounded microbenchmark expansion without owner and threshold policy.
-

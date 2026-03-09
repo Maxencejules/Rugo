@@ -28,6 +28,7 @@ make test-abi-stability-v3
 make test-kernel-reliability-v1
 make test-hw-matrix-v3
 make test-firmware-attestation-v1
+make test-perf-regression-v1
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -68,6 +69,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 | **M22** Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs + deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 | **M23** Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs + deterministic diagnostics and firmware attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
+| **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs + deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -456,9 +458,24 @@ M23 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Hardware matrix v3 gate`, `Firmware attestation v1 gate`
 - M23 is done.
 
+M24 execution update (2026-03-09):
+- PR-1 complete (budget and benchmark policy contracts):
+  - `docs/runtime/performance_budget_v1.md`
+  - `docs/runtime/benchmark_policy_v1.md`
+  - `tests/runtime/test_perf_budget_docs_v1.py`
+- PR-2 complete (deterministic baseline + regression tooling):
+  - `tools/run_perf_baseline_v1.py`
+  - `tools/check_perf_regression_v1.py`
+  - `tests/runtime/test_perf_regression_v1.py`
+- PR-3 complete (performance regression v1 gate + closure wiring):
+  - `tests/runtime/test_perf_gate_v1.py`
+  - `Makefile` target `test-perf-regression-v1`
+  - `.github/workflows/ci.yml` step `Performance regression v1 gate`
+- M24 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M23): `docs/M23_EXECUTION_BACKLOG.md`
-- Post-M23 focus: start M24 performance baseline + regression budgets v1 execution backlog.
+- Last completed backlog (M24): `docs/M24_EXECUTION_BACKLOG.md`
+- Post-M24 focus: start M25 userspace service model + init v2 execution backlog.
 
 

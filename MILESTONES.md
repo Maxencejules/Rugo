@@ -89,6 +89,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M21 | ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs and compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 | M22 | Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs and deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 | M23 | Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs and deterministic diagnostics/attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
+| M24 | Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs and deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1198,6 +1199,44 @@ Milestone status: done (2026-03-09).
 
 ---
 
+## M24: Performance Baseline + Regression Budgets v1
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Performance budget and benchmark policy contracts are versioned and test-backed.
+- Baseline and regression artifacts are deterministic and machine-readable.
+- Performance regression v1 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/runtime/test_perf_budget_docs_v1.py` | performance budget and benchmark policy contract tokens and ownership checks |
+| `tests/runtime/test_perf_regression_v1.py` | seeded baseline/regression determinism and threshold-breach detection checks |
+| `tests/runtime/test_perf_gate_v1.py` | make/ci/docs gate wiring and closure checks |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/runtime/performance_budget_v1.md`
+  - `docs/runtime/benchmark_policy_v1.md`
+- Tooling:
+  - `tools/run_perf_baseline_v1.py`
+  - `tools/check_perf_regression_v1.py`
+- Test gate:
+  - `tests/runtime/test_perf_budget_docs_v1.py`
+  - `tests/runtime/test_perf_regression_v1.py`
+  - `tests/runtime/test_perf_gate_v1.py`
+- Execution history:
+  - `docs/M24_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-perf-regression-v1`
+  - `.github/workflows/ci.yml` step `Performance regression v1 gate`
+
+---
+
 ## References
 
 - Rust target `x86_64-unknown-none` platform support notes (no std; allocator
@@ -1206,4 +1245,5 @@ Milestone status: done (2026-03-09).
 - TinyGo documentation (targets; language and stdlib support notes).
 - Build toolchain details: `docs/build/rust_toolchain.md`
 - Legacy Go toolchain: `docs/build/go_toolchain.md`
+
 
