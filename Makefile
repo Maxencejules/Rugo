@@ -53,7 +53,7 @@ endif
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
-       test-observability-v2 test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
+       test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -641,6 +641,11 @@ test-crash-dump-v1:
 	$(PYTHON) tools/collect_crash_dump_v1.py --out $(OUT)/crash-dump-v1.json
 	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
 	$(PYTHON) -m pytest tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v --junitxml=$(OUT)/pytest-crash-dump-v1.xml
+
+test-ops-ux-v3:
+	$(PYTHON) tools/run_upgrade_drill_v3.py --seed 20260309 --out $(OUT)/upgrade-drill-v3.json
+	$(PYTHON) tools/run_recovery_drill_v3.py --seed 20260309 --out $(OUT)/recovery-drill-v3.json
+	$(PYTHON) -m pytest tests/build/test_installer_ux_v3.py tests/build/test_upgrade_recovery_v3.py tests/build/test_rollback_safety_v3.py tests/build/test_ops_ux_gate_v3.py -v --junitxml=$(OUT)/pytest-ops-ux-v3.xml
 
 test-supply-chain-revalidation-v1:
 	$(PYTHON) tools/generate_sbom_v1.py --out $(OUT)/sbom-v1.spdx.json

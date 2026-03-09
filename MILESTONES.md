@@ -95,6 +95,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M27 | External App Compatibility Program v3 | n/a | done | Rugo: compatibility profile/tier contracts + deterministic class matrix artifacts, `make test-app-compat-v3`, CI `App compatibility v3 gate`, docs in `docs/abi/compat_profile_v3.md`, `docs/abi/app_compat_tiers_v1.md`, and `docs/M27_EXECUTION_BACKLOG.md`. |
 | M28 | Security Hardening Program v3 | n/a | done | Rugo: hardening profile/threat model contracts + deterministic attack/fuzz and vulnerability-response artifacts, `make test-security-hardening-v3`, `make test-vuln-response-v1`, CI `Security hardening v3 gate` + `Vulnerability response v1 gate`, docs in `docs/security/hardening_profile_v3.md`, `docs/security/threat_model_v2.md`, and `docs/M28_EXECUTION_BACKLOG.md`. |
 | M29 | Observability + Diagnostics v2 | n/a | done | Rugo: observability/crash contracts + deterministic trace/diagnostic/crash artifacts, `make test-observability-v2`, `make test-crash-dump-v1`, CI `Observability v2 gate` + `Crash dump v1 gate`, docs in `docs/runtime/observability_contract_v2.md`, `docs/runtime/crash_dump_contract_v1.md`, and `docs/M29_EXECUTION_BACKLOG.md`. |
+| M30 | Installer/Upgrade/Recovery UX v3 | n/a | done | Rugo: installer/recovery v3 contracts + deterministic upgrade/recovery rollback-safety artifacts, `make test-ops-ux-v3`, CI `Ops UX v3 gate`, docs in `docs/build/installer_ux_v3.md`, `docs/build/recovery_workflow_v3.md`, and `docs/M30_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1488,6 +1489,47 @@ Milestone status: done (2026-03-09).
   - `Makefile` targets `test-observability-v2`, `test-crash-dump-v1`
   - `.github/workflows/ci.yml` steps `Observability v2 gate`,
     `Crash dump v1 gate`
+
+---
+
+## M30: Installer/Upgrade/Recovery UX v3
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Installer and recovery workflow contracts are versioned and test-backed.
+- Upgrade and recovery drills emit deterministic, machine-readable artifacts.
+- Rollback safety checks are executable, auditable, and release-blocking.
+- Ops UX v3 gate is required in local and CI release lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/build/test_installer_ux_v3.py` | installer/recovery v3 docs include required contract IDs and gate anchors |
+| `tests/build/test_upgrade_recovery_v3.py` | deterministic upgrade/recovery drill schema and stage sequencing checks |
+| `tests/build/test_rollback_safety_v3.py` | rollback-floor and operator-checklist failure-path enforcement checks |
+| `tests/build/test_ops_ux_gate_v3.py` | make/ci/docs gate wiring, closure checks, and drill artifact pass |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/build/installer_ux_v3.md`
+  - `docs/build/recovery_workflow_v3.md`
+- Tooling:
+  - `tools/run_upgrade_drill_v3.py`
+  - `tools/run_recovery_drill_v3.py`
+- Test gate:
+  - `tests/build/test_installer_ux_v3.py`
+  - `tests/build/test_upgrade_recovery_v3.py`
+  - `tests/build/test_rollback_safety_v3.py`
+  - `tests/build/test_ops_ux_gate_v3.py`
+- Execution history:
+  - `docs/M30_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-ops-ux-v3`
+  - `.github/workflows/ci.yml` step `Ops UX v3 gate`
 
 ---
 

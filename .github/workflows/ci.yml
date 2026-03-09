@@ -430,3 +430,17 @@ jobs:
             out/pytest-crash-dump-v1.xml
             out/crash-dump-v1.json
             out/crash-dump-symbolized-v1.json
+
+      - name: Ops UX v3 gate
+        run: |
+          make test-ops-ux-v3
+
+      - name: Upload ops UX v3 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-ux-v3-artifacts
+          path: |
+            out/pytest-ops-ux-v3.xml
+            out/upgrade-drill-v3.json
+            out/recovery-drill-v3.json
