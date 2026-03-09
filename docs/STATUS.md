@@ -88,6 +88,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M31** Release Engineering + Support Lifecycle v2 | n/a | done | Rugo: release/support/revalidation policy contracts + deterministic branch/support/supply-chain audits, `make test-release-lifecycle-v2`, `make test-supply-chain-revalidation-v1`, CI `Release lifecycle v2 gate` + `Supply-chain revalidation v1 gate`, docs in `docs/build/release_policy_v2.md`, `docs/build/support_lifecycle_policy_v1.md`, and `docs/M31_EXECUTION_BACKLOG.md`. |
 | **M32** Conformance + Profile Qualification v1 | n/a | done | Rugo: profile conformance contract + deterministic profile qualification suite artifacts, `make test-conformance-v1`, CI `Conformance v1 gate`, docs in `docs/runtime/profile_conformance_v1.md`, and `docs/M32_EXECUTION_BACKLOG.md`. |
 | **M33** Fleet-Scale Operations Baseline v1 | n/a | done | Rugo: fleet update/health and rollout-safety policy contracts + deterministic fleet/canary/abort simulations, `make test-fleet-ops-v1`, `make test-fleet-rollout-safety-v1`, CI `Fleet ops v1 gate` + `Fleet rollout safety v1 gate`, docs in `docs/pkg/fleet_update_policy_v1.md`, `docs/runtime/fleet_health_policy_v1.md`, and `docs/M33_EXECUTION_BACKLOG.md`. |
+| **M34** Maturity Qualification + LTS Declaration | n/a | done | Rugo: maturity qualification/LTS declaration contracts + deterministic cross-domain qualification bundle, `make test-maturity-qual-v1`, CI `Maturity qualification v1 gate`, docs in `docs/build/maturity_qualification_v1.md`, `docs/build/lts_declaration_policy_v1.md`, and `docs/M34_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -676,9 +677,27 @@ M33 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Fleet ops v1 gate`, `Fleet rollout safety v1 gate`
 - M33 is done.
 
+M34 execution update (2026-03-09):
+- PR-1 complete (maturity qualification + LTS declaration contract freeze):
+  - `docs/build/maturity_qualification_v1.md`
+  - `docs/build/lts_declaration_policy_v1.md`
+  - `tests/build/test_maturity_docs_v1.py`
+- PR-2 complete (deterministic maturity qualification tooling + checks):
+  - `tools/run_maturity_qualification_v1.py`
+  - `tests/build/test_maturity_qualification_v1.py`
+  - `tests/build/test_lts_policy_v1.py`
+  - `tests/build/test_maturity_security_response_drill_v1.py`
+  - `tests/build/test_maturity_supply_chain_continuity_v1.py`
+  - `tests/build/test_maturity_rollout_safety_v1.py`
+- PR-3 complete (maturity qualification v1 gate + closure wiring):
+  - `tests/build/test_maturity_gate_v1.py`
+  - `Makefile` target `test-maturity-qual-v1`
+  - `.github/workflows/ci.yml` step `Maturity qualification v1 gate`
+- M34 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M33): `docs/M33_EXECUTION_BACKLOG.md`
-- Post-M33 focus: start M34 maturity qualification + LTS declaration execution backlog.
+- Last completed backlog (M34): `docs/M34_EXECUTION_BACKLOG.md`
+- M21-M34 roadmap execution is complete with the M34 maturity qualification + LTS baseline.
 
 

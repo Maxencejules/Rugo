@@ -99,6 +99,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M31 | Release Engineering + Support Lifecycle v2 | n/a | done | Rugo: release/support/revalidation policy contracts + deterministic branch/support/supply-chain audits, `make test-release-lifecycle-v2`, `make test-supply-chain-revalidation-v1`, CI `Release lifecycle v2 gate` + `Supply-chain revalidation v1 gate`, docs in `docs/build/release_policy_v2.md`, `docs/build/support_lifecycle_policy_v1.md`, and `docs/M31_EXECUTION_BACKLOG.md`. |
 | M32 | Conformance + Profile Qualification v1 | n/a | done | Rugo: profile conformance contract + deterministic profile qualification suite artifacts, `make test-conformance-v1`, CI `Conformance v1 gate`, docs in `docs/runtime/profile_conformance_v1.md` and `docs/M32_EXECUTION_BACKLOG.md`. |
 | M33 | Fleet-Scale Operations Baseline v1 | n/a | done | Rugo: fleet update/health and rollout-safety policy contracts + deterministic fleet/canary/abort simulations, `make test-fleet-ops-v1`, `make test-fleet-rollout-safety-v1`, CI `Fleet ops v1 gate` + `Fleet rollout safety v1 gate`, docs in `docs/pkg/fleet_update_policy_v1.md`, `docs/runtime/fleet_health_policy_v1.md`, and `docs/M33_EXECUTION_BACKLOG.md`. |
+| M34 | Maturity Qualification + LTS Declaration | n/a | done | Rugo: maturity qualification/LTS declaration contracts + deterministic cross-domain qualification bundle, `make test-maturity-qual-v1`, CI `Maturity qualification v1 gate`, docs in `docs/build/maturity_qualification_v1.md`, `docs/build/lts_declaration_policy_v1.md`, and `docs/M34_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1685,6 +1686,52 @@ Milestone status: done (2026-03-09).
     `test-fleet-rollout-safety-v1`
   - `.github/workflows/ci.yml` steps `Fleet ops v1 gate`,
     `Fleet rollout safety v1 gate`
+
+---
+
+## M34: Maturity Qualification + LTS Declaration
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Maturity qualification and LTS declaration requirements are explicit,
+  versioned, and test-backed.
+- Final qualification bundle is deterministic and machine-readable.
+- Maturity qualification v1 gate is required in local and CI release lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/build/test_maturity_docs_v1.py` | maturity/LTS docs include required policy IDs, schemas, thresholds, and gate anchors |
+| `tests/build/test_maturity_qualification_v1.py` | deterministic maturity qualification bundle pass/fail behavior and LTS eligibility checks |
+| `tests/build/test_lts_policy_v1.py` | LTS declaration policy enforcement checks and short-history rejection behavior |
+| `tests/build/test_maturity_security_response_drill_v1.py` | security advisory/embargo drill evidence is present in maturity lane |
+| `tests/build/test_maturity_supply_chain_continuity_v1.py` | supply-chain continuity evidence remains deterministic and auditable |
+| `tests/build/test_maturity_rollout_safety_v1.py` | rollout safety evidence remains deterministic and policy-enforced |
+| `tests/build/test_maturity_gate_v1.py` | make/ci/docs gate wiring, closure checks, and qualification artifact pass |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/build/maturity_qualification_v1.md`
+  - `docs/build/lts_declaration_policy_v1.md`
+- Tooling:
+  - `tools/run_maturity_qualification_v1.py`
+- Test gate:
+  - `tests/build/test_maturity_docs_v1.py`
+  - `tests/build/test_maturity_qualification_v1.py`
+  - `tests/build/test_lts_policy_v1.py`
+  - `tests/build/test_maturity_security_response_drill_v1.py`
+  - `tests/build/test_maturity_supply_chain_continuity_v1.py`
+  - `tests/build/test_maturity_rollout_safety_v1.py`
+  - `tests/build/test_maturity_gate_v1.py`
+- Execution history:
+  - `docs/M34_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-maturity-qual-v1`
+  - `.github/workflows/ci.yml` step `Maturity qualification v1 gate`
 
 ---
 

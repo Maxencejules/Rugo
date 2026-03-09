@@ -515,3 +515,16 @@ jobs:
             out/pytest-fleet-rollout-safety-v1.xml
             out/canary-rollout-sim-v1.json
             out/rollout-abort-drill-v1.json
+
+      - name: Maturity qualification v1 gate
+        run: |
+          make test-maturity-qual-v1
+
+      - name: Upload maturity qualification v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maturity-qualification-v1-artifacts
+          path: |
+            out/pytest-maturity-qual-v1.xml
+            out/maturity-qualification-v1.json
