@@ -98,6 +98,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M35** Desktop + Interactive UX Baseline v1 | n/a | done | Rugo: desktop/display/input contracts + deterministic desktop/gui artifacts, `make test-desktop-stack-v1`, `make test-gui-app-compat-v1`, CI `Desktop stack v1 gate` + `GUI app compatibility v1 gate`, docs in `docs/desktop/*`, and `docs/M35_EXECUTION_BACKLOG.md`. |
 | **M36** Compatibility Surface Expansion v1 | n/a | done | Rugo: compatibility/process/socket contracts + deterministic compatibility/POSIX artifacts, `make test-compat-surface-v1`, `make test-posix-gap-closure-v1`, CI `Compatibility surface v1 gate` + `POSIX gap closure v1 gate`, docs in `docs/abi/compat_profile_v4.md`, `docs/runtime/syscall_coverage_matrix_v3.md`, and `docs/M36_EXECUTION_BACKLOG.md`. |
 | **M37** Hardware Breadth + Driver Matrix v4 | n/a | done | Rugo: matrix v4/driver-lifecycle/promotion contracts + deterministic hardware/promotion artifacts, `make test-hw-matrix-v4`, `make test-hw-baremetal-promotion-v1`, CI `Hardware matrix v4 gate` + `Hardware bare-metal promotion v1 gate`, docs in `docs/hw/support_matrix_v4.md`, `docs/hw/driver_lifecycle_contract_v4.md`, and `docs/M37_EXECUTION_BACKLOG.md`. |
+| **M38** Storage + Platform Feature Expansion v1 | n/a | done | Rugo: storage/platform feature contracts + deterministic snapshot/resize/fs-ops and platform-conformance artifacts, `make test-storage-platform-v1`, `make test-storage-feature-contract-v1`, CI `Storage platform v1 gate` + `Storage feature contract v1 gate`, docs in `docs/storage/fs_feature_contract_v1.md`, `docs/runtime/platform_feature_profile_v1.md`, and `docs/M38_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -766,14 +767,35 @@ M37 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Hardware matrix v4 gate`, `Hardware bare-metal promotion v1 gate`
 - M37 is done.
 
+M38 execution update (2026-03-09):
+- PR-1 complete (storage/platform feature contract freeze):
+  - `docs/storage/fs_feature_contract_v1.md`
+  - `docs/storage/snapshot_policy_v1.md`
+  - `docs/storage/online_resize_policy_v1.md`
+  - `docs/runtime/platform_feature_profile_v1.md`
+  - `tests/storage/test_storage_feature_docs_v1.py`
+- PR-2 complete (deterministic feature tooling + checks):
+  - `tools/run_storage_feature_campaign_v1.py`
+  - `tools/run_platform_feature_conformance_v1.py`
+  - `tests/storage/test_snapshot_semantics_v1.py`
+  - `tests/storage/test_online_resize_v1.py`
+  - `tests/storage/test_advanced_fs_ops_v1.py`
+  - `tests/runtime/test_platform_feature_profile_v1.py`
+- PR-3 complete (storage platform gate + feature-contract sub-gate wiring):
+  - `tests/storage/test_storage_platform_gate_v1.py`
+  - `tests/storage/test_storage_feature_contract_gate_v1.py`
+  - `Makefile` targets `test-storage-platform-v1`, `test-storage-feature-contract-v1`
+  - `.github/workflows/ci.yml` steps `Storage platform v1 gate`, `Storage feature contract v1 gate`
+- M38 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
 - Next roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
-- Planned backlogs (M38-M39):
-  - `docs/M38_EXECUTION_BACKLOG.md`
+- Planned backlogs (M39):
   - `docs/M39_EXECUTION_BACKLOG.md`
-- Last completed backlog (M37): `docs/M37_EXECUTION_BACKLOG.md`
+- Last completed backlog (M38): `docs/M38_EXECUTION_BACKLOG.md`
 - M35-M39 roadmap execution has started with M35 desktop baseline closure and
-  M36 compatibility-surface closure and M37 hardware matrix v4 closure.
+  M36 compatibility-surface closure and M37 hardware matrix v4 closure and
+  M38 storage/platform feature closure.
 
 

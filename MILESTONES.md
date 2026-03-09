@@ -103,6 +103,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M35 | Desktop + Interactive UX Baseline v1 | n/a | done | Rugo: desktop/display/input contracts + deterministic desktop/gui artifacts, `make test-desktop-stack-v1`, `make test-gui-app-compat-v1`, CI `Desktop stack v1 gate` + `GUI app compatibility v1 gate`, docs in `docs/desktop/*` and `docs/M35_EXECUTION_BACKLOG.md`. |
 | M36 | Compatibility Surface Expansion v1 | n/a | done | Rugo: compatibility/process/socket contracts + deterministic compatibility/POSIX artifacts, `make test-compat-surface-v1`, `make test-posix-gap-closure-v1`, CI `Compatibility surface v1 gate` + `POSIX gap closure v1 gate`, docs in `docs/abi/compat_profile_v4.md`, `docs/runtime/syscall_coverage_matrix_v3.md`, and `docs/M36_EXECUTION_BACKLOG.md`. |
 | M37 | Hardware Breadth + Driver Matrix v4 | n/a | done | Rugo: matrix v4/driver-lifecycle/promotion contracts + deterministic hardware/promotion artifacts, `make test-hw-matrix-v4`, `make test-hw-baremetal-promotion-v1`, CI `Hardware matrix v4 gate` + `Hardware bare-metal promotion v1 gate`, docs in `docs/hw/support_matrix_v4.md`, `docs/hw/driver_lifecycle_contract_v4.md`, and `docs/M37_EXECUTION_BACKLOG.md`. |
+| M38 | Storage + Platform Feature Expansion v1 | n/a | done | Rugo: storage/platform feature contracts + deterministic snapshot/resize/fs-ops and platform-conformance artifacts, `make test-storage-platform-v1`, `make test-storage-feature-contract-v1`, CI `Storage platform v1 gate` + `Storage feature contract v1 gate`, docs in `docs/storage/fs_feature_contract_v1.md`, `docs/runtime/platform_feature_profile_v1.md`, and `docs/M38_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1889,6 +1890,60 @@ Milestone status: done (2026-03-09).
   - `Makefile` targets `test-hw-matrix-v4`, `test-hw-baremetal-promotion-v1`
   - `.github/workflows/ci.yml` steps `Hardware matrix v4 gate`,
     `Hardware bare-metal promotion v1 gate`
+
+---
+
+## M38: Storage + Platform Feature Expansion v1
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Storage/platform feature contracts for snapshots, online resize, advanced
+  filesystem operations, and platform profiles are explicit, versioned, and
+  test-backed.
+- Feature campaign and platform conformance artifacts are deterministic and
+  machine-readable.
+- Storage platform gate and storage feature contract sub-gate are required in
+  local and CI release lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/storage/test_storage_feature_docs_v1.py` | storage/platform feature contract docs include required IDs, thresholds, schemas, and gate anchors |
+| `tests/storage/test_snapshot_semantics_v1.py` | deterministic snapshot campaign schema and restore-integrity failure-path enforcement |
+| `tests/storage/test_online_resize_v1.py` | deterministic online resize campaign semantics and shrink-guard regression rejection |
+| `tests/storage/test_advanced_fs_ops_v1.py` | deterministic advanced fs operation semantics and xattr/reflink policy enforcement |
+| `tests/runtime/test_platform_feature_profile_v1.py` | deterministic platform profile schema and profile requirement enforcement |
+| `tests/storage/test_storage_feature_contract_gate_v1.py` | storage feature contract sub-gate make/ci/docs wiring and conformance artifact pass |
+| `tests/storage/test_storage_platform_gate_v1.py` | storage platform gate wiring, sub-gate integration, closure checks, and deterministic artifacts |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/storage/fs_feature_contract_v1.md`
+  - `docs/storage/snapshot_policy_v1.md`
+  - `docs/storage/online_resize_policy_v1.md`
+  - `docs/runtime/platform_feature_profile_v1.md`
+- Tooling:
+  - `tools/run_storage_feature_campaign_v1.py`
+  - `tools/run_platform_feature_conformance_v1.py`
+- Test gate:
+  - `tests/storage/test_storage_feature_docs_v1.py`
+  - `tests/storage/test_snapshot_semantics_v1.py`
+  - `tests/storage/test_online_resize_v1.py`
+  - `tests/storage/test_advanced_fs_ops_v1.py`
+  - `tests/runtime/test_platform_feature_profile_v1.py`
+  - `tests/storage/test_storage_feature_contract_gate_v1.py`
+  - `tests/storage/test_storage_platform_gate_v1.py`
+- Execution history:
+  - `docs/M38_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` targets `test-storage-platform-v1`,
+    `test-storage-feature-contract-v1`
+  - `.github/workflows/ci.yml` steps `Storage platform v1 gate`,
+    `Storage feature contract v1 gate`
 
 ---
 

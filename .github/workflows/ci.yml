@@ -606,3 +606,29 @@ jobs:
           path: |
             out/pytest-hw-baremetal-promotion-v1.xml
             out/hw-promotion-v1.json
+
+      - name: Storage platform v1 gate
+        run: |
+          make test-storage-platform-v1
+
+      - name: Upload storage platform v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-platform-v1-artifacts
+          path: |
+            out/pytest-storage-platform-v1.xml
+            out/storage-feature-v1.json
+
+      - name: Storage feature contract v1 gate
+        run: |
+          make test-storage-feature-contract-v1
+
+      - name: Upload storage feature contract v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-feature-contract-v1-artifacts
+          path: |
+            out/pytest-storage-feature-contract-v1.xml
+            out/platform-feature-v1.json
