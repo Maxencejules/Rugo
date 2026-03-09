@@ -16,10 +16,12 @@ def test_tpm_eventlog_schema(tmp_path: Path):
     assert rc == 0
     data = json.loads(out.read_text(encoding="utf-8"))
     events = data["tpm_event_log"]
+    assert data["event_count"] == len(events)
     assert len(events) >= 4
     for entry in events:
+        assert "index" in entry
         assert "pcr" in entry
         assert "type" in entry
+        assert "component" in entry
         assert "digest" in entry
         assert len(entry["digest"]) == 64
-

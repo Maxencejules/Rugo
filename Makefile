@@ -54,7 +54,7 @@ endif
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-update-trust-v1 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
-       run test-qemu test-hw-matrix test-hw-matrix-v2 repro-check clean legacy docker-all docker-legacy
+       run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 repro-check clean legacy docker-all docker-legacy
 
 # Tools
 NASM    ?= nasm
@@ -523,6 +523,10 @@ test-hw-matrix: image-blk image-blk-badlen image-blk-badptr image-net
 test-hw-matrix-v2: image-blk image-blk-badlen image-blk-badptr image-net
 	$(PYTHON) -m pytest tests/hw/test_hardware_matrix_v2.py tests/hw/test_probe_negative_paths_v2.py tests/hw/test_dma_iommu_policy_v2.py tests/hw/test_acpi_boot_paths_v2.py tests/hw/test_bare_metal_smoke_v2.py tests/hw/test_hw_gate_v2.py -v --junitxml=$(OUT)/pytest-hw-matrix-v2.xml
 
+test-hw-matrix-v3: image-blk image-blk-badlen image-blk-badptr image-net
+	$(PYTHON) tools/collect_hw_diagnostics_v3.py --seed 20260306 --out $(OUT)/hw-diagnostics-v3.json
+	$(PYTHON) -m pytest tests/hw/test_hardware_matrix_v3.py tests/hw/test_driver_lifecycle_v3.py tests/hw/test_suspend_resume_v1.py tests/hw/test_hotplug_baseline_v1.py tests/hw/test_hw_gate_v3.py -v --junitxml=$(OUT)/pytest-hw-matrix-v3.xml
+
 test-process-scheduler-v2: image-thread-spawn image-thread-exit image-yield image-user-fault
 	$(PYTHON) -m pytest tests/sched/test_preempt_timer_quantum_v2.py tests/sched/test_priority_fairness_v2.py tests/sched/test_scheduler_soak_v2.py tests/user/test_process_wait_kill_v2.py tests/user/test_signal_delivery_v2.py tests/sched/test_scheduler_gate_v2.py -v --junitxml=$(OUT)/pytest-process-scheduler-v2.xml
 
@@ -586,7 +590,7 @@ test-kernel-reliability-v1:
 
 test-firmware-attestation-v1:
 	$(PYTHON) tools/collect_measured_boot_report_v1.py --out $(OUT)/measured-boot-v1.json
-	$(PYTHON) -m pytest tests/hw/test_firmware_resiliency_docs_v1.py tests/hw/test_measured_boot_attestation_v1.py tests/hw/test_tpm_eventlog_schema_v1.py tests/hw/test_firmware_attestation_gate_v1.py -v
+	$(PYTHON) -m pytest tests/hw/test_firmware_resiliency_docs_v1.py tests/hw/test_measured_boot_attestation_v1.py tests/hw/test_tpm_eventlog_schema_v1.py tests/hw/test_firmware_attestation_gate_v1.py -v --junitxml=$(OUT)/pytest-firmware-attestation-v1.xml
 
 test-update-trust-v1:
 	$(PYTHON) tools/check_update_trust_v1.py --out $(OUT)/update-trust-v1.json

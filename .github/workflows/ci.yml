@@ -279,3 +279,29 @@ jobs:
             out/pytest-kernel-reliability-v1.xml
             out/kernel-soak-v1.json
             out/kernel-fault-campaign-v1.json
+
+      - name: Hardware matrix v3 gate
+        run: |
+          make test-hw-matrix-v3
+
+      - name: Upload hardware matrix v3 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw-matrix-v3-artifacts
+          path: |
+            out/pytest-hw-matrix-v3.xml
+            out/hw-diagnostics-v3.json
+
+      - name: Firmware attestation v1 gate
+        run: |
+          make test-firmware-attestation-v1
+
+      - name: Upload firmware attestation v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-attestation-v1-artifacts
+          path: |
+            out/pytest-firmware-attestation-v1.xml
+            out/measured-boot-v1.json

@@ -14,6 +14,7 @@ def _read(relpath: str) -> str:
 def test_firmware_resiliency_docs_v1_present():
     root = _repo_root()
     required = [
+        "docs/hw/support_matrix_v3.md",
         "docs/hw/firmware_resiliency_policy_v1.md",
         "docs/security/measured_boot_attestation_v1.md",
         "tools/collect_measured_boot_report_v1.py",
@@ -23,9 +24,12 @@ def test_firmware_resiliency_docs_v1_present():
 
     policy = _read("docs/hw/firmware_resiliency_policy_v1.md")
     attestation = _read("docs/security/measured_boot_attestation_v1.md")
+    matrix = _read("docs/hw/support_matrix_v3.md")
     assert "protect" in policy
     assert "detect" in policy
     assert "recover" in policy
     assert "tpm event log" in attestation
     assert "pcr" in attestation
-
+    assert "make test-firmware-attestation-v1" in policy
+    assert "schema identifier: `rugo.measured_boot_report.v1`" in attestation
+    assert "firmware sub-gate: `make test-firmware-attestation-v1`" in matrix

@@ -26,6 +26,8 @@ make test-release-engineering-v1
 make test-release-ops-v2
 make test-abi-stability-v3
 make test-kernel-reliability-v1
+make test-hw-matrix-v3
+make test-firmware-attestation-v1
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -65,6 +67,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M20** Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, and `docs/M20_EXECUTION_BACKLOG.md`. |
 | **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 | **M22** Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs + deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
+| **M23** Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs + deterministic diagnostics and firmware attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -431,9 +434,31 @@ M22 execution update (2026-03-09):
   - `.github/workflows/ci.yml` step `Kernel reliability v1 gate`
 - M22 is done.
 
+M23 execution update (2026-03-09):
+- PR-1 complete (matrix v3 + firmware contracts):
+  - `docs/hw/support_matrix_v3.md`
+  - `docs/hw/driver_lifecycle_contract_v3.md`
+  - `docs/hw/firmware_resiliency_policy_v1.md`
+  - `docs/security/measured_boot_attestation_v1.md`
+  - `tests/hw/test_hardware_matrix_v3.py`
+  - `tests/hw/test_driver_lifecycle_v3.py`
+- PR-2 complete (suspend/hotplug + measured-boot evidence):
+  - `tools/collect_hw_diagnostics_v3.py`
+  - `tools/collect_measured_boot_report_v1.py`
+  - `tests/hw/test_suspend_resume_v1.py`
+  - `tests/hw/test_hotplug_baseline_v1.py`
+  - `tests/hw/test_measured_boot_attestation_v1.py`
+  - `tests/hw/test_tpm_eventlog_schema_v1.py`
+- PR-3 complete (hardware v3 gate + firmware sub-gate):
+  - `tests/hw/test_hw_gate_v3.py`
+  - `tests/hw/test_firmware_attestation_gate_v1.py`
+  - `Makefile` targets `test-hw-matrix-v3`, `test-firmware-attestation-v1`
+  - `.github/workflows/ci.yml` steps `Hardware matrix v3 gate`, `Firmware attestation v1 gate`
+- M23 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M22): `docs/M22_EXECUTION_BACKLOG.md`
-- Post-M22 focus: start M23 hardware enablement matrix v3 execution backlog.
+- Last completed backlog (M23): `docs/M23_EXECUTION_BACKLOG.md`
+- Post-M23 focus: start M24 performance baseline + regression budgets v1 execution backlog.
 
 

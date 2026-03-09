@@ -88,6 +88,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M20 | Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, `docs/M20_EXECUTION_BACKLOG.md`. |
 | M21 | ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs and compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 | M22 | Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs and deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
+| M23 | Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs and deterministic diagnostics/attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1139,6 +1140,61 @@ Milestone status: done (2026-03-09).
 - Release gating:
   - `Makefile` target `test-kernel-reliability-v1`
   - `.github/workflows/ci.yml` step `Kernel reliability v1 gate`
+
+---
+
+## M23: Hardware Enablement Matrix v3
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Hardware matrix v3 contracts are versioned and test-backed.
+- Driver lifecycle, suspend/resume, and hotplug baselines are deterministic and
+  machine-auditable.
+- Firmware attestation v1 is integrated as a required sub-gate.
+- Hardware matrix v3 gate and firmware sub-gate are release-blocking in local
+  and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/hw/test_hardware_matrix_v3.py` | Tier 0/Tier 1 storage and network deterministic marker checks + v3 contract tokens |
+| `tests/hw/test_driver_lifecycle_v3.py` | v3 lifecycle state contract tokens + seeded diagnostics determinism |
+| `tests/hw/test_suspend_resume_v1.py` | suspend/resume cycle counters and latency-budget schema checks |
+| `tests/hw/test_hotplug_baseline_v1.py` | hotplug event counters and settle-budget schema checks |
+| `tests/hw/test_measured_boot_attestation_v1.py` | measured-boot schema/policy verdict checks including missing-PCR rejection |
+| `tests/hw/test_tpm_eventlog_schema_v1.py` | TPM event log required-field schema checks |
+| `tests/hw/test_hw_gate_v3.py` | matrix v3 make/ci/docs gate wiring and closure |
+| `tests/hw/test_firmware_attestation_gate_v1.py` | firmware sub-gate make/ci/docs wiring and attestation evidence checks |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/hw/support_matrix_v3.md`
+  - `docs/hw/driver_lifecycle_contract_v3.md`
+  - `docs/hw/firmware_resiliency_policy_v1.md`
+  - `docs/security/measured_boot_attestation_v1.md`
+- Tooling:
+  - `tools/collect_hw_diagnostics_v3.py`
+  - `tools/collect_measured_boot_report_v1.py`
+- Test gate:
+  - `tests/hw/test_hardware_matrix_v3.py`
+  - `tests/hw/test_driver_lifecycle_v3.py`
+  - `tests/hw/test_suspend_resume_v1.py`
+  - `tests/hw/test_hotplug_baseline_v1.py`
+  - `tests/hw/test_measured_boot_attestation_v1.py`
+  - `tests/hw/test_tpm_eventlog_schema_v1.py`
+  - `tests/hw/test_hw_gate_v3.py`
+  - `tests/hw/test_firmware_attestation_gate_v1.py`
+- Execution history:
+  - `docs/M23_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-hw-matrix-v3`
+  - `Makefile` target `test-firmware-attestation-v1`
+  - `.github/workflows/ci.yml` step `Hardware matrix v3 gate`
+  - `.github/workflows/ci.yml` step `Firmware attestation v1 gate`
 
 ---
 
