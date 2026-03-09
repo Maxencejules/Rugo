@@ -319,3 +319,15 @@ jobs:
             out/pytest-perf-regression-v1.xml
             out/perf-baseline-v1.json
             out/perf-regression-v1.json
+
+      - name: Userspace model v2 gate
+        run: |
+          make test-userspace-model-v2
+
+      - name: Upload userspace model v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: userspace-model-v2-artifacts
+          path: |
+            out/pytest-userspace-model-v2.xml

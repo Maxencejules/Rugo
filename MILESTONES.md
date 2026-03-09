@@ -90,6 +90,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M22 | Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs and deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 | M23 | Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs and deterministic diagnostics/attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 | M24 | Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs and deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
+| M25 | Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs and deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1234,6 +1235,45 @@ Milestone status: done (2026-03-09).
 - Release gating:
   - `Makefile` target `test-perf-regression-v1`
   - `.github/workflows/ci.yml` step `Performance regression v1 gate`
+
+---
+
+## M25: Userspace Service Model + Init v2
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Service/init contracts are versioned and test-backed.
+- Startup/shutdown/failure/restart semantics are deterministic and bounded.
+- Userspace model v2 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/runtime/test_service_model_docs_v2.py` | service/init v2 doc contract tokens and gate references |
+| `tests/runtime/test_service_lifecycle_v2.py` | deterministic boot-to-operational lifecycle and failure propagation checks |
+| `tests/runtime/test_service_dependency_order_v2.py` | topological+lexical ordering and cycle/missing-dependency rejection checks |
+| `tests/runtime/test_restart_policy_v2.py` | bounded restart policy cap/backoff semantics checks |
+| `tests/runtime/test_userspace_model_gate_v2.py` | make/ci/docs gate wiring and closure checks |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/runtime/service_model_v2.md`
+  - `docs/runtime/init_contract_v2.md`
+- Test gate:
+  - `tests/runtime/test_service_model_docs_v2.py`
+  - `tests/runtime/test_service_lifecycle_v2.py`
+  - `tests/runtime/test_service_dependency_order_v2.py`
+  - `tests/runtime/test_restart_policy_v2.py`
+  - `tests/runtime/test_userspace_model_gate_v2.py`
+- Execution history:
+  - `docs/M25_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-userspace-model-v2`
+  - `.github/workflows/ci.yml` step `Userspace model v2 gate`
 
 ---
 

@@ -29,6 +29,7 @@ make test-kernel-reliability-v1
 make test-hw-matrix-v3
 make test-firmware-attestation-v1
 make test-perf-regression-v1
+make test-userspace-model-v2
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -70,6 +71,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M22** Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs + deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 | **M23** Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs + deterministic diagnostics and firmware attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 | **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs + deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
+| **M25** Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs + deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -473,9 +475,24 @@ M24 execution update (2026-03-09):
   - `.github/workflows/ci.yml` step `Performance regression v1 gate`
 - M24 is done.
 
+M25 execution update (2026-03-09):
+- PR-1 complete (service/init v2 contract freeze):
+  - `docs/runtime/service_model_v2.md`
+  - `docs/runtime/init_contract_v2.md`
+  - `tests/runtime/test_service_model_docs_v2.py`
+- PR-2 complete (deterministic lifecycle/dependency/restart semantics):
+  - `tests/runtime/test_service_lifecycle_v2.py`
+  - `tests/runtime/test_service_dependency_order_v2.py`
+  - `tests/runtime/test_restart_policy_v2.py`
+- PR-3 complete (userspace model v2 gate + closure wiring):
+  - `tests/runtime/test_userspace_model_gate_v2.py`
+  - `Makefile` target `test-userspace-model-v2`
+  - `.github/workflows/ci.yml` step `Userspace model v2 gate`
+- M25 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M24): `docs/M24_EXECUTION_BACKLOG.md`
-- Post-M24 focus: start M25 userspace service model + init v2 execution backlog.
+- Last completed backlog (M25): `docs/M25_EXECUTION_BACKLOG.md`
+- Post-M25 focus: start M26 package/repo ecosystem v3 execution backlog.
 
 

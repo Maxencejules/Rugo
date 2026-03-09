@@ -52,7 +52,7 @@ endif
        build-sec-filter image-sec-filter \
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
-       test-firmware-attestation-v1 test-perf-regression-v1 test-update-trust-v1 test-vuln-response-v1 \
+       test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-update-trust-v1 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 repro-check clean legacy docker-all docker-legacy
 
@@ -596,6 +596,9 @@ test-perf-regression-v1:
 	$(PYTHON) tools/run_perf_baseline_v1.py --seed 20260309 --out $(OUT)/perf-baseline-v1.json
 	$(PYTHON) tools/check_perf_regression_v1.py --baseline $(OUT)/perf-baseline-v1.json --seed 20260309 --out $(OUT)/perf-regression-v1.json
 	$(PYTHON) -m pytest tests/runtime/test_perf_budget_docs_v1.py tests/runtime/test_perf_regression_v1.py tests/runtime/test_perf_gate_v1.py -v --junitxml=$(OUT)/pytest-perf-regression-v1.xml
+
+test-userspace-model-v2:
+	$(PYTHON) -m pytest tests/runtime/test_service_model_docs_v2.py tests/runtime/test_service_lifecycle_v2.py tests/runtime/test_service_dependency_order_v2.py tests/runtime/test_restart_policy_v2.py tests/runtime/test_userspace_model_gate_v2.py -v --junitxml=$(OUT)/pytest-userspace-model-v2.xml
 
 test-update-trust-v1:
 	$(PYTHON) tools/check_update_trust_v1.py --out $(OUT)/update-trust-v1.json
