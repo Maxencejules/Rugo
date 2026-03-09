@@ -87,6 +87,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M19 | Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, `docs/M19_EXECUTION_BACKLOG.md`. |
 | M20 | Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, `docs/M20_EXECUTION_BACKLOG.md`. |
 | M21 | ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs and compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
+| M22 | Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs and deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1099,6 +1100,45 @@ Milestone status: done (2026-03-09).
 - Release gating:
   - `Makefile` target `test-abi-stability-v3`
   - `.github/workflows/ci.yml` step `ABI stability v3 gate`
+
+---
+
+## M22: Kernel Reliability + Soak v1
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Reliability thresholds are explicitly versioned in runtime docs.
+- Soak and fault campaign artifacts are deterministic and machine-readable.
+- Kernel reliability v1 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/stress/test_kernel_soak_24h_v1.py` | reliability-model tokens and 24h soak threshold schema checks |
+| `tests/stress/test_fault_injection_matrix_v1.py` | fault matrix token checks and deterministic recovery thresholds |
+| `tests/stress/test_reliability_artifact_schema_v1.py` | seeded determinism and artifact-schema compatibility checks |
+| `tests/stress/test_kernel_reliability_gate_v1.py` | make/ci/docs gate wiring and closure |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/runtime/kernel_reliability_model_v1.md`
+- Tooling:
+  - `tools/run_kernel_soak_v1.py`
+  - `tools/run_fault_campaign_kernel_v1.py`
+- Test gate:
+  - `tests/stress/test_kernel_soak_24h_v1.py`
+  - `tests/stress/test_fault_injection_matrix_v1.py`
+  - `tests/stress/test_reliability_artifact_schema_v1.py`
+  - `tests/stress/test_kernel_reliability_gate_v1.py`
+- Execution history:
+  - `docs/M22_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-kernel-reliability-v1`
+  - `.github/workflows/ci.yml` step `Kernel reliability v1 gate`
 
 ---
 

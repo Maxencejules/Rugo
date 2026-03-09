@@ -265,3 +265,17 @@ jobs:
             out/pytest-abi-stability-v3.xml
             out/abi-diff-v3.json
             out/syscall-compat-v3.json
+
+      - name: Kernel reliability v1 gate
+        run: |
+          make test-kernel-reliability-v1
+
+      - name: Upload kernel reliability v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-reliability-v1-artifacts
+          path: |
+            out/pytest-kernel-reliability-v1.xml
+            out/kernel-soak-v1.json
+            out/kernel-fault-campaign-v1.json

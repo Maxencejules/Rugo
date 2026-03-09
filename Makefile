@@ -51,7 +51,7 @@ endif
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
-       test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 \
+       test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-update-trust-v1 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 repro-check clean legacy docker-all docker-legacy
@@ -578,6 +578,11 @@ test-abi-stability-v3:
 	$(PYTHON) tools/check_abi_diff_v3.py --out $(OUT)/abi-diff-v3.json
 	$(PYTHON) tools/check_syscall_compat_v3.py --diff-report $(OUT)/abi-diff-v3.json --out $(OUT)/syscall-compat-v3.json
 	$(PYTHON) -m pytest tests/runtime/test_abi_docs_v3.py tests/runtime/test_abi_window_v3.py tests/runtime/test_abi_diff_gate_v3.py tests/compat/test_abi_compat_matrix_v3.py tests/runtime/test_abi_stability_gate_v3.py -v --junitxml=$(OUT)/pytest-abi-stability-v3.xml
+
+test-kernel-reliability-v1:
+	$(PYTHON) tools/run_kernel_soak_v1.py --seed 20260306 --out $(OUT)/kernel-soak-v1.json
+	$(PYTHON) tools/run_fault_campaign_kernel_v1.py --seed 20260306 --out $(OUT)/kernel-fault-campaign-v1.json
+	$(PYTHON) -m pytest tests/stress/test_kernel_soak_24h_v1.py tests/stress/test_fault_injection_matrix_v1.py tests/stress/test_reliability_artifact_schema_v1.py tests/stress/test_kernel_reliability_gate_v1.py -v --junitxml=$(OUT)/pytest-kernel-reliability-v1.xml
 
 test-firmware-attestation-v1:
 	$(PYTHON) tools/collect_measured_boot_report_v1.py --out $(OUT)/measured-boot-v1.json

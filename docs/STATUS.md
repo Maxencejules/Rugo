@@ -25,6 +25,7 @@ make test-storage-reliability-v2
 make test-release-engineering-v1
 make test-release-ops-v2
 make test-abi-stability-v3
+make test-kernel-reliability-v1
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -63,6 +64,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M19** Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, and `docs/M19_EXECUTION_BACKLOG.md`. |
 | **M20** Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, and `docs/M20_EXECUTION_BACKLOG.md`. |
 | **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
+| **M22** Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs + deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -414,9 +416,24 @@ M21 execution update (2026-03-09):
   - `.github/workflows/ci.yml` step `ABI stability v3 gate`
 - M21 is done.
 
+M22 execution update (2026-03-09):
+- PR-1 complete (reliability model + soak baseline):
+  - `docs/runtime/kernel_reliability_model_v1.md`
+  - `tests/stress/test_kernel_soak_24h_v1.py`
+  - `tests/stress/test_fault_injection_matrix_v1.py`
+- PR-2 complete (campaign tooling + artifact schema):
+  - `tools/run_kernel_soak_v1.py`
+  - `tools/run_fault_campaign_kernel_v1.py`
+  - `tests/stress/test_reliability_artifact_schema_v1.py`
+- PR-3 complete (kernel reliability v1 gate + closure wiring):
+  - `tests/stress/test_kernel_reliability_gate_v1.py`
+  - `Makefile` target `test-kernel-reliability-v1`
+  - `.github/workflows/ci.yml` step `Kernel reliability v1 gate`
+- M22 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M21): `docs/M21_EXECUTION_BACKLOG.md`
-- Post-M21 focus: start M22 kernel reliability + soak v1 execution backlog.
+- Last completed backlog (M22): `docs/M22_EXECUTION_BACKLOG.md`
+- Post-M22 focus: start M23 hardware enablement matrix v3 execution backlog.
 
 
