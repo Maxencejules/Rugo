@@ -192,6 +192,20 @@ jobs:
             out/net-interop-v1.json
             out/net-soak-v1.json
 
+      - name: Network stack v2 gate
+        run: |
+          make test-network-stack-v2
+
+      - name: Upload network stack v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-stack-v2-artifacts
+          path: |
+            out/pytest-network-stack-v2.xml
+            out/net-interop-v2.json
+            out/net-soak-v2.json
+
       - name: Storage reliability v1 gate
         run: |
           make test-storage-reliability-v1

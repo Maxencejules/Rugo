@@ -19,6 +19,7 @@ make test-runtime-maturity
 make test-process-scheduler-v2
 make test-compat-v2
 make test-network-stack-v1
+make test-network-stack-v2
 make test-storage-reliability-v1
 make test-storage-reliability-v2
 make test-release-engineering-v1
@@ -57,6 +58,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M16** Process + Scheduler Model v2 | n/a | done | Rugo: `tests/sched/*_v2`, `tests/user/*_v2`, `make test-process-scheduler-v2`, CI `Process scheduler v2 gate`, docs in `docs/abi/*_v2` and `docs/M16_EXECUTION_BACKLOG.md`. |
 | **M17** Compatibility Profile v2 | n/a | done | Rugo: `tests/compat/*_v2` + tier gate tests, `make test-compat-v2`, CI `Compatibility profile v2 gate`, docs in `docs/abi/*_v2`, `docs/runtime/syscall_coverage_matrix_v2.md`, and `docs/M17_EXECUTION_BACKLOG.md`. |
 | **M18** Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, and `docs/M18_EXECUTION_BACKLOG.md`. |
+| **M19** Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, and `docs/M19_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -353,9 +355,27 @@ M18 execution update (2026-03-06):
   - `.github/workflows/ci.yml` step `Storage reliability v2 gate`
 - M18 is done.
 
+M19 execution update (2026-03-08):
+- PR-1 complete (protocol + socket contract v2):
+  - `docs/net/network_stack_contract_v2.md`
+  - `docs/net/socket_contract_v2.md`
+  - `docs/net/tcp_profile_v2.md`
+  - `tests/net/test_tcp_interop_v2.py`
+  - `tests/net/test_ipv6_interop_v2.py`
+- PR-2 complete (service behavior + diagnostics artifacts):
+  - `tools/run_net_interop_matrix_v2.py`
+  - `tools/run_net_soak_v2.py`
+  - `docs/net/interop_matrix_v2.md`
+  - `tests/net/test_dns_stub_v2.py`
+- PR-3 complete (network stack v2 gate + closure wiring):
+  - `tests/net/test_network_gate_v2.py`
+  - `Makefile` target `test-network-stack-v2`
+  - `.github/workflows/ci.yml` step `Network stack v2 gate`
+- M19 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M15-M20): `docs/M15_M20_MULTIPURPOSE_PLAN.md`
-- Last completed backlog (M18): `docs/M18_EXECUTION_BACKLOG.md`
-- Post-M18 focus: start network stack v2 execution backlog (M19).
+- Last completed backlog (M19): `docs/M19_EXECUTION_BACKLOG.md`
+- Post-M19 focus: start operability + release UX v2 execution backlog (M20).
 
 

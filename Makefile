@@ -50,7 +50,7 @@ endif
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
-       test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 \
+       test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 \
        test-firmware-attestation-v1 test-update-trust-v1 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
@@ -542,6 +542,11 @@ test-network-stack-v1: image-net
 	$(PYTHON) tools/run_net_interop_matrix_v1.py --out $(OUT)/net-interop-v1.json
 	$(PYTHON) tools/run_net_soak_v1.py --out $(OUT)/net-soak-v1.json
 	$(PYTHON) -m pytest tests/net -v
+
+test-network-stack-v2: image-net
+	$(PYTHON) tools/run_net_interop_matrix_v2.py --out $(OUT)/net-interop-v2.json
+	$(PYTHON) tools/run_net_soak_v2.py --out $(OUT)/net-soak-v2.json
+	$(PYTHON) -m pytest tests/net/test_tcp_interop_v2.py tests/net/test_ipv6_interop_v2.py tests/net/test_dns_stub_v2.py tests/net/test_network_gate_v2.py -v --junitxml=$(OUT)/pytest-network-stack-v2.xml
 
 test-storage-reliability-v1: image-fs image-fs-badmagic
 	$(PYTHON) tools/storage_recover_v1.py --check --out $(OUT)/storage-recovery-v1.json

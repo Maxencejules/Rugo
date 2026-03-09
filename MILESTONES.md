@@ -84,6 +84,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M16 | Process + Scheduler Model v2 | n/a | done | Rugo: `tests/sched/*_v2`, `tests/user/*_v2`, `make test-process-scheduler-v2`, CI `Process scheduler v2 gate`, docs in `docs/abi/*_v2`, `docs/M16_EXECUTION_BACKLOG.md`. |
 | M17 | Compatibility Profile v2 | n/a | done | Rugo: `tests/compat/*_v2` + tier gate tests, `make test-compat-v2`, CI `Compatibility profile v2 gate`, docs in `docs/abi/*_v2`, `docs/runtime/syscall_coverage_matrix_v2.md`, `docs/M17_EXECUTION_BACKLOG.md`. |
 | M18 | Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, `docs/M18_EXECUTION_BACKLOG.md`. |
+| M19 | Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, `docs/M19_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -966,6 +967,48 @@ Milestone status: done (2026-03-06).
 - Release gating:
   - `Makefile` target `test-storage-reliability-v2`
   - `.github/workflows/ci.yml` step `Storage reliability v2 gate`
+
+---
+
+## M19: Network Stack v2
+
+Milestone status: done (2026-03-08).
+
+### Definition of done
+
+- Network v2 contract docs freeze TCP/IPv6/DNS baseline behavior.
+- Interop and soak evidence is deterministic and machine-readable.
+- Network v2 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/net/test_tcp_interop_v2.py` | deterministic TCP peer interop profile checks |
+| `tests/net/test_ipv6_interop_v2.py` | deterministic IPv6 ND/ICMPv6 + dual-stack fallback checks |
+| `tests/net/test_dns_stub_v2.py` | DNS-stub TTL/NXDOMAIN semantics + v2 interop/soak schema checks |
+| `tests/net/test_network_gate_v2.py` | make/ci/docs gate wiring and closure |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/net/network_stack_contract_v2.md`
+  - `docs/net/socket_contract_v2.md`
+  - `docs/net/tcp_profile_v2.md`
+  - `docs/net/interop_matrix_v2.md`
+- Tooling:
+  - `tools/run_net_interop_matrix_v2.py`
+  - `tools/run_net_soak_v2.py`
+- Test gate:
+  - `tests/net/test_tcp_interop_v2.py`
+  - `tests/net/test_ipv6_interop_v2.py`
+  - `tests/net/test_dns_stub_v2.py`
+  - `tests/net/test_network_gate_v2.py`
+- Execution history:
+  - `docs/M19_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-network-stack-v2`
+  - `.github/workflows/ci.yml` step `Network stack v2 gate`
 
 ---
 
