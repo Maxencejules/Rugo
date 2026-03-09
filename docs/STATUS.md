@@ -30,6 +30,8 @@ make test-hw-matrix-v3
 make test-firmware-attestation-v1
 make test-perf-regression-v1
 make test-userspace-model-v2
+make test-pkg-ecosystem-v3
+make test-update-trust-v1
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -72,6 +74,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M23** Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs + deterministic diagnostics and firmware attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 | **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs + deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 | **M25** Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs + deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
+| **M26** Package/Repo Ecosystem v3 | n/a | done | Rugo: package/repo v3 contracts + deterministic policy/rebuild/update-trust artifacts, `make test-pkg-ecosystem-v3`, `make test-update-trust-v1`, CI `Package ecosystem v3 gate` + `Update trust v1 gate`, docs in `docs/pkg/*_v3`, `docs/pkg/update_trust_model_v1.md`, and `docs/M26_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -490,9 +493,35 @@ M25 execution update (2026-03-09):
   - `.github/workflows/ci.yml` step `Userspace model v2 gate`
 - M25 is done.
 
+M26 execution update (2026-03-09):
+- PR-1 complete (package/repo v3 + update trust contract freeze):
+  - `docs/pkg/package_format_v3.md`
+  - `docs/pkg/repository_policy_v3.md`
+  - `docs/pkg/update_trust_model_v1.md`
+  - `docs/security/update_key_rotation_policy_v1.md`
+  - `tests/pkg/test_pkg_contract_docs_v3.py`
+  - `tests/pkg/test_update_trust_docs_v1.py`
+- PR-2 complete (policy/rebuild enforcement tooling + trust hardening):
+  - `tools/repo_policy_check_v3.py`
+  - `tools/pkg_rebuild_verify_v3.py`
+  - `tools/check_update_trust_v1.py`
+  - `tools/run_update_key_rotation_drill_v1.py`
+  - `tests/pkg/test_pkg_rebuild_repro_v3.py`
+  - `tests/pkg/test_repo_policy_v3.py`
+  - `tests/pkg/test_update_metadata_expiry_v1.py`
+  - `tests/pkg/test_update_freeze_attack_v1.py`
+  - `tests/pkg/test_update_mix_and_match_v1.py`
+  - `tests/pkg/test_update_key_rotation_v1.py`
+- PR-3 complete (package ecosystem v3 gate + update trust sub-gate):
+  - `tests/pkg/test_pkg_ecosystem_gate_v3.py`
+  - `tests/pkg/test_update_trust_gate_v1.py`
+  - `Makefile` targets `test-pkg-ecosystem-v3`, `test-update-trust-v1`
+  - `.github/workflows/ci.yml` steps `Package ecosystem v3 gate`, `Update trust v1 gate`
+- M26 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M25): `docs/M25_EXECUTION_BACKLOG.md`
-- Post-M25 focus: start M26 package/repo ecosystem v3 execution backlog.
+- Last completed backlog (M26): `docs/M26_EXECUTION_BACKLOG.md`
+- Post-M26 focus: start M27 external app compatibility v3 execution backlog.
 
 

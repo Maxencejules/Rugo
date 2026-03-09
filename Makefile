@@ -52,7 +52,7 @@ endif
        build-sec-filter image-sec-filter \
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
-       test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-update-trust-v1 test-vuln-response-v1 \
+       test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-pkg-ecosystem-v3 test-update-trust-v1 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 repro-check clean legacy docker-all docker-legacy
 
@@ -600,10 +600,18 @@ test-perf-regression-v1:
 test-userspace-model-v2:
 	$(PYTHON) -m pytest tests/runtime/test_service_model_docs_v2.py tests/runtime/test_service_lifecycle_v2.py tests/runtime/test_service_dependency_order_v2.py tests/runtime/test_restart_policy_v2.py tests/runtime/test_userspace_model_gate_v2.py -v --junitxml=$(OUT)/pytest-userspace-model-v2.xml
 
+test-pkg-ecosystem-v3:
+	$(PYTHON) tools/repo_policy_check_v3.py --out $(OUT)/repo-policy-v3.json
+	$(PYTHON) tools/pkg_rebuild_verify_v3.py --seed 20260309 --out $(OUT)/pkg-rebuild-v3.json
+	$(PYTHON) -m pytest tests/pkg/test_pkg_contract_docs_v3.py tests/pkg/test_pkg_rebuild_repro_v3.py tests/pkg/test_repo_policy_v3.py tests/pkg/test_pkg_ecosystem_gate_v3.py -v --junitxml=$(OUT)/pytest-pkg-ecosystem-v3.xml
+	$(PYTHON) tools/check_update_trust_v1.py --out $(OUT)/update-trust-v1.json
+	$(PYTHON) tools/run_update_key_rotation_drill_v1.py --out $(OUT)/update-key-rotation-drill-v1.json
+	$(PYTHON) -m pytest tests/pkg/test_update_trust_docs_v1.py tests/pkg/test_update_metadata_expiry_v1.py tests/pkg/test_update_freeze_attack_v1.py tests/pkg/test_update_mix_and_match_v1.py tests/pkg/test_update_key_rotation_v1.py tests/pkg/test_update_trust_gate_v1.py -v --junitxml=$(OUT)/pytest-update-trust-v1.xml
+
 test-update-trust-v1:
 	$(PYTHON) tools/check_update_trust_v1.py --out $(OUT)/update-trust-v1.json
 	$(PYTHON) tools/run_update_key_rotation_drill_v1.py --out $(OUT)/update-key-rotation-drill-v1.json
-	$(PYTHON) -m pytest tests/pkg/test_update_trust_docs_v1.py tests/pkg/test_update_metadata_expiry_v1.py tests/pkg/test_update_freeze_attack_v1.py tests/pkg/test_update_mix_and_match_v1.py tests/pkg/test_update_key_rotation_v1.py tests/pkg/test_update_trust_gate_v1.py -v
+	$(PYTHON) -m pytest tests/pkg/test_update_trust_docs_v1.py tests/pkg/test_update_metadata_expiry_v1.py tests/pkg/test_update_freeze_attack_v1.py tests/pkg/test_update_mix_and_match_v1.py tests/pkg/test_update_key_rotation_v1.py tests/pkg/test_update_trust_gate_v1.py -v --junitxml=$(OUT)/pytest-update-trust-v1.xml
 
 test-vuln-response-v1:
 	$(PYTHON) tools/security_advisory_lint_v1.py --out $(OUT)/security-advisory-lint-v1.json

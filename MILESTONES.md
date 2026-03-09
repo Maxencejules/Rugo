@@ -91,6 +91,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M23 | Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs and deterministic diagnostics/attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 | M24 | Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs and deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 | M25 | Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs and deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
+| M26 | Package/Repo Ecosystem v3 | n/a | done | Rugo: package/repo v3 contracts and deterministic policy/rebuild/update-trust artifacts, `make test-pkg-ecosystem-v3`, `make test-update-trust-v1`, CI `Package ecosystem v3 gate` + `Update trust v1 gate`, docs in `docs/pkg/*_v3`, `docs/pkg/update_trust_model_v1.md`, and `docs/M26_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1274,6 +1275,62 @@ Milestone status: done (2026-03-09).
 - Release gating:
   - `Makefile` target `test-userspace-model-v2`
   - `.github/workflows/ci.yml` step `Userspace model v2 gate`
+
+---
+
+## M26: Package/Repo Ecosystem v3
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Package/repository v3 policy contracts are versioned and test-backed.
+- Rebuild and repository-policy artifacts are deterministic and machine-readable.
+- Update trust v1 is integrated as a required sub-gate in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/pkg/test_pkg_contract_docs_v3.py` | package/repository v3 contract docs include required policy and gate tokens |
+| `tests/pkg/test_pkg_rebuild_repro_v3.py` | seeded deterministic rebuild report generation and mismatch detection checks |
+| `tests/pkg/test_repo_policy_v3.py` | repository policy report schema and failure-path enforcement checks |
+| `tests/pkg/test_update_trust_docs_v1.py` | update trust and key-rotation policy v1 contract token checks |
+| `tests/pkg/test_update_metadata_expiry_v1.py` | metadata-expiry attack remains blocked by trust checker |
+| `tests/pkg/test_update_freeze_attack_v1.py` | freeze/replay attack remains blocked by trust checker |
+| `tests/pkg/test_update_mix_and_match_v1.py` | mix-and-match metadata attack remains blocked by trust checker |
+| `tests/pkg/test_update_key_rotation_v1.py` | deterministic key-rotation drill stages and success checks |
+| `tests/pkg/test_update_trust_gate_v1.py` | trust sub-gate make/ci wiring and artifact checks |
+| `tests/pkg/test_pkg_ecosystem_gate_v3.py` | package ecosystem gate wiring, sub-gate integration, and closure checks |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/pkg/package_format_v3.md`
+  - `docs/pkg/repository_policy_v3.md`
+  - `docs/pkg/update_trust_model_v1.md`
+  - `docs/security/update_key_rotation_policy_v1.md`
+- Tooling:
+  - `tools/repo_policy_check_v3.py`
+  - `tools/pkg_rebuild_verify_v3.py`
+  - `tools/check_update_trust_v1.py`
+  - `tools/run_update_key_rotation_drill_v1.py`
+- Test gate:
+  - `tests/pkg/test_pkg_contract_docs_v3.py`
+  - `tests/pkg/test_pkg_rebuild_repro_v3.py`
+  - `tests/pkg/test_repo_policy_v3.py`
+  - `tests/pkg/test_update_trust_docs_v1.py`
+  - `tests/pkg/test_update_metadata_expiry_v1.py`
+  - `tests/pkg/test_update_freeze_attack_v1.py`
+  - `tests/pkg/test_update_mix_and_match_v1.py`
+  - `tests/pkg/test_update_key_rotation_v1.py`
+  - `tests/pkg/test_update_trust_gate_v1.py`
+  - `tests/pkg/test_pkg_ecosystem_gate_v3.py`
+- Execution history:
+  - `docs/M26_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` targets `test-pkg-ecosystem-v3`, `test-update-trust-v1`
+  - `.github/workflows/ci.yml` steps `Package ecosystem v3 gate`, `Update trust v1 gate`
 
 ---
 
