@@ -92,6 +92,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M24 | Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs and deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 | M25 | Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs and deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
 | M26 | Package/Repo Ecosystem v3 | n/a | done | Rugo: package/repo v3 contracts and deterministic policy/rebuild/update-trust artifacts, `make test-pkg-ecosystem-v3`, `make test-update-trust-v1`, CI `Package ecosystem v3 gate` + `Update trust v1 gate`, docs in `docs/pkg/*_v3`, `docs/pkg/update_trust_model_v1.md`, and `docs/M26_EXECUTION_BACKLOG.md`. |
+| M27 | External App Compatibility Program v3 | n/a | done | Rugo: compatibility profile/tier contracts + deterministic class matrix artifacts, `make test-app-compat-v3`, CI `App compatibility v3 gate`, docs in `docs/abi/compat_profile_v3.md`, `docs/abi/app_compat_tiers_v1.md`, and `docs/M27_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -1331,6 +1332,47 @@ Milestone status: done (2026-03-09).
 - Release gating:
   - `Makefile` targets `test-pkg-ecosystem-v3`, `test-update-trust-v1`
   - `.github/workflows/ci.yml` steps `Package ecosystem v3 gate`, `Update trust v1 gate`
+
+---
+
+## M27: External App Compatibility Program v3
+
+Milestone status: done (2026-03-09).
+
+### Definition of done
+
+- Compatibility profile v3 and app-tier taxonomy are versioned and test-backed.
+- App-class compatibility reports are deterministic and machine-readable.
+- App compatibility v3 gate is release-blocking in local and CI lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/compat/test_app_tier_docs_v1.py` | profile v3 and tier v1 docs expose required contract identifiers and gate hooks |
+| `tests/compat/test_cli_suite_v3.py` | deterministic CLI suite thresholds and schema checks |
+| `tests/compat/test_runtime_suite_v3.py` | deterministic runtime suite thresholds and ABI mismatch rejection checks |
+| `tests/compat/test_service_suite_v3.py` | deterministic service suite thresholds and unsigned/regression rejection checks |
+| `tests/compat/test_app_compat_gate_v3.py` | make/ci/docs gate wiring, closure checks, and matrix report schema pass |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/abi/compat_profile_v3.md`
+  - `docs/abi/app_compat_tiers_v1.md`
+- Tooling:
+  - `tools/run_app_compat_matrix_v3.py`
+- Test gate:
+  - `tests/compat/test_app_tier_docs_v1.py`
+  - `tests/compat/test_cli_suite_v3.py`
+  - `tests/compat/test_runtime_suite_v3.py`
+  - `tests/compat/test_service_suite_v3.py`
+  - `tests/compat/test_app_compat_gate_v3.py`
+- Execution history:
+  - `docs/M27_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` target `test-app-compat-v3`
+  - `.github/workflows/ci.yml` step `App compatibility v3 gate`
 
 ---
 

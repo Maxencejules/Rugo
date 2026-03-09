@@ -78,13 +78,13 @@ Source of truth: [MILESTONES.md](MILESTONES.md)
 | Lane | Kernel milestones | Go milestones |
 |------|-------------------|---------------|
 | Legacy (`legacy/`) | M0-M7: done | G0: done |
-| Rugo (repo root) | M0-M26: done | G1: done, G2: done |
+| Rugo (repo root) | M0-M27: done | G1: done, G2: done |
 
 Tiny visual summary:
 
 ```text
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
-Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26] [G1] complete  [G2] complete
+Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27] [G1] complete  [G2] complete
 ```
 
 ## Post-G2 roadmap
@@ -109,6 +109,7 @@ Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M
 - M24 execution backlog (completed): `docs/M24_EXECUTION_BACKLOG.md`
 - M25 execution backlog (completed): `docs/M25_EXECUTION_BACKLOG.md`
 - M26 execution backlog (completed): `docs/M26_EXECUTION_BACKLOG.md`
+- M27 execution backlog (completed): `docs/M27_EXECUTION_BACKLOG.md`
 - Hardware support matrix v1: [docs/hw/support_matrix_v1.md](docs/hw/support_matrix_v1.md)
 - Security baseline docs: [docs/security/rights_capability_model_v1.md](docs/security/rights_capability_model_v1.md)
 - Compatibility profile v1 contract: [docs/abi/compat_profile_v1.md](docs/abi/compat_profile_v1.md)
@@ -160,6 +161,7 @@ make test-perf-regression-v1
 make test-userspace-model-v2
 make test-pkg-ecosystem-v3
 make test-update-trust-v1
+make test-app-compat-v3
 
 # Compatibility Profile v1 + external package bootstrap lane
 python3 tools/pkg_bootstrap_v1.py --disk-out out/fs-external.img

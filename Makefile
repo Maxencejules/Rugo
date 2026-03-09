@@ -52,7 +52,7 @@ endif
        build-sec-filter image-sec-filter \
        test-security-baseline test-runtime-maturity test-process-scheduler-v2 test-compat-v2 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
-       test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-pkg-ecosystem-v3 test-update-trust-v1 test-vuln-response-v1 \
+       test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-vuln-response-v1 \
        test-crash-dump-v1 test-supply-chain-revalidation-v1 test-fleet-rollout-safety-v1 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 repro-check clean legacy docker-all docker-legacy
 
@@ -612,6 +612,10 @@ test-update-trust-v1:
 	$(PYTHON) tools/check_update_trust_v1.py --out $(OUT)/update-trust-v1.json
 	$(PYTHON) tools/run_update_key_rotation_drill_v1.py --out $(OUT)/update-key-rotation-drill-v1.json
 	$(PYTHON) -m pytest tests/pkg/test_update_trust_docs_v1.py tests/pkg/test_update_metadata_expiry_v1.py tests/pkg/test_update_freeze_attack_v1.py tests/pkg/test_update_mix_and_match_v1.py tests/pkg/test_update_key_rotation_v1.py tests/pkg/test_update_trust_gate_v1.py -v --junitxml=$(OUT)/pytest-update-trust-v1.xml
+
+test-app-compat-v3:
+	$(PYTHON) tools/run_app_compat_matrix_v3.py --seed 20260309 --out $(OUT)/app-compat-matrix-v3.json
+	$(PYTHON) -m pytest tests/compat/test_app_tier_docs_v1.py tests/compat/test_cli_suite_v3.py tests/compat/test_runtime_suite_v3.py tests/compat/test_service_suite_v3.py tests/compat/test_app_compat_gate_v3.py -v --junitxml=$(OUT)/pytest-app-compat-v3.xml
 
 test-vuln-response-v1:
 	$(PYTHON) tools/security_advisory_lint_v1.py --out $(OUT)/security-advisory-lint-v1.json

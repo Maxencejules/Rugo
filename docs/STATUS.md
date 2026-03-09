@@ -32,6 +32,7 @@ make test-perf-regression-v1
 make test-userspace-model-v2
 make test-pkg-ecosystem-v3
 make test-update-trust-v1
+make test-app-compat-v3
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -75,6 +76,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs + deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 | **M25** Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs + deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
 | **M26** Package/Repo Ecosystem v3 | n/a | done | Rugo: package/repo v3 contracts + deterministic policy/rebuild/update-trust artifacts, `make test-pkg-ecosystem-v3`, `make test-update-trust-v1`, CI `Package ecosystem v3 gate` + `Update trust v1 gate`, docs in `docs/pkg/*_v3`, `docs/pkg/update_trust_model_v1.md`, and `docs/M26_EXECUTION_BACKLOG.md`. |
+| **M27** External App Compatibility Program v3 | n/a | done | Rugo: compatibility profile/tier contracts + deterministic class matrix artifacts, `make test-app-compat-v3`, CI `App compatibility v3 gate`, docs in `docs/abi/compat_profile_v3.md`, `docs/abi/app_compat_tiers_v1.md`, and `docs/M27_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -519,9 +521,25 @@ M26 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Package ecosystem v3 gate`, `Update trust v1 gate`
 - M26 is done.
 
+M27 execution update (2026-03-09):
+- PR-1 complete (compatibility profile v3 + tier taxonomy freeze):
+  - `docs/abi/compat_profile_v3.md`
+  - `docs/abi/app_compat_tiers_v1.md`
+  - `tests/compat/test_app_tier_docs_v1.py`
+- PR-2 complete (deterministic app-class suite expansion):
+  - `tools/run_app_compat_matrix_v3.py`
+  - `tests/compat/test_cli_suite_v3.py`
+  - `tests/compat/test_runtime_suite_v3.py`
+  - `tests/compat/test_service_suite_v3.py`
+- PR-3 complete (app compatibility v3 gate + closure wiring):
+  - `tests/compat/test_app_compat_gate_v3.py`
+  - `Makefile` target `test-app-compat-v3`
+  - `.github/workflows/ci.yml` step `App compatibility v3 gate`
+- M27 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Last completed backlog (M26): `docs/M26_EXECUTION_BACKLOG.md`
-- Post-M26 focus: start M27 external app compatibility v3 execution backlog.
+- Last completed backlog (M27): `docs/M27_EXECUTION_BACKLOG.md`
+- Post-M27 focus: start M28 security hardening v3 execution backlog.
 
 
