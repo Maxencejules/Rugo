@@ -48,6 +48,8 @@ make test-ecosystem-scale-v1
 make test-app-catalog-health-v1
 make test-evidence-integrity-v1
 make test-synthetic-evidence-ban-v1
+make test-process-readiness-parity-v1
+make test-posix-gap-closure-v2
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -105,6 +107,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M38** Storage + Platform Feature Expansion v1 | n/a | done | Rugo: storage/platform feature contracts + deterministic snapshot/resize/fs-ops and platform-conformance artifacts, `make test-storage-platform-v1`, `make test-storage-feature-contract-v1`, CI `Storage platform v1 gate` + `Storage feature contract v1 gate`, docs in `docs/storage/fs_feature_contract_v1.md`, `docs/runtime/platform_feature_profile_v1.md`, and `docs/M38_EXECUTION_BACKLOG.md`. |
 | **M39** Ecosystem Scale + Distribution Workflow v1 | n/a | done | Rugo: ecosystem-scale/distribution contracts + deterministic catalog-scale/install/audit artifacts, `make test-ecosystem-scale-v1`, `make test-app-catalog-health-v1`, CI `Ecosystem scale v1 gate` + `App catalog health v1 gate`, docs in `docs/pkg/ecosystem_scale_policy_v1.md`, `docs/pkg/distribution_workflow_v1.md`, and `docs/M39_EXECUTION_BACKLOG.md`. |
 | **M40** Runtime-Backed Evidence Integrity v1 | n/a | done | Rugo: evidence-integrity/provenance contracts + deterministic runtime-evidence/audit artifacts, `make test-evidence-integrity-v1`, `make test-synthetic-evidence-ban-v1`, CI `Evidence integrity v1 gate` + `Synthetic evidence ban v1 gate`, docs in `docs/runtime/evidence_integrity_policy_v1.md`, `docs/runtime/gate_provenance_policy_v1.md`, and `docs/M40_EXECUTION_BACKLOG.md`. |
+| **M41** Process + Readiness Compatibility Closure v1 | n/a | done | Rugo: compatibility/process/readiness contracts + deterministic compatibility/POSIX artifacts, `make test-process-readiness-parity-v1`, `make test-posix-gap-closure-v2`, CI `Process readiness parity v1 gate` + `POSIX gap closure v2 gate`, docs in `docs/abi/compat_profile_v5.md`, `docs/runtime/syscall_coverage_matrix_v4.md`, and `docs/M41_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -834,24 +837,47 @@ M40 execution update (2026-03-10):
   - `.github/workflows/ci.yml` steps `Evidence integrity v1 gate`, `Synthetic evidence ban v1 gate`
 - M40 is done.
 
+M41 execution update (2026-03-10):
+- PR-1 complete (process/readiness contract freeze):
+  - `docs/abi/compat_profile_v5.md`
+  - `docs/runtime/syscall_coverage_matrix_v4.md`
+  - `docs/abi/process_model_v4.md`
+  - `docs/abi/readiness_io_model_v1.md`
+  - `tests/compat/test_compat_docs_v5.py`
+- PR-2 complete (deterministic process/readiness campaign tooling + checks):
+  - `tools/run_compat_surface_campaign_v2.py`
+  - `tools/run_posix_gap_report_v2.py`
+  - `tests/compat/test_fork_clone_surface_v1.py`
+  - `tests/compat/test_epoll_surface_v1.py`
+  - `tests/compat/test_process_model_v4.py`
+  - `tests/compat/test_deferred_surface_behavior_v2.py`
+- PR-3 complete (process/readiness gate + POSIX sub-gate wiring):
+  - `tests/compat/test_process_readiness_gate_v1.py`
+  - `tests/compat/test_posix_gap_closure_gate_v2.py`
+  - `Makefile` targets `test-process-readiness-parity-v1`,
+    `test-posix-gap-closure-v2`
+  - `.github/workflows/ci.yml` steps `Process readiness parity v1 gate`,
+    `POSIX gap closure v2 gate`
+- M41 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
 - Next roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
 - Active roadmap (M40-M44): `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`
-- Completed backlogs (M35-M40):
+- Completed backlogs (M35-M41):
   - `docs/M35_EXECUTION_BACKLOG.md`
   - `docs/M36_EXECUTION_BACKLOG.md`
   - `docs/M37_EXECUTION_BACKLOG.md`
   - `docs/M38_EXECUTION_BACKLOG.md`
   - `docs/M39_EXECUTION_BACKLOG.md`
   - `docs/M40_EXECUTION_BACKLOG.md`
-- Next backlogs (M41-M44, proposed):
   - `docs/M41_EXECUTION_BACKLOG.md`
+- Next backlogs (M42-M44, proposed):
   - `docs/M42_EXECUTION_BACKLOG.md`
   - `docs/M43_EXECUTION_BACKLOG.md`
   - `docs/M44_EXECUTION_BACKLOG.md`
-- Last completed backlog (M40): `docs/M40_EXECUTION_BACKLOG.md`
+- Last completed backlog (M41): `docs/M41_EXECUTION_BACKLOG.md`
 - M35-M39 roadmap execution remains complete, and M40-M44 execution is active
-  with M40 runtime-backed evidence-integrity closure.
+  with M40 evidence-integrity and M41 process/readiness closure.
 
 

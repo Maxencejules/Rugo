@@ -78,13 +78,13 @@ Source of truth: [MILESTONES.md](MILESTONES.md)
 | Lane | Kernel milestones | Go milestones |
 |------|-------------------|---------------|
 | Legacy (`legacy/`) | M0-M7: done | G0: done |
-| Rugo (repo root) | M0-M40: done | G1: done, G2: done |
+| Rugo (repo root) | M0-M41: done | G1: done, G2: done |
 
 Tiny visual summary:
 
 ```text
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
-Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35 M36 M37 M38 M39 M40] [G1] complete  [G2] complete
+Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35 M36 M37 M38 M39 M40 M41] [G1] complete  [G2] complete
 ```
 
 ## Post-G2 roadmap
@@ -125,7 +125,7 @@ Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M
 - M38 execution backlog (completed): `docs/M38_EXECUTION_BACKLOG.md`
 - M39 execution backlog (completed): `docs/M39_EXECUTION_BACKLOG.md`
 - M40 execution backlog (completed): `docs/M40_EXECUTION_BACKLOG.md`
-- M41 execution backlog (proposed): `docs/M41_EXECUTION_BACKLOG.md`
+- M41 execution backlog (completed): `docs/M41_EXECUTION_BACKLOG.md`
 - M42 execution backlog (proposed): `docs/M42_EXECUTION_BACKLOG.md`
 - M43 execution backlog (proposed): `docs/M43_EXECUTION_BACKLOG.md`
 - M44 execution backlog (proposed): `docs/M44_EXECUTION_BACKLOG.md`
@@ -204,6 +204,8 @@ make test-ecosystem-scale-v1
 make test-app-catalog-health-v1
 make test-evidence-integrity-v1
 make test-synthetic-evidence-ban-v1
+make test-process-readiness-parity-v1
+make test-posix-gap-closure-v2
 
 # Compatibility Profile v1 + external package bootstrap lane
 python3 tools/pkg_bootstrap_v1.py --disk-out out/fs-external.img

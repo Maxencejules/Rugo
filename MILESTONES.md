@@ -106,6 +106,7 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 | M38 | Storage + Platform Feature Expansion v1 | n/a | done | Rugo: storage/platform feature contracts + deterministic snapshot/resize/fs-ops and platform-conformance artifacts, `make test-storage-platform-v1`, `make test-storage-feature-contract-v1`, CI `Storage platform v1 gate` + `Storage feature contract v1 gate`, docs in `docs/storage/fs_feature_contract_v1.md`, `docs/runtime/platform_feature_profile_v1.md`, and `docs/M38_EXECUTION_BACKLOG.md`. |
 | M39 | Ecosystem Scale + Distribution Workflow v1 | n/a | done | Rugo: ecosystem-scale/distribution contracts + deterministic catalog-scale/install/audit artifacts, `make test-ecosystem-scale-v1`, `make test-app-catalog-health-v1`, CI `Ecosystem scale v1 gate` + `App catalog health v1 gate`, docs in `docs/pkg/ecosystem_scale_policy_v1.md`, `docs/pkg/distribution_workflow_v1.md`, and `docs/M39_EXECUTION_BACKLOG.md`. |
 | M40 | Runtime-Backed Evidence Integrity v1 | n/a | done | Rugo: evidence-integrity/provenance contracts + deterministic runtime-evidence/audit artifacts, `make test-evidence-integrity-v1`, `make test-synthetic-evidence-ban-v1`, CI `Evidence integrity v1 gate` + `Synthetic evidence ban v1 gate`, docs in `docs/runtime/evidence_integrity_policy_v1.md`, `docs/runtime/gate_provenance_policy_v1.md`, and `docs/M40_EXECUTION_BACKLOG.md`. |
+| M41 | Process + Readiness Compatibility Closure v1 | n/a | done | Rugo: compatibility/process/readiness contracts + deterministic compatibility/POSIX artifacts, `make test-process-readiness-parity-v1`, `make test-posix-gap-closure-v2`, CI `Process readiness parity v1 gate` + `POSIX gap closure v2 gate`, docs in `docs/abi/compat_profile_v5.md`, `docs/runtime/syscall_coverage_matrix_v4.md`, and `docs/M41_EXECUTION_BACKLOG.md`. |
 Legend: ✅ = done with passing tests, ◐ = in progress (prep), — = not started, n/a = not applicable to this lane.
 
 ---
@@ -2049,6 +2050,59 @@ Milestone status: done (2026-03-10).
     `test-synthetic-evidence-ban-v1`
   - `.github/workflows/ci.yml` steps `Evidence integrity v1 gate`,
     `Synthetic evidence ban v1 gate`
+
+---
+
+## M41: Process + Readiness Compatibility Closure v1
+
+Milestone status: done (2026-03-10).
+
+### Definition of done
+
+- Compatibility profile v5 plus process/readiness contracts are explicit,
+  versioned, and test-backed.
+- Process/readiness compatibility campaign and POSIX gap artifacts are
+  deterministic and machine-readable.
+- Process/readiness parity gate and POSIX closure sub-gate are required in
+  local and CI release lanes.
+
+### Acceptance tests
+
+| Test | Markers/Outcome |
+|------|------------------|
+| `tests/compat/test_compat_docs_v5.py` | compatibility/process/readiness docs include required IDs, schemas, thresholds, and gate anchors |
+| `tests/compat/test_fork_clone_surface_v1.py` | deterministic fork/clone deferred-surface behavior and violation rejection |
+| `tests/compat/test_epoll_surface_v1.py` | deterministic readiness/epoll deferred behavior and readiness regression rejection |
+| `tests/compat/test_process_model_v4.py` | deterministic process model v4 campaign semantics and regression rejection |
+| `tests/compat/test_deferred_surface_behavior_v2.py` | deterministic deferred-surface unsupported behavior and violation rejection |
+| `tests/compat/test_posix_gap_closure_gate_v2.py` | POSIX sub-gate make/ci/docs wiring and artifact checks |
+| `tests/compat/test_process_readiness_gate_v1.py` | process/readiness gate wiring, sub-gate integration, closure checks, and deterministic artifacts |
+
+### Rugo evidence
+
+- Contract docs:
+  - `docs/abi/compat_profile_v5.md`
+  - `docs/runtime/syscall_coverage_matrix_v4.md`
+  - `docs/abi/process_model_v4.md`
+  - `docs/abi/readiness_io_model_v1.md`
+- Tooling:
+  - `tools/run_compat_surface_campaign_v2.py`
+  - `tools/run_posix_gap_report_v2.py`
+- Test gate:
+  - `tests/compat/test_compat_docs_v5.py`
+  - `tests/compat/test_fork_clone_surface_v1.py`
+  - `tests/compat/test_epoll_surface_v1.py`
+  - `tests/compat/test_process_model_v4.py`
+  - `tests/compat/test_deferred_surface_behavior_v2.py`
+  - `tests/compat/test_posix_gap_closure_gate_v2.py`
+  - `tests/compat/test_process_readiness_gate_v1.py`
+- Execution history:
+  - `docs/M41_EXECUTION_BACKLOG.md`
+- Release gating:
+  - `Makefile` targets `test-process-readiness-parity-v1`,
+    `test-posix-gap-closure-v2`
+  - `.github/workflows/ci.yml` steps `Process readiness parity v1 gate`,
+    `POSIX gap closure v2 gate`
 
 ---
 

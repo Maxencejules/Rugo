@@ -687,3 +687,29 @@ jobs:
             out/pytest-synthetic-evidence-ban-v1.xml
             out/runtime-evidence-v1.json
             out/gate-evidence-audit-v1.json
+
+      - name: Process readiness parity v1 gate
+        run: |
+          make test-process-readiness-parity-v1
+
+      - name: Upload process readiness parity v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-readiness-parity-v1-artifacts
+          path: |
+            out/pytest-process-readiness-parity-v1.xml
+            out/compat-surface-v2.json
+
+      - name: POSIX gap closure v2 gate
+        run: |
+          make test-posix-gap-closure-v2
+
+      - name: Upload POSIX gap closure v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: posix-gap-closure-v2-artifacts
+          path: |
+            out/pytest-posix-gap-closure-v2.xml
+            out/posix-gap-report-v2.json

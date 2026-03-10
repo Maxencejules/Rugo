@@ -55,7 +55,7 @@ endif
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
-       test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 \
+       test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -736,6 +736,15 @@ test-synthetic-evidence-ban-v1:
 	$(PYTHON) tools/collect_runtime_evidence_v1.py --out $(OUT)/runtime-evidence-v1.json
 	$(PYTHON) tools/audit_gate_evidence_v1.py --evidence $(OUT)/runtime-evidence-v1.json --out $(OUT)/gate-evidence-audit-v1.json
 	$(PYTHON) -m pytest tests/runtime/test_evidence_integrity_docs_v1.py tests/runtime/test_gate_evidence_audit_v1.py tests/runtime/test_synthetic_evidence_ban_v1.py -v --junitxml=$(OUT)/pytest-synthetic-evidence-ban-v1.xml
+
+test-process-readiness-parity-v1:
+	$(PYTHON) tools/run_compat_surface_campaign_v2.py --out $(OUT)/compat-surface-v2.json
+	$(MAKE) test-posix-gap-closure-v2
+	$(PYTHON) -m pytest tests/compat/test_compat_docs_v5.py tests/compat/test_fork_clone_surface_v1.py tests/compat/test_epoll_surface_v1.py tests/compat/test_process_model_v4.py tests/compat/test_deferred_surface_behavior_v2.py tests/compat/test_process_readiness_gate_v1.py -v --junitxml=$(OUT)/pytest-process-readiness-parity-v1.xml
+
+test-posix-gap-closure-v2:
+	$(PYTHON) tools/run_posix_gap_report_v2.py --out $(OUT)/posix-gap-report-v2.json
+	$(PYTHON) -m pytest tests/compat/test_compat_docs_v5.py tests/compat/test_fork_clone_surface_v1.py tests/compat/test_epoll_surface_v1.py tests/compat/test_deferred_surface_behavior_v2.py tests/compat/test_posix_gap_closure_gate_v2.py -v --junitxml=$(OUT)/pytest-posix-gap-closure-v2.xml
 
 repro-check:
 	@set -e; \
