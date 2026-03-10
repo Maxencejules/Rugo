@@ -56,7 +56,7 @@ endif
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
-       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
+       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -779,6 +779,18 @@ test-virtio-platform-v1:
 	$(PYTHON) tools/run_hw_matrix_v6.py --out $(OUT)/hw-matrix-v6.json
 	$(PYTHON) tools/run_desktop_smoke_v1.py --out $(OUT)/desktop-smoke-v1.json
 	$(PYTHON) -m pytest tests/hw/test_hw_matrix_docs_v6.py tests/hw/test_virtio_platform_profile_v1.py tests/desktop/test_display_device_bridge_v1.py tests/hw/test_virtio_platform_gate_v1.py -v --junitxml=$(OUT)/pytest-virtio-platform-v1.xml
+
+test-baremetal-io-baseline-v1:
+	$(PYTHON) tools/run_baremetal_io_baseline_v1.py --out $(OUT)/baremetal-io-v1.json
+	$(SUBMAKE) test-usb-input-removable-v1
+	$(PYTHON) tools/collect_hw_promotion_evidence_v2.py --out $(OUT)/hw-promotion-v2.json
+	$(PYTHON) -m pytest tests/hw/test_baremetal_io_profile_v1.py tests/hw/test_usb_input_removable_docs_v1.py tests/hw/test_e1000e_baseline_v1.py tests/hw/test_rtl8169_baseline_v1.py tests/hw/test_xhci_usb_hid_v1.py tests/hw/test_usb_storage_v1.py tests/hw/test_baremetal_io_recovery_v1.py tests/desktop/test_usb_input_focus_delivery_v1.py tests/hw/test_baremetal_io_gate_v1.py -v --junitxml=$(OUT)/pytest-baremetal-io-v1.xml
+
+test-usb-input-removable-v1:
+	$(PYTHON) tools/run_baremetal_io_baseline_v1.py --out $(OUT)/baremetal-io-v1.json
+	$(PYTHON) tools/run_desktop_smoke_v1.py --input-class usb-hid --input-driver xhci-usb-hid --display-class framebuffer-console --display-driver efifb --boot-transport-class ahci --out $(OUT)/desktop-smoke-v1.json
+	$(PYTHON) tools/run_recovery_drill_v3.py --seed 20260309 --out $(OUT)/recovery-drill-v3.json
+	$(PYTHON) -m pytest tests/hw/test_usb_input_removable_docs_v1.py tests/hw/test_xhci_usb_hid_v1.py tests/hw/test_usb_storage_v1.py tests/hw/test_baremetal_io_recovery_v1.py tests/desktop/test_usb_input_focus_delivery_v1.py tests/hw/test_usb_input_removable_gate_v1.py -v --junitxml=$(OUT)/pytest-usb-input-removable-v1.xml
 
 test-real-ecosystem-desktop-v2:
 	$(PYTHON) tools/run_real_gui_app_matrix_v2.py --out $(OUT)/real-gui-matrix-v2.json

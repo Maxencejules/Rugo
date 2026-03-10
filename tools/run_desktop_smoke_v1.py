@@ -203,6 +203,13 @@ def _domain_summary(checks: List[Dict[str, object]], domain: str) -> Dict[str, o
     }
 
 
+def _check_by_id(checks: List[Dict[str, object]], check_id: str) -> Dict[str, object]:
+    matches = [entry for entry in checks if entry["check_id"] == check_id]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one check entry for {check_id}")
+    return matches[0]
+
+
 def _normalize_failures(values: Sequence[str]) -> Set[str]:
     failures = {value.strip() for value in values if value.strip()}
     unknown = sorted(failures - _known_checks())
@@ -221,6 +228,8 @@ def run_smoke(
     display_class: str = "virtio-gpu-pci",
     display_driver: str = "virtio_gpu_framebuffer",
     boot_transport_class: str = "virtio-blk-pci-modern",
+    input_class: str = "integrated-input",
+    input_driver: str = "desktop_input_core",
 ) -> Dict[str, object]:
     failures = set() if injected_failures is None else set(injected_failures)
 
@@ -249,7 +258,10 @@ def run_smoke(
     total_failures = sum(1 for check in checks if check["pass"] is False)
     display_summary = _domain_summary(checks, "display")
     session_summary = _domain_summary(checks, "session")
+    input_summary = _domain_summary(checks, "input")
+    window_summary = _domain_summary(checks, "window")
     bridge_pass = display_summary["pass"] and session_summary["pass"]
+    focus_delivery_pass = bool(_check_by_id(checks, "input_focus_delivery")["pass"])
     stable_payload = {
         "schema": SCHEMA,
         "policy_id": POLICY_ID,
@@ -257,6 +269,8 @@ def run_smoke(
         "display_class": display_class,
         "display_driver": display_driver,
         "boot_transport_class": boot_transport_class,
+        "input_class": input_class,
+        "input_driver": input_driver,
         "checks": [
             {
                 "check_id": check["check_id"],
@@ -285,8 +299,8 @@ def run_smoke(
         "summary": {
             "display": display_summary,
             "session": session_summary,
-            "input": _domain_summary(checks, "input"),
-            "window": _domain_summary(checks, "window"),
+            "input": input_summary,
+            "window": window_summary,
         },
         "display": {
             "device_class": display_class,
@@ -323,18 +337,40 @@ def run_smoke(
             "checks_pass": session_summary["pass"],
         },
         "input": {
+            "device_class": input_class,
+            "driver": input_driver,
             "keyboard_latency_p95_ms": metric_values["keyboard_latency_p95_ms"],
             "pointer_latency_p95_ms": metric_values["pointer_latency_p95_ms"],
             "input_delivery_ratio": metric_values["input_delivery_ratio"],
             "dropped_events": int(metric_values["dropped_events"]),
-            "checks_pass": _domain_summary(checks, "input")["pass"],
+            "checks_pass": input_summary["pass"],
+        },
+        "input_class": input_class,
+        "input_device": {
+            "device_class": input_class,
+            "driver": input_driver,
+            "desktop_qualified": input_summary["pass"],
+        },
+        "desktop_input_checks": {
+            "contract_id": INPUT_CONTRACT_ID,
+            "input_class": input_class,
+            "input_driver": input_driver,
+            "qualifying_checks": [
+                "input_keyboard_latency",
+                "input_pointer_latency",
+                "input_focus_delivery",
+                "input_repeat_consistency",
+            ],
+            "input_checks_pass": input_summary["pass"],
+            "focus_delivery_pass": focus_delivery_pass,
+            "delivery_ratio": metric_values["input_delivery_ratio"],
         },
         "window_lifecycle": {
             "window_create_ms": metric_values["window_create_ms"],
             "window_map_ms": metric_values["window_map_ms"],
             "focus_switch_ms": metric_values["focus_switch_ms"],
             "window_close_ms": metric_values["window_close_ms"],
-            "checks_pass": _domain_summary(checks, "window")["pass"],
+            "checks_pass": window_summary["pass"],
         },
         "injected_failures": sorted(failures),
         "total_failures": total_failures,
@@ -355,6 +391,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--display-class", default="virtio-gpu-pci")
     parser.add_argument("--display-driver", default="virtio_gpu_framebuffer")
     parser.add_argument("--boot-transport-class", default="virtio-blk-pci-modern")
+    parser.add_argument("--input-class", default="integrated-input")
+    parser.add_argument("--input-driver", default="desktop_input_core")
     parser.add_argument("--out", default="out/desktop-smoke-v1.json")
     return parser
 
@@ -377,6 +415,8 @@ def main(argv: List[str] | None = None) -> int:
         display_class=args.display_class,
         display_driver=args.display_driver,
         boot_transport_class=args.boot_transport_class,
+        input_class=args.input_class,
+        input_driver=args.input_driver,
     )
     report["max_failures"] = args.max_failures
     report["gate_pass"] = report["total_failures"] <= args.max_failures

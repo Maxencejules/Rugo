@@ -2,7 +2,7 @@
 
 Date: 2026-03-10  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: proposed
+Status: done
 
 ## Goal
 
@@ -17,18 +17,18 @@ M46 source of truth remains:
 
 ## Current State Summary
 
-- Native hardware confidence exists for a limited set of storage/NIC classes,
-  but common wired desktop NICs are still outside the main support path.
-- Desktop baseline contracts exist, but they are not yet tied to explicit USB
-  input device classes.
-- Recovery and installer workflows are stronger on policy than on removable
-  media hardware coverage.
+- Bare-metal I/O scope is now explicit through a dedicated profile and USB
+  input/removable-media child contract.
+- Deterministic evidence now exists for `e1000e`, `rtl8169`, `xhci` +
+  `usb-hid`, and `usb-storage`.
+- USB input evidence is now bound to desktop input checks, and removable-media
+  evidence is now bound to recovery workflow checks.
 
-## Execution Plan
+## Execution Result
 
-- PR-1: contract freeze
-- PR-2: tooling + deterministic campaigns
-- PR-3: gate wiring + Tier 2 qualification baseline
+- PR-1: complete (2026-03-10)
+- PR-2: complete (2026-03-10)
+- PR-3: complete (2026-03-10)
 
 ## PR-1: Bare-Metal I/O Contract Freeze
 
@@ -66,6 +66,18 @@ Define the bare-metal I/O floor for wired NICs, USB input, and removable media.
 - Bare-metal I/O scope is explicit and versioned.
 - Wired-NIC, USB input, and removable-media claims are bounded to specific
   device classes and thresholds.
+
+### PR-1 completion summary
+
+- Added contract docs:
+  - `docs/hw/baremetal_io_profile_v1.md`
+  - `docs/hw/usb_input_removable_contract_v1.md`
+- Extended shared contracts:
+  - `docs/hw/driver_lifecycle_contract_v6.md`
+  - `docs/desktop/input_stack_contract_v1.md`
+- Added executable doc checks:
+  - `tests/hw/test_baremetal_io_profile_v1.py`
+  - `tests/hw/test_usb_input_removable_docs_v1.py`
 
 ## PR-2: Bare-Metal I/O Campaigns
 
@@ -110,6 +122,21 @@ classes and connect them to desktop/recovery evidence.
 - Input classes satisfy declared desktop latency and reliability thresholds.
 - Removable-media paths are validated against installer/recovery workflows.
 
+### PR-2 completion summary
+
+- Added deterministic bare-metal I/O tooling:
+  - `tools/run_baremetal_io_baseline_v1.py`
+  - `tools/collect_hw_promotion_evidence_v2.py`
+- Extended desktop smoke evidence with named input-device bridge fields:
+  - `tools/run_desktop_smoke_v1.py`
+- Added executable class checks:
+  - `tests/hw/test_e1000e_baseline_v1.py`
+  - `tests/hw/test_rtl8169_baseline_v1.py`
+  - `tests/hw/test_xhci_usb_hid_v1.py`
+  - `tests/hw/test_usb_storage_v1.py`
+  - `tests/hw/test_baremetal_io_recovery_v1.py`
+  - `tests/desktop/test_usb_input_focus_delivery_v1.py`
+
 ## PR-3: Bare-Metal I/O Gate + USB/Removable Sub-gate
 
 ### Objective
@@ -150,10 +177,25 @@ its Tier 2 promotion floor.
   exception handling.
 - Unsupported or unstable classes remain explicit and non-claiming.
 
+### PR-3 completion summary
+
+- Added aggregate gate checks:
+  - `tests/hw/test_baremetal_io_gate_v1.py`
+  - `tests/hw/test_usb_input_removable_gate_v1.py`
+- Added local gates:
+  - `make test-baremetal-io-baseline-v1`
+  - `make test-usb-input-removable-v1`
+- Added CI qualification gates and artifacts:
+  - `Bare-metal io baseline v1 gate`
+  - `USB input removable v1 gate`
+- Updated closure docs:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
+
 ## Non-goals for M46 backlog
 
 - Wi-Fi, Bluetooth, or audio breadth
 - discrete GPU acceleration
 - broad laptop-specific peripheral support
 - converting all Tier 2 profiles to release claims in this milestone
-

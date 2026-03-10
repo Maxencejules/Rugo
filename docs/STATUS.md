@@ -54,6 +54,8 @@ make test-isolation-baseline-v1
 make test-namespace-cgroup-v1
 make test-hw-matrix-v6
 make test-virtio-platform-v1
+make test-baremetal-io-baseline-v1
+make test-usb-input-removable-v1
 make test-real-ecosystem-desktop-v2
 make test-real-app-catalog-v2
 
@@ -118,6 +120,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M43** Hardware/Firmware Breadth + SMP v1 | n/a | done | Rugo: matrix-v5/driver-lifecycle-v5/firmware-hardening-v3 + SMP interrupt model contracts with deterministic hardware/firmware/SMP artifacts, `make test-hw-firmware-smp-v1`, `make test-native-driver-matrix-v1`, CI `Hardware firmware smp v1 gate` + `Native driver matrix v1 gate`, docs in `docs/hw/support_matrix_v5.md`, `docs/hw/driver_lifecycle_contract_v5.md`, `docs/hw/acpi_uefi_hardening_v3.md`, `docs/runtime/smp_interrupt_model_v1.md`, and `docs/M43_EXECUTION_BACKLOG.md`. |
 | **M44** Real Desktop + Ecosystem Qualification v2 | n/a | done | Rugo: desktop/app-tier/ecosystem v2 contracts + deterministic runtime qualification artifacts, `make test-real-ecosystem-desktop-v2`, `make test-real-app-catalog-v2`, CI `Real ecosystem desktop v2 gate` + `Real app catalog v2 gate`, docs in `docs/desktop/desktop_profile_v2.md`, `docs/abi/app_compat_tiers_v2.md`, `docs/pkg/ecosystem_scale_policy_v2.md`, `docs/pkg/distribution_workflow_v2.md`, and `docs/M44_EXECUTION_BACKLOG.md`. |
 | **M45** Modern Virtual Platform Parity v1 | n/a | done | Rugo: matrix-v6/driver-lifecycle-v6/virtio-platform-profile-v1 contracts plus deterministic modern VirtIO shadow artifacts, `make test-hw-matrix-v6`, `make test-virtio-platform-v1`, CI `Hardware matrix v6 shadow gate` + `Virtio platform v1 shadow gate`, docs in `docs/hw/support_matrix_v6.md`, `docs/hw/driver_lifecycle_contract_v6.md`, `docs/hw/virtio_platform_profile_v1.md`, `docs/desktop/display_stack_contract_v1.md`, and `docs/M45_EXECUTION_BACKLOG.md`. |
+| **M46** Bare-Metal I/O Baseline v1 | n/a | done | Rugo: baremetal-io-profile-v1 and usb-input-removable-contract-v1 contracts plus deterministic wired-NIC, USB input, and removable-media qualification artifacts, `make test-baremetal-io-baseline-v1`, `make test-usb-input-removable-v1`, CI `Bare-metal io baseline v1 gate` + `USB input removable v1 gate`, docs in `docs/hw/baremetal_io_profile_v1.md`, `docs/hw/usb_input_removable_contract_v1.md`, `docs/desktop/input_stack_contract_v1.md`, and `docs/M46_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -966,12 +969,39 @@ M45 execution update (2026-03-10):
     `Virtio platform v1 shadow gate`
 - M45 is done.
 
+M46 execution update (2026-03-10):
+- PR-1 complete (bare-metal I/O contract freeze):
+  - `docs/hw/baremetal_io_profile_v1.md`
+  - `docs/hw/usb_input_removable_contract_v1.md`
+  - `docs/hw/driver_lifecycle_contract_v6.md`
+  - `docs/desktop/input_stack_contract_v1.md`
+  - `tests/hw/test_baremetal_io_profile_v1.py`
+  - `tests/hw/test_usb_input_removable_docs_v1.py`
+- PR-2 complete (deterministic wired-NIC, USB input, and removable-media tooling):
+  - `tools/run_baremetal_io_baseline_v1.py`
+  - `tools/collect_hw_promotion_evidence_v2.py`
+  - `tools/run_desktop_smoke_v1.py`
+  - `tests/hw/test_e1000e_baseline_v1.py`
+  - `tests/hw/test_rtl8169_baseline_v1.py`
+  - `tests/hw/test_xhci_usb_hid_v1.py`
+  - `tests/hw/test_usb_storage_v1.py`
+  - `tests/hw/test_baremetal_io_recovery_v1.py`
+  - `tests/desktop/test_usb_input_focus_delivery_v1.py`
+- PR-3 complete (bare-metal I/O gate + USB/removable sub-gate wiring):
+  - `tests/hw/test_baremetal_io_gate_v1.py`
+  - `tests/hw/test_usb_input_removable_gate_v1.py`
+  - `Makefile` targets `test-baremetal-io-baseline-v1`,
+    `test-usb-input-removable-v1`
+  - `.github/workflows/ci.yml` steps `Bare-metal io baseline v1 gate`,
+    `USB input removable v1 gate`
+- M46 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
 - Completed roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
 - Completed roadmap (M40-M44): `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`
 - Planned roadmap (M45-M47): `docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md`
-- Completed backlogs (M35-M45):
+- Completed backlogs (M35-M46):
   - `docs/M35_EXECUTION_BACKLOG.md`
   - `docs/M36_EXECUTION_BACKLOG.md`
   - `docs/M37_EXECUTION_BACKLOG.md`
@@ -983,18 +1013,18 @@ Post-G2 planning and execution:
   - `docs/M43_EXECUTION_BACKLOG.md`
   - `docs/M44_EXECUTION_BACKLOG.md`
 - `docs/M45_EXECUTION_BACKLOG.md`
-- Planned backlogs (M46-M47):
-  - `docs/M46_EXECUTION_BACKLOG.md`
+- `docs/M46_EXECUTION_BACKLOG.md`
+- Planned backlogs (M47):
   - `docs/M47_EXECUTION_BACKLOG.md`
-- Last completed backlog (M45): `docs/M45_EXECUTION_BACKLOG.md`
-- M35-M39 roadmap execution remains complete, and M40-M45 execution is now
+- Last completed backlog (M46): `docs/M46_EXECUTION_BACKLOG.md`
+- M35-M39 roadmap execution remains complete, and M40-M46 execution is now
   complete with M40 evidence-integrity closure, M41 process/readiness closure,
   M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
   M44 real desktop/ecosystem runtime qualification closure, and M45 modern
-  virtual-platform parity shadow closure.
+  virtual-platform parity shadow closure, and M46 bare-metal I/O closure.
 - Active hardware expansion phase is M45-M47:
   - M45 modern virtual-platform parity (done),
-  - M46 bare-metal I/O baseline,
+  - M46 bare-metal I/O baseline (done),
   - M47 hardware claim promotion program.
 
 

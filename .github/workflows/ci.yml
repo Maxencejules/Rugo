@@ -795,6 +795,37 @@ jobs:
             out/hw-matrix-v6.json
             out/desktop-smoke-v1.json
 
+      - name: Bare-metal io baseline v1 gate
+        run: |
+          make test-baremetal-io-baseline-v1
+
+      - name: Upload bare-metal io baseline v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baremetal-io-v1-artifacts
+          path: |
+            out/pytest-baremetal-io-v1.xml
+            out/baremetal-io-v1.json
+            out/hw-promotion-v2.json
+            out/desktop-smoke-v1.json
+            out/recovery-drill-v3.json
+
+      - name: USB input removable v1 gate
+        run: |
+          make test-usb-input-removable-v1
+
+      - name: Upload USB input removable v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: usb-input-removable-v1-artifacts
+          path: |
+            out/pytest-usb-input-removable-v1.xml
+            out/baremetal-io-v1.json
+            out/desktop-smoke-v1.json
+            out/recovery-drill-v3.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2
