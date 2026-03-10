@@ -1,8 +1,8 @@
 # M44 Execution Backlog (Real Desktop + Ecosystem Qualification v2)
 
-Date: 2026-03-09  
+Date: 2026-03-10  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: proposed
+Status: done
 
 ## Goal
 
@@ -14,18 +14,23 @@ M44 source of truth remains `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`,
 
 ## Current State Summary
 
-- Desktop v1 and ecosystem v1 gates are stable but still bounded and
+- Desktop v1 and ecosystem v1 gates were stable, but still bounded and
   model-heavy in several campaign paths.
-- Ecosystem quality and distribution workflow policies are strong, but runtime
-  qualification breadth needs explicit v2 closure for stronger claims.
-- M44 introduces real workload qualification and stricter release-bound
-  provenance for desktop and app catalog signals.
+- Runtime-backed qualification tooling, docs, and deterministic tests are now
+  implemented for desktop/app/package v2 claims.
+- M44 closure is now wired as release-blocking in local and CI lanes.
 
 ## Execution plan
 
 - PR-1: contract freeze
 - PR-2: runtime qualification tooling + campaigns
 - PR-3: release gate wiring + closure
+
+## Execution Result
+
+- PR-1: complete (2026-03-10)
+- PR-2: complete (2026-03-10)
+- PR-3: complete (2026-03-10)
 
 ## PR-1: Desktop/Ecosystem v2 Contract Freeze
 
@@ -62,6 +67,17 @@ executable contracts.
 
 - Desktop/ecosystem v2 boundaries are explicit, versioned, and test-backed.
 - Workload qualification thresholds are machine-verifiable.
+
+### PR-1 completion summary
+
+- Added contract docs:
+  - `docs/desktop/desktop_profile_v2.md`
+  - `docs/abi/app_compat_tiers_v2.md`
+  - `docs/pkg/ecosystem_scale_policy_v2.md`
+  - `docs/pkg/distribution_workflow_v2.md`
+- Added executable contract checks:
+  - `tests/desktop/test_desktop_docs_v2.py`
+  - `tests/pkg/test_ecosystem_scale_docs_v2.py`
 
 ## PR-2: Real Qualification Campaign Tooling + Tests
 
@@ -104,6 +120,18 @@ catalog/package workflows.
 - Runtime qualification artifacts are deterministic and machine-readable.
 - Desktop/app/package quality thresholds are executable and auditable.
 
+### PR-2 completion summary
+
+- Added deterministic runtime qualification tooling:
+  - `tools/run_real_gui_app_matrix_v2.py`
+  - `tools/run_real_pkg_install_campaign_v2.py`
+  - `tools/run_real_catalog_audit_v2.py`
+- Added executable runtime qualification checks:
+  - `tests/desktop/test_gui_runtime_qualification_v2.py`
+  - `tests/pkg/test_pkg_install_success_rate_v2.py`
+  - `tests/pkg/test_catalog_reproducibility_v2.py`
+  - `tests/pkg/test_distribution_workflow_v2.py`
+
 ## PR-3: Real Qualification Gate + App-Catalog Sub-gate
 
 ### Objective
@@ -142,6 +170,22 @@ Make runtime-backed desktop/ecosystem v2 qualification release-blocking.
 - Real desktop/ecosystem and app-catalog sub-gates are required in local and CI
   release lanes.
 - M44 can be marked done only with runtime-qualified ecosystem artifacts.
+
+### PR-3 completion summary
+
+- Added aggregate gate checks:
+  - `tests/desktop/test_real_desktop_gate_v2.py`
+  - `tests/pkg/test_real_catalog_gate_v2.py`
+- Added local gates:
+  - `make test-real-ecosystem-desktop-v2`
+  - `make test-real-app-catalog-v2`
+- Added CI gates and artifacts:
+  - `Real ecosystem desktop v2 gate`
+  - `Real app catalog v2 gate`
+- Updated closure docs:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
 
 ## Non-goals for M44 backlog
 

@@ -52,6 +52,8 @@ make test-process-readiness-parity-v1
 make test-posix-gap-closure-v2
 make test-isolation-baseline-v1
 make test-namespace-cgroup-v1
+make test-real-ecosystem-desktop-v2
+make test-real-app-catalog-v2
 
 # Legacy (build + QEMU smoke tests, 16 tests)
 make -C legacy build && make -C legacy image && make -C legacy test-qemu
@@ -112,6 +114,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M41** Process + Readiness Compatibility Closure v1 | n/a | done | Rugo: compatibility/process/readiness contracts + deterministic compatibility/POSIX artifacts, `make test-process-readiness-parity-v1`, `make test-posix-gap-closure-v2`, CI `Process readiness parity v1 gate` + `POSIX gap closure v2 gate`, docs in `docs/abi/compat_profile_v5.md`, `docs/runtime/syscall_coverage_matrix_v4.md`, and `docs/M41_EXECUTION_BACKLOG.md`. |
 | **M42** Isolation + Namespace Baseline v1 | n/a | done | Rugo: isolation/namespace/resource-control contracts + deterministic containment artifacts, `make test-isolation-baseline-v1`, `make test-namespace-cgroup-v1`, CI `Isolation baseline v1 gate` + `Namespace cgroup v1 gate`, docs in `docs/abi/namespace_cgroup_contract_v1.md`, `docs/runtime/resource_control_policy_v1.md`, and `docs/M42_EXECUTION_BACKLOG.md`. |
 | **M43** Hardware/Firmware Breadth + SMP v1 | n/a | done | Rugo: matrix-v5/driver-lifecycle-v5/firmware-hardening-v3 + SMP interrupt model contracts with deterministic hardware/firmware/SMP artifacts, `make test-hw-firmware-smp-v1`, `make test-native-driver-matrix-v1`, CI `Hardware firmware smp v1 gate` + `Native driver matrix v1 gate`, docs in `docs/hw/support_matrix_v5.md`, `docs/hw/driver_lifecycle_contract_v5.md`, `docs/hw/acpi_uefi_hardening_v3.md`, `docs/runtime/smp_interrupt_model_v1.md`, and `docs/M43_EXECUTION_BACKLOG.md`. |
+| **M44** Real Desktop + Ecosystem Qualification v2 | n/a | done | Rugo: desktop/app-tier/ecosystem v2 contracts + deterministic runtime qualification artifacts, `make test-real-ecosystem-desktop-v2`, `make test-real-app-catalog-v2`, CI `Real ecosystem desktop v2 gate` + `Real app catalog v2 gate`, docs in `docs/desktop/desktop_profile_v2.md`, `docs/abi/app_compat_tiers_v2.md`, `docs/pkg/ecosystem_scale_policy_v2.md`, `docs/pkg/distribution_workflow_v2.md`, and `docs/M44_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -909,11 +912,36 @@ M43 execution update (2026-03-10):
     `Native driver matrix v1 gate`
 - M43 is done.
 
+M44 execution update (2026-03-10):
+- PR-1 complete (desktop/ecosystem v2 contract freeze):
+  - `docs/desktop/desktop_profile_v2.md`
+  - `docs/abi/app_compat_tiers_v2.md`
+  - `docs/pkg/ecosystem_scale_policy_v2.md`
+  - `docs/pkg/distribution_workflow_v2.md`
+  - `tests/desktop/test_desktop_docs_v2.py`
+  - `tests/pkg/test_ecosystem_scale_docs_v2.py`
+- PR-2 complete (deterministic runtime qualification tooling + checks):
+  - `tools/run_real_gui_app_matrix_v2.py`
+  - `tools/run_real_pkg_install_campaign_v2.py`
+  - `tools/run_real_catalog_audit_v2.py`
+  - `tests/desktop/test_gui_runtime_qualification_v2.py`
+  - `tests/pkg/test_pkg_install_success_rate_v2.py`
+  - `tests/pkg/test_catalog_reproducibility_v2.py`
+  - `tests/pkg/test_distribution_workflow_v2.py`
+- PR-3 complete (aggregate gate + app-catalog sub-gate wiring):
+  - `tests/desktop/test_real_desktop_gate_v2.py`
+  - `tests/pkg/test_real_catalog_gate_v2.py`
+  - `Makefile` targets `test-real-ecosystem-desktop-v2`,
+    `test-real-app-catalog-v2`
+  - `.github/workflows/ci.yml` steps `Real ecosystem desktop v2 gate`,
+    `Real app catalog v2 gate`
+- M44 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
 - Next roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
 - Active roadmap (M40-M44): `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`
-- Completed backlogs (M35-M43):
+- Completed backlogs (M35-M44):
   - `docs/M35_EXECUTION_BACKLOG.md`
   - `docs/M36_EXECUTION_BACKLOG.md`
   - `docs/M37_EXECUTION_BACKLOG.md`
@@ -923,11 +951,11 @@ Post-G2 planning and execution:
   - `docs/M41_EXECUTION_BACKLOG.md`
   - `docs/M42_EXECUTION_BACKLOG.md`
   - `docs/M43_EXECUTION_BACKLOG.md`
-- Next backlogs (M44, proposed):
   - `docs/M44_EXECUTION_BACKLOG.md`
-- Last completed backlog (M43): `docs/M43_EXECUTION_BACKLOG.md`
-- M35-M39 roadmap execution remains complete, and M40-M44 execution is active
-  with M40 evidence-integrity, M41 process/readiness closure, M42
-  isolation/namespace baseline closure, and M43 hardware/firmware/SMP closure.
+- Last completed backlog (M44): `docs/M44_EXECUTION_BACKLOG.md`
+- M35-M39 roadmap execution remains complete, and M40-M44 execution is now
+  complete with M40 evidence-integrity closure, M41 process/readiness closure,
+  M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
+  and M44 real desktop/ecosystem runtime qualification closure.
 
 

@@ -766,3 +766,32 @@ jobs:
           path: |
             out/pytest-native-driver-matrix-v1.xml
             out/hw-firmware-smp-v1.json
+
+      - name: Real ecosystem desktop v2 gate
+        run: |
+          make test-real-ecosystem-desktop-v2
+
+      - name: Upload real ecosystem desktop v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-ecosystem-desktop-v2-artifacts
+          path: |
+            out/pytest-real-ecosystem-desktop-v2.xml
+            out/real-gui-matrix-v2.json
+            out/real-pkg-install-v2.json
+            out/real-catalog-audit-v2.json
+
+      - name: Real app catalog v2 gate
+        run: |
+          make test-real-app-catalog-v2
+
+      - name: Upload real app catalog v2 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-app-catalog-v2-artifacts
+          path: |
+            out/pytest-real-app-catalog-v2.xml
+            out/real-pkg-install-v2.json
+            out/real-catalog-audit-v2.json
