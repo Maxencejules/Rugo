@@ -95,7 +95,7 @@ def test_baremetal_io_gate_v1_wiring_and_artifacts():
     assert "Status: done" in backlog
     assert "| M46 | Bare-Metal I/O Baseline v1 | n/a | done |" in milestones
     assert "| **M46** Bare-Metal I/O Baseline v1 | n/a | done |" in status
-    assert "M0-M46: done" in readme
+    assert "M0-M47: done" in readme
     assert "M46 execution backlog (completed)" in readme
 
     baseline_out = _out_path("baremetal-io-v1-gate.json")

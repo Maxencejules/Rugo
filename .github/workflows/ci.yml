@@ -826,6 +826,34 @@ jobs:
             out/desktop-smoke-v1.json
             out/recovery-drill-v3.json
 
+      - name: Hardware claim promotion v1 gate
+        run: |
+          make test-hw-claim-promotion-v1
+
+      - name: Upload hardware claim promotion v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw-claim-promotion-v1-artifacts
+          path: |
+            out/pytest-hw-claim-promotion-v1.xml
+            out/hw-claim-promotion-v1.json
+            out/hw-support-tier-audit-v1.json
+
+      - name: Hardware support tier audit v1 gate
+        run: |
+          make test-hw-support-tier-audit-v1
+
+      - name: Upload hardware support tier audit v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw-support-tier-audit-v1-artifacts
+          path: |
+            out/pytest-hw-support-tier-audit-v1.xml
+            out/hw-claim-promotion-v1.json
+            out/hw-support-tier-audit-v1.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2
