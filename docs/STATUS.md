@@ -939,8 +939,9 @@ M44 execution update (2026-03-10):
 
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
-- Next roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
-- Active roadmap (M40-M44): `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`
+- Completed roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
+- Completed roadmap (M40-M44): `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`
+- Planned roadmap (M45-M47): `docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md`
 - Completed backlogs (M35-M44):
   - `docs/M35_EXECUTION_BACKLOG.md`
   - `docs/M36_EXECUTION_BACKLOG.md`
@@ -952,10 +953,18 @@ Post-G2 planning and execution:
   - `docs/M42_EXECUTION_BACKLOG.md`
   - `docs/M43_EXECUTION_BACKLOG.md`
   - `docs/M44_EXECUTION_BACKLOG.md`
+- Planned backlogs (M45-M47):
+  - `docs/M45_EXECUTION_BACKLOG.md`
+  - `docs/M46_EXECUTION_BACKLOG.md`
+  - `docs/M47_EXECUTION_BACKLOG.md`
 - Last completed backlog (M44): `docs/M44_EXECUTION_BACKLOG.md`
 - M35-M39 roadmap execution remains complete, and M40-M44 execution is now
   complete with M40 evidence-integrity closure, M41 process/readiness closure,
   M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
   and M44 real desktop/ecosystem runtime qualification closure.
+- Proposed next milestone phase is M45-M47:
+  - M45 modern virtual-platform parity,
+  - M46 bare-metal I/O baseline,
+  - M47 hardware claim promotion program.
 
 

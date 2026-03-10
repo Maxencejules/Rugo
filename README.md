@@ -80,18 +80,22 @@ Source of truth: [MILESTONES.md](MILESTONES.md)
 | Legacy (`legacy/`) | M0-M7: done | G0: done |
 | Rugo (repo root) | M0-M44: done | G1: done, G2: done |
 
+Proposed next milestone phase: `M45-M47`.
+
 Tiny visual summary:
 
 ```text
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
 Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35 M36 M37 M38 M39 M40 M41 M42 M43 M44] [G1] complete  [G2] complete
+Next:   [M45 M46 M47] proposed
 ```
 
 ## Post-G2 roadmap
 
 - Research roadmap (M8-M14): [docs/POST_G2_EXTENDED_MILESTONES.md](docs/POST_G2_EXTENDED_MILESTONES.md)
-- Next roadmap (M35-M39): [docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md](docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md)
-- Active roadmap (M40-M44): [docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md](docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md)
+- Completed roadmap (M35-M39): [docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md](docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md)
+- Completed roadmap (M40-M44): [docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md](docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md)
+- Planned roadmap (M45-M47): [docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md](docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md)
 - M8 execution backlog (completed): `docs/M8_EXECUTION_BACKLOG.md`
 - M9 execution backlog (completed): `docs/M9_EXECUTION_BACKLOG.md`
 - M10 execution backlog (completed): `docs/M10_EXECUTION_BACKLOG.md`
@@ -129,6 +133,9 @@ Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M
 - M42 execution backlog (completed): `docs/M42_EXECUTION_BACKLOG.md`
 - M43 execution backlog (completed): `docs/M43_EXECUTION_BACKLOG.md`
 - M44 execution backlog (completed): `docs/M44_EXECUTION_BACKLOG.md`
+- M45 execution backlog (planned): `docs/M45_EXECUTION_BACKLOG.md`
+- M46 execution backlog (planned): `docs/M46_EXECUTION_BACKLOG.md`
+- M47 execution backlog (planned): `docs/M47_EXECUTION_BACKLOG.md`
 - Hardware support matrix v1: [docs/hw/support_matrix_v1.md](docs/hw/support_matrix_v1.md)
 - Security baseline docs: [docs/security/rights_capability_model_v1.md](docs/security/rights_capability_model_v1.md)
 - Compatibility profile v1 contract: [docs/abi/compat_profile_v1.md](docs/abi/compat_profile_v1.md)
