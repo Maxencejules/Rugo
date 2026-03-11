@@ -58,6 +58,8 @@ make test-baremetal-io-baseline-v1
 make test-usb-input-removable-v1
 make test-hw-claim-promotion-v1
 make test-hw-support-tier-audit-v1
+make test-display-runtime-v1
+make test-scanout-path-v1
 make test-real-ecosystem-desktop-v2
 make test-real-app-catalog-v2
 
@@ -124,7 +126,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M45** Modern Virtual Platform Parity v1 | n/a | done | Rugo: matrix-v6/driver-lifecycle-v6/virtio-platform-profile-v1 contracts plus deterministic modern VirtIO shadow artifacts, `make test-hw-matrix-v6`, `make test-virtio-platform-v1`, CI `Hardware matrix v6 shadow gate` + `Virtio platform v1 shadow gate`, docs in `docs/hw/support_matrix_v6.md`, `docs/hw/driver_lifecycle_contract_v6.md`, `docs/hw/virtio_platform_profile_v1.md`, `docs/desktop/display_stack_contract_v1.md`, and `docs/M45_EXECUTION_BACKLOG.md`. |
 | **M46** Bare-Metal I/O Baseline v1 | n/a | done | Rugo: baremetal-io-profile-v1 and usb-input-removable-contract-v1 contracts plus deterministic wired-NIC, USB input, and removable-media qualification artifacts, `make test-baremetal-io-baseline-v1`, `make test-usb-input-removable-v1`, CI `Bare-metal io baseline v1 gate` + `USB input removable v1 gate`, docs in `docs/hw/baremetal_io_profile_v1.md`, `docs/hw/usb_input_removable_contract_v1.md`, `docs/desktop/input_stack_contract_v1.md`, and `docs/M46_EXECUTION_BACKLOG.md`. |
 | **M47** Hardware Claim Promotion Program v1 | n/a | done | Rugo: support-claim-policy-v1 / bare-metal-promotion-policy-v2 / support-tier-audit-v1 contracts plus deterministic claim-promotion and support-tier-audit artifacts, `make test-hw-claim-promotion-v1`, `make test-hw-support-tier-audit-v1`, CI `Hardware claim promotion v1 gate` + `Hardware support tier audit v1 gate`, docs in `docs/hw/support_claim_policy_v1.md`, `docs/hw/bare_metal_promotion_policy_v2.md`, `docs/hw/support_tier_audit_v1.md`, and `docs/M47_EXECUTION_BACKLOG.md`. |
-| **M48** Display Runtime + Scanout v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M48_EXECUTION_BACKLOG.md`. |
+| **M48** Display Runtime + Scanout v1 | n/a | done | Rugo: display-runtime-contract-v1 / scanout-buffer-contract-v1 / gpu-fallback-policy-v1 contracts plus deterministic scanout, timing, and frame-capture artifacts, `make test-display-runtime-v1`, `make test-scanout-path-v1`, CI `Display runtime v1 gate` + `Scanout path v1 gate`, docs in `docs/desktop/display_runtime_contract_v1.md`, `docs/desktop/scanout_buffer_contract_v1.md`, `docs/desktop/gpu_fallback_policy_v1.md`, and `docs/M48_EXECUTION_BACKLOG.md`. |
 | **M49** Input + Seat Management v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M49_EXECUTION_BACKLOG.md`. |
 | **M50** Window System + Composition v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M50_EXECUTION_BACKLOG.md`. |
 | **M51** GUI Runtime + Toolkit Bridge v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M51_EXECUTION_BACKLOG.md`. |
@@ -1026,12 +1028,34 @@ M47 execution update (2026-03-10):
     `Hardware support tier audit v1 gate`
 - M47 is done.
 
+M48 execution update (2026-03-11):
+- PR-1 complete (display runtime contract freeze):
+  - `docs/desktop/display_runtime_contract_v1.md`
+  - `docs/desktop/scanout_buffer_contract_v1.md`
+  - `docs/desktop/gpu_fallback_policy_v1.md`
+  - `tests/desktop/test_display_runtime_docs_v1.py`
+- PR-2 complete (deterministic display runtime + frame-capture tooling):
+  - `tools/run_display_runtime_v1.py`
+  - `tools/capture_display_frame_v1.py`
+  - `tests/desktop/test_virtio_gpu_scanout_v1.py`
+  - `tests/desktop/test_efifb_fallback_v1.py`
+  - `tests/desktop/test_display_present_timing_v1.py`
+  - `tests/desktop/test_display_frame_capture_v1.py`
+- PR-3 complete (display runtime gate + scanout sub-gate wiring):
+  - `tests/desktop/test_display_runtime_gate_v1.py`
+  - `tests/desktop/test_scanout_path_gate_v1.py`
+  - `Makefile` targets `test-display-runtime-v1`,
+    `test-scanout-path-v1`
+  - `.github/workflows/ci.yml` steps `Display runtime v1 gate`,
+    `Scanout path v1 gate`
+- M48 is done.
+
 Post-G2 planning and execution:
 - Extended roadmap (M21-M34): `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`
 - Completed roadmap (M35-M39): `docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md`
 - Completed roadmap (M40-M44): `docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md`
 - Completed roadmap (M45-M47): `docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md`
-- Completed backlogs (M35-M47):
+- Completed backlogs (M35-M48):
   - `docs/M35_EXECUTION_BACKLOG.md`
   - `docs/M36_EXECUTION_BACKLOG.md`
   - `docs/M37_EXECUTION_BACKLOG.md`
@@ -1045,26 +1069,25 @@ Post-G2 planning and execution:
 - `docs/M45_EXECUTION_BACKLOG.md`
 - `docs/M46_EXECUTION_BACKLOG.md`
 - `docs/M47_EXECUTION_BACKLOG.md`
-- Last completed backlog (M47): `docs/M47_EXECUTION_BACKLOG.md`
+- `docs/M48_EXECUTION_BACKLOG.md`
+- Last completed backlog (M48): `docs/M48_EXECUTION_BACKLOG.md`
 - Next proposed roadmap: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`
 - Planned backlogs:
-  - `docs/M48_EXECUTION_BACKLOG.md`
   - `docs/M49_EXECUTION_BACKLOG.md`
   - `docs/M50_EXECUTION_BACKLOG.md`
   - `docs/M51_EXECUTION_BACKLOG.md`
   - `docs/M52_EXECUTION_BACKLOG.md`
-- M35-M39 roadmap execution remains complete, and M40-M47 execution is now
+- M35-M39 roadmap execution remains complete, and M40-M48 execution is now
   complete with M40 evidence-integrity closure, M41 process/readiness closure,
   M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
   M44 real desktop/ecosystem runtime qualification closure, and M45 modern
   virtual-platform parity shadow closure, M46 bare-metal I/O closure, and M47
-  hardware claim promotion closure.
+  hardware claim promotion closure, and M48 display runtime closure.
 - Latest completed hardware expansion phase is M45-M47:
   - M45 modern virtual-platform parity (done),
   - M46 bare-metal I/O baseline (done),
   - M47 hardware claim promotion program (done).
-- Next proposed GUI implementation phase is M48-M52:
-  - M48 display runtime + scanout,
+- Next proposed GUI implementation phase is M49-M52:
   - M49 input + seat management,
   - M50 window system + composition,
   - M51 GUI runtime + toolkit bridge,

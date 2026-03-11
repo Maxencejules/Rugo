@@ -56,7 +56,7 @@ endif
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
-       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
+       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -801,6 +801,16 @@ test-hw-support-tier-audit-v1:
 	$(PYTHON) tools/run_hw_claim_promotion_v1.py --out $(OUT)/hw-claim-promotion-v1.json
 	$(PYTHON) tools/run_hw_support_tier_audit_v1.py --out $(OUT)/hw-support-tier-audit-v1.json
 	$(PYTHON) -m pytest tests/hw/test_support_claim_docs_v1.py tests/hw/test_hw_claim_promotion_v1.py tests/hw/test_hw_support_tier_audit_v1.py tests/hw/test_hw_support_claim_negative_v1.py tests/hw/test_hw_support_tier_gate_v1.py -v --junitxml=$(OUT)/pytest-hw-support-tier-audit-v1.xml
+
+test-display-runtime-v1:
+	$(PYTHON) tools/run_display_runtime_v1.py --out $(OUT)/display-runtime-v1.json
+	$(SUBMAKE) test-scanout-path-v1
+	$(PYTHON) -m pytest tests/desktop/test_display_runtime_docs_v1.py tests/desktop/test_virtio_gpu_scanout_v1.py tests/desktop/test_efifb_fallback_v1.py tests/desktop/test_display_present_timing_v1.py tests/desktop/test_display_frame_capture_v1.py tests/desktop/test_display_runtime_gate_v1.py -v --junitxml=$(OUT)/pytest-display-runtime-v1.xml
+
+test-scanout-path-v1:
+	$(PYTHON) tools/run_display_runtime_v1.py --out $(OUT)/display-runtime-v1.json
+	$(PYTHON) tools/capture_display_frame_v1.py --out $(OUT)/display-frame-v1.png
+	$(PYTHON) -m pytest tests/desktop/test_display_runtime_docs_v1.py tests/desktop/test_virtio_gpu_scanout_v1.py tests/desktop/test_efifb_fallback_v1.py tests/desktop/test_display_present_timing_v1.py tests/desktop/test_display_frame_capture_v1.py tests/desktop/test_scanout_path_gate_v1.py -v --junitxml=$(OUT)/pytest-scanout-path-v1.xml
 
 test-real-ecosystem-desktop-v2:
 	$(PYTHON) tools/run_real_gui_app_matrix_v2.py --out $(OUT)/real-gui-matrix-v2.json

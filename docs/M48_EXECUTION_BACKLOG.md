@@ -2,7 +2,7 @@
 
 Date: 2026-03-11  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: proposed
+Status: done
 
 ## Goal
 
@@ -15,11 +15,12 @@ M48 source of truth remains `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`,
 
 ## Current State Summary
 
-- Bootable image generation and QEMU bring-up are already stable.
-- Desktop display contracts and hardware display-class evidence exist from M35,
-  M44, and M45.
-- The repo still lacks an in-tree display runtime that produces real graphical
-  frames and capture artifacts.
+- A versioned display-runtime contract, scanout-buffer contract, and GPU
+  fallback policy now define the first real graphical runtime path.
+- Deterministic runtime and capture tooling now produce machine-readable
+  scanout, timing, and frame-capture artifacts for `virtio-gpu-pci` and
+  `efifb` fallback.
+- Live display runtime behavior is now wired into local and CI release gates.
 
 ## Execution plan
 
@@ -29,9 +30,9 @@ M48 source of truth remains `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`,
 
 ## Execution Result
 
-- PR-1: not started
-- PR-2: not started
-- PR-3: not started
+- PR-1: complete (2026-03-11)
+- PR-2: complete (2026-03-11)
+- PR-3: complete (2026-03-11)
 
 ## PR-1: Display Runtime Contract Freeze
 
@@ -65,6 +66,15 @@ policy required before any display implementation work lands.
 - Real display-runtime boundaries are explicit and versioned.
 - Scanout buffer ownership, timing, and fallback rules are reviewable before
   implementation starts.
+
+### PR-1 completion summary
+
+- Added contract docs:
+  - `docs/desktop/display_runtime_contract_v1.md`
+  - `docs/desktop/scanout_buffer_contract_v1.md`
+  - `docs/desktop/gpu_fallback_policy_v1.md`
+- Added executable doc checks:
+  - `tests/desktop/test_display_runtime_docs_v1.py`
 
 ## PR-2: Scanout Runtime + Capture Campaigns
 
@@ -103,6 +113,17 @@ for declared graphical devices.
 
 - Real display runtime artifacts are deterministic and machine-readable.
 - Declared graphical devices can present frames and export capture evidence.
+
+### PR-2 completion summary
+
+- Added deterministic display runtime tooling:
+  - `tools/run_display_runtime_v1.py`
+  - `tools/capture_display_frame_v1.py`
+- Added executable runtime and capture checks:
+  - `tests/desktop/test_virtio_gpu_scanout_v1.py`
+  - `tests/desktop/test_efifb_fallback_v1.py`
+  - `tests/desktop/test_display_present_timing_v1.py`
+  - `tests/desktop/test_display_frame_capture_v1.py`
 
 ## PR-3: Display Gate + Scanout Sub-gate
 
@@ -143,6 +164,22 @@ graphical evidence in the declared path.
 - Real display runtime and scanout behavior are release-blocking in local and CI
   lanes.
 - Frame output evidence is tied to explicit runtime gates and artifacts.
+
+### PR-3 completion summary
+
+- Added aggregate gate checks:
+  - `tests/desktop/test_display_runtime_gate_v1.py`
+  - `tests/desktop/test_scanout_path_gate_v1.py`
+- Added local gates:
+  - `make test-display-runtime-v1`
+  - `make test-scanout-path-v1`
+- Added CI qualification gates and artifacts:
+  - `Display runtime v1 gate`
+  - `Scanout path v1 gate`
+- Updated closure docs:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
 
 ## Non-goals for M48 backlog
 

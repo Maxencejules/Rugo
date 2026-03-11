@@ -854,6 +854,36 @@ jobs:
             out/hw-claim-promotion-v1.json
             out/hw-support-tier-audit-v1.json
 
+      - name: Display runtime v1 gate
+        run: |
+          make test-display-runtime-v1
+
+      - name: Upload display runtime v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: display-runtime-v1-artifacts
+          path: |
+            out/pytest-display-runtime-v1.xml
+            out/display-runtime-v1.json
+            out/display-frame-v1.png
+            out/display-frame-v1.json
+
+      - name: Scanout path v1 gate
+        run: |
+          make test-scanout-path-v1
+
+      - name: Upload scanout path v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanout-path-v1-artifacts
+          path: |
+            out/pytest-scanout-path-v1.xml
+            out/display-runtime-v1.json
+            out/display-frame-v1.png
+            out/display-frame-v1.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2
