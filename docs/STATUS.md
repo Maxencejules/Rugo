@@ -124,6 +124,11 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M45** Modern Virtual Platform Parity v1 | n/a | done | Rugo: matrix-v6/driver-lifecycle-v6/virtio-platform-profile-v1 contracts plus deterministic modern VirtIO shadow artifacts, `make test-hw-matrix-v6`, `make test-virtio-platform-v1`, CI `Hardware matrix v6 shadow gate` + `Virtio platform v1 shadow gate`, docs in `docs/hw/support_matrix_v6.md`, `docs/hw/driver_lifecycle_contract_v6.md`, `docs/hw/virtio_platform_profile_v1.md`, `docs/desktop/display_stack_contract_v1.md`, and `docs/M45_EXECUTION_BACKLOG.md`. |
 | **M46** Bare-Metal I/O Baseline v1 | n/a | done | Rugo: baremetal-io-profile-v1 and usb-input-removable-contract-v1 contracts plus deterministic wired-NIC, USB input, and removable-media qualification artifacts, `make test-baremetal-io-baseline-v1`, `make test-usb-input-removable-v1`, CI `Bare-metal io baseline v1 gate` + `USB input removable v1 gate`, docs in `docs/hw/baremetal_io_profile_v1.md`, `docs/hw/usb_input_removable_contract_v1.md`, `docs/desktop/input_stack_contract_v1.md`, and `docs/M46_EXECUTION_BACKLOG.md`. |
 | **M47** Hardware Claim Promotion Program v1 | n/a | done | Rugo: support-claim-policy-v1 / bare-metal-promotion-policy-v2 / support-tier-audit-v1 contracts plus deterministic claim-promotion and support-tier-audit artifacts, `make test-hw-claim-promotion-v1`, `make test-hw-support-tier-audit-v1`, CI `Hardware claim promotion v1 gate` + `Hardware support tier audit v1 gate`, docs in `docs/hw/support_claim_policy_v1.md`, `docs/hw/bare_metal_promotion_policy_v2.md`, `docs/hw/support_tier_audit_v1.md`, and `docs/M47_EXECUTION_BACKLOG.md`. |
+| **M48** Display Runtime + Scanout v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M48_EXECUTION_BACKLOG.md`. |
+| **M49** Input + Seat Management v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M49_EXECUTION_BACKLOG.md`. |
+| **M50** Window System + Composition v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M50_EXECUTION_BACKLOG.md`. |
+| **M51** GUI Runtime + Toolkit Bridge v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M51_EXECUTION_BACKLOG.md`. |
+| **M52** Desktop Shell + Workflow Baseline v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M52_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -1041,6 +1046,13 @@ Post-G2 planning and execution:
 - `docs/M46_EXECUTION_BACKLOG.md`
 - `docs/M47_EXECUTION_BACKLOG.md`
 - Last completed backlog (M47): `docs/M47_EXECUTION_BACKLOG.md`
+- Next proposed roadmap: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`
+- Planned backlogs:
+  - `docs/M48_EXECUTION_BACKLOG.md`
+  - `docs/M49_EXECUTION_BACKLOG.md`
+  - `docs/M50_EXECUTION_BACKLOG.md`
+  - `docs/M51_EXECUTION_BACKLOG.md`
+  - `docs/M52_EXECUTION_BACKLOG.md`
 - M35-M39 roadmap execution remains complete, and M40-M47 execution is now
   complete with M40 evidence-integrity closure, M41 process/readiness closure,
   M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
@@ -1051,5 +1063,11 @@ Post-G2 planning and execution:
   - M45 modern virtual-platform parity (done),
   - M46 bare-metal I/O baseline (done),
   - M47 hardware claim promotion program (done).
+- Next proposed GUI implementation phase is M48-M52:
+  - M48 display runtime + scanout,
+  - M49 input + seat management,
+  - M50 window system + composition,
+  - M51 GUI runtime + toolkit bridge,
+  - M52 desktop shell + workflow baseline.
 
 
