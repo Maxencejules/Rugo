@@ -903,6 +903,685 @@ milestone closure.
 
 ---
 
+## Extension: M53-M84 roadmap after M52 closure
+
+This extension continues the roadmap from the current M52 desktop-shell
+baseline. It keeps the existing contract-first approach: every milestone
+introduces versioned docs, deterministic gates, explicit negative paths, and
+auditable promotion criteria before broad claims are made.
+
+### Sequencing summary
+
+| Range | Area | Outcome |
+|---|---|---|
+| M53-M57 | Hardware support and drivers | Native driver breadth, firmware policy, and shadow multi-arch bring-up |
+| M58-M61 | Filesystems and storage | Journaled, encrypted, multi-device, and integrity-focused storage |
+| M62-M65 | Networking and connectivity | Firewall, VPN, wireless control plane, routing/QoS |
+| M66-M70 | User interface and desktop | Accessibility, file workflows, settings, multi-monitor, productivity shell |
+| M71-M74 | Application ecosystem and packaging | Package solver, app bundles, SDK, federated catalog |
+| M75-M77 | Security, isolation, and compliance | Update orchestration, compliance profiles, attested fleet admission |
+| M78-M81 | Performance, stability, and observability | Scheduler/QoS, telemetry, chaos qualification |
+| M82-M84 | Community, docs, and release engineering | Governance, localization, public release operations |
+
+### Hardware Support and Drivers
+
+#### Milestone ID: M53 - Native Driver Contract Expansion v1
+
+- Description: Freeze the post-M52 hardware expansion boundary for native
+  PCIe-class devices beyond virtio/USB basics. Define reusable no_std driver
+  contracts for MSI/MSI-X, DMA/IOMMU safety, firmware loading, power states,
+  and user-visible diagnostics before NVMe/GPU/Wi-Fi drivers land.
+- Dependencies: M45-M47, M48-M52, `docs/hw/support_matrix_v6.md`,
+  `docs/hw/driver_lifecycle_contract_v6.md`.
+- Contracts/Interfaces: `docs/hw/native_driver_contract_v1.md`,
+  `docs/hw/pcie_dma_contract_v1.md`,
+  `docs/hw/firmware_blob_policy_v1.md`,
+  `docs/hw/native_driver_diag_schema_v1.md`.
+- Tests/Gates: `make test-native-driver-contract-v1`;
+  `tests/hw/test_native_driver_docs_v1.py`,
+  `tests/hw/test_pcie_dma_contract_v1.py`,
+  `tests/hw/test_firmware_blob_policy_v1.py`; serial markers
+  `DRV: bind`, `DMA: map ok`, `FW: denied unsigned`.
+- Hardware Tiers: QEMU Tier 0/Tier 1 remain the release floor; native NVMe,
+  GPU, and Wi-Fi rows are added as Tier 1 candidate or Tier 2 shadow targets
+  only after contract audit.
+- Implications: Reproducibility is preserved by keeping firmware outside the
+  base kernel image and pinning it with signed manifests. The security model
+  gains an explicit firmware trust boundary and stricter DMA containment rules.
+
+#### Milestone ID: M54 - Native Storage Drivers v1
+
+- Description: Implement AHCI and NVMe baseline drivers with identify/admin
+  paths, queue setup, IRQ handling, flush/FUA semantics, namespace discovery,
+  reset recovery, and bounded power-management hooks so storage is no longer
+  virtio-only.
+- Dependencies: M53, M38, M45-M47, `docs/storage/fs_v1.md`.
+- Contracts/Interfaces: `docs/hw/nvme_ahci_contract_v1.md`,
+  `docs/hw/support_matrix_v7.md`,
+  `docs/storage/block_flush_contract_v1.md`.
+- Tests/Gates: `make test-native-storage-v1`;
+  `tests/hw/test_nvme_identify_v1.py`,
+  `tests/hw/test_nvme_io_queue_v1.py`,
+  `tests/hw/test_ahci_rw_v1.py`,
+  `tests/storage/test_nvme_fsync_integration_v1.py`; serial markers
+  `NVME: ready`, `AHCI: port up`, `BLK: fua ok`.
+- Hardware Tiers: Emulated NVMe becomes a Tier 1 target; audited bare-metal
+  AHCI/NVMe desktops remain Tier 2 until repeatable reset and durability
+  campaigns stay green.
+- Implications: Throughput and latency improve materially, but reproducibility
+  now depends on pinned namespace geometry and deterministic flush timing. DMA
+  and interrupt isolation become release-blocking.
+
+#### Milestone ID: M55 - GPU Driver Baseline + Acceleration v1
+
+- Description: Add a bounded GPU lane with modeset, buffer allocation, fence
+  signaling, hardware cursor, and 2D acceleration baseline. Keep policy in the
+  Go compositor/shell while the kernel exposes only the minimal queue,
+  framebuffer, and sync primitives needed for interactive desktop use.
+- Dependencies: M53, M48-M52, `docs/desktop/gpu_fallback_policy_v1.md`.
+- Contracts/Interfaces: `docs/hw/gpu_driver_contract_v1.md`,
+  `docs/desktop/gpu_userspace_abi_v1.md`,
+  `docs/desktop/gpu_fallback_policy_v2.md`.
+- Tests/Gates: `make test-gpu-accel-v1`;
+  `tests/hw/test_gpu_probe_v1.py`,
+  `tests/desktop/test_gpu_modeset_v1.py`,
+  `tests/desktop/test_gpu_scanout_accel_v1.py`,
+  `tests/desktop/test_gpu_fallback_v2.py`; serial markers
+  `GPU: probe ok`, `GPU: modeset ok`, `GPU: fallback clean`.
+- Hardware Tiers: Virtio-GPU stays Tier 1; native GPU families enter Tier 2
+  first and do not reach Tier 1 until security review, crash-dump coverage, and
+  deterministic fallback evidence exist.
+- Implications: Desktop viability improves sharply, but the GPU path enlarges
+  the attack surface. Proprietary firmware must remain optional, separately
+  signed, and excluded from default audited images.
+
+#### Milestone ID: M56 - Wireless Adapter + Firmware Baseline v1
+
+- Description: Add a first real Wi-Fi adapter lane with PCIe/USB probe,
+  firmware load, station-mode connect, WPA2/WPA3 baseline hooks, regulatory
+  domain handling, power-save, and bounded recovery from RF loss. Kernel work
+  stays at device and frame primitives; supplicant policy remains in Go.
+- Dependencies: M53, M46, M54, M12, M19.
+- Contracts/Interfaces: `docs/hw/wifi_driver_contract_v1.md`,
+  `docs/net/wifi_control_plane_contract_v1.md`,
+  `docs/security/firmware_provenance_policy_v1.md`.
+- Tests/Gates: `make test-wifi-baseline-v1`;
+  `tests/hw/test_wifi_adapter_probe_v1.py`,
+  `tests/net/test_wifi_auth_assoc_v1.py`,
+  `tests/net/test_wifi_power_save_v1.py`,
+  `tests/net/test_wifi_firmware_policy_v1.py`; serial markers
+  `WIFI: firmware ok`, `WIFI: assoc ok`, `WIFI: denied unsigned-fw`.
+- Hardware Tiers: Wi-Fi begins as Tier 2 bare-metal only; promotion to Tier 1
+  requires audited adapter allowlists, signed firmware provenance, and two-run
+  reproducible roam/reconnect evidence.
+- Implications: Laptop readiness improves, but proprietary firmware handling is
+  now a first-class supply-chain and revocation problem. Release images must
+  distinguish blob-free and signed-firmware variants.
+
+#### Milestone ID: M57 - Secondary Architecture Shadow Bring-Up v1
+
+- Description: Establish an experimental multi-arch framework for a secondary
+  `aarch64` QEMU target while keeping x86-64 as the only release floor. The
+  milestone focuses on boot, interrupt/MMU abstraction, arch-neutral syscall
+  contracts, and Go runtime smoke rather than full platform parity.
+- Dependencies: M53-M56, M11, M21, M43.
+- Contracts/Interfaces: `docs/runtime/arch_port_contract_v1.md`,
+  `docs/hw/multi_arch_support_policy_v1.md`,
+  `docs/abi/arch_neutral_syscall_profile_v1.md`.
+- Tests/Gates: `make test-multiarch-shadow-v1`;
+  `tests/boot/test_aarch64_boot_smoke_v1.py`,
+  `tests/runtime/test_arch_neutral_syscall_profile_v1.py`,
+  `tests/go/test_go_port_shadow_v1.py`; serial markers
+  `ARCH: aarch64 boot ok`, `ARCH: syscall ok`.
+- Hardware Tiers: x86-64 remains Tier 0/Tier 1. `aarch64` enters Tier 2 shadow
+  only, with no stable support claim and no release promotion before separate
+  MMU, interrupt, and toolchain audits.
+- Implications: Portability improves without diluting the x86-64 roadmap, but
+  emulator drift and per-arch security differences can easily damage
+  reproducibility if not isolated from the main release floor.
+
+### Filesystems and Storage
+
+#### Milestone ID: M58 - Journaling Filesystem Baseline v1
+
+- Description: Introduce a journaled filesystem baseline with metadata
+  transactions, optional ordered-data mode, journal checksums, replay-on-mount,
+  quota hooks, and deterministic power-fail behavior. Update image and mkfs
+  tooling so journal state is reproducible.
+- Dependencies: M13, M18, M38, M54, `docs/storage/fs_v1.md`.
+- Contracts/Interfaces: `docs/storage/fs_journal_contract_v1.md`,
+  `docs/storage/journal_replay_policy_v1.md`,
+  `docs/abi/fs_quota_contract_v1.md`.
+- Tests/Gates: `make test-storage-reliability-v3`;
+  `tests/storage/test_journal_replay_v1.py`,
+  `tests/storage/test_journal_checksum_v1.py`,
+  `tests/storage/test_quota_contract_v1.py`,
+  `tests/storage/test_powerfail_matrix_v1.py`; serial markers
+  `FSJ: commit ok`, `FSJ: replay ok`.
+- Hardware Tiers: Tier 1 on virtio-blk and NVMe profiles; Tier 2 on audited
+  bare-metal storage only after replay and quota campaigns stay deterministic.
+- Implications: Data integrity improves substantially, but no_std memory
+  overhead and image-build complexity rise. `tools/mkfs.py` and recovery
+  tooling must remain byte-for-byte reproducible.
+
+#### Milestone ID: M59 - Encryption + Keyslot Baseline v1
+
+- Description: Add at-rest encryption for block volumes or filesystem roots
+  with keyslots, passphrase unlock, recovery key path, and optional measured
+  unlock integration. Keep secrets handling minimal and explicit; no hidden
+  auto-unlock flows.
+- Dependencies: M58, M10, M28, M31.
+- Contracts/Interfaces: `docs/storage/encrypted_volume_contract_v1.md`,
+  `docs/security/storage_key_policy_v1.md`,
+  `docs/abi/storage_crypto_syscalls_v1.md`.
+- Tests/Gates: `make test-storage-encryption-v1`;
+  `tests/storage/test_volume_unlock_v1.py`,
+  `tests/storage/test_encrypted_powerfail_recovery_v1.py`,
+  `tests/security/test_storage_key_policy_v1.py`; serial markers
+  `ENC: unlock ok`, `ENC: denied bad-key`.
+- Hardware Tiers: Tier 1 on virtio/NVMe with software crypto fallback; Tier 2
+  for TPM-bound unlock on audited secure-boot hardware only.
+- Implications: Confidentiality improves, but CI must use deterministic escrow
+  fixtures rather than real secrets. The security model now includes key
+  rotation, unlock policy, and panic-path secret zeroization.
+
+#### Milestone ID: M60 - Multi-Device RAID Baseline v1
+
+- Description: Add mirrored and striped multi-device volume support with
+  degraded boot policy, rebuild/scrub, write-intent tracking, and deterministic
+  failure handling for disk loss and reintegration.
+- Dependencies: M58-M59, M54.
+- Contracts/Interfaces: `docs/storage/raid_contract_v1.md`,
+  `docs/storage/device_set_policy_v1.md`,
+  `docs/storage/rebuild_scrub_policy_v1.md`.
+- Tests/Gates: `make test-storage-raid-v1`;
+  `tests/storage/test_raid_mirror_rebuild_v1.py`,
+  `tests/storage/test_raid_degraded_boot_v1.py`,
+  `tests/storage/test_raid_scrub_v1.py`; serial markers
+  `RAID: degraded ok`, `RAID: rebuild ok`.
+- Hardware Tiers: Tier 1 in QEMU dual-disk virtio/NVMe profiles; Tier 2 for
+  audited bare-metal mirror sets and hot-replace workflows.
+- Implications: Availability improves, but rebuild ordering and fault-injection
+  campaigns can become non-deterministic without fixed seeds and pinned disk
+  timing models.
+
+#### Milestone ID: M61 - CoW Snapshots + Integrity Repair v1
+
+- Description: Add copy-on-write snapshots/subvolumes, end-to-end checksums,
+  background scrub, and repair semantics for mirrored data so Rugo has a
+  bounded Btrfs/APFS-class feature lane without claiming unlimited feature
+  parity.
+- Dependencies: M58-M60, M38.
+- Contracts/Interfaces: `docs/storage/cow_snapshot_contract_v1.md`,
+  `docs/storage/integrity_scrub_policy_v1.md`,
+  `docs/abi/snapshot_management_contract_v1.md`.
+- Tests/Gates: `make test-storage-integrity-v1`;
+  `tests/storage/test_cow_snapshot_semantics_v1.py`,
+  `tests/storage/test_scrub_selfheal_v1.py`,
+  `tests/storage/test_snapshot_send_receive_v1.py`; serial markers
+  `SNAP: create ok`, `SCRUB: repaired`.
+- Hardware Tiers: Tier 1 on NVMe and mirrored virtio profiles; Tier 2 on
+  audited bare-metal workstations and server-class storage sets.
+- Implications: Rollback and repair become much stronger, but metadata
+  amplification and memory pressure must be budgeted explicitly for no_std
+  environments and reproducible image generation.
+
+### Networking and Connectivity
+
+#### Milestone ID: M62 - Packet Filter + Firewall Primitives v1
+
+- Description: Add kernel packet-filter hooks, stateful flow tables, interface
+  zoning, and packet mark primitives while keeping rule authoring and policy
+  composition in Go user space. This is the minimal firewall baseline, not a
+  full nftables clone.
+- Dependencies: M12, M19, M42, M56,
+  `docs/net/network_stack_contract_v1.md`.
+- Contracts/Interfaces: `docs/net/firewall_hook_contract_v1.md`,
+  `docs/net/net_policy_daemon_api_v1.md`,
+  `docs/abi/socket_policy_extensions_v1.md`.
+- Tests/Gates: `make test-firewall-v1`;
+  `tests/net/test_firewall_stateful_rules_v1.py`,
+  `tests/net/test_firewall_zone_policy_v1.py`,
+  `tests/net/test_firewall_negative_paths_v1.py`; serial markers
+  `FW: allow ok`, `FW: drop ok`.
+- Hardware Tiers: Wired Tier 1 profiles must pass latency and denial-path
+  budgets; Wi-Fi profiles stay Tier 2 until M64 closes roam and policy races.
+- Implications: Security improves via capability-scoped network policy, but the
+  kernel must enforce bounded state tables and deterministic rule ordering to
+  avoid DoS regressions.
+
+#### Milestone ID: M63 - VPN Tunnel Primitives v1
+
+- Description: Add WireGuard-class encrypted tunnel primitives with key
+  rotation, timer handling, roaming-safe endpoints, and kill-switch hooks.
+  Kernel work stays limited to packet/crypto/session primitives; peer policy
+  and config orchestration remain in Go.
+- Dependencies: M62, M19, M28.
+- Contracts/Interfaces: `docs/net/wireguard_primitives_contract_v1.md`,
+  `docs/net/tunnel_socket_abi_v1.md`,
+  `docs/security/vpn_key_rotation_policy_v1.md`.
+- Tests/Gates: `make test-vpn-baseline-v1`;
+  `tests/net/test_wireguard_handshake_v1.py`,
+  `tests/net/test_wireguard_rekey_v1.py`,
+  `tests/net/test_vpn_killswitch_v1.py`; serial markers
+  `VPN: handshake ok`, `VPN: rekey ok`.
+- Hardware Tiers: Tier 1 on wired hosts; Tier 2 on audited Wi-Fi adapters until
+  roam and power-save interactions are verified.
+- Implications: Remote-access security improves materially, but determinism now
+  depends on pinned cryptographic test vectors, timer granularity, and endpoint
+  mobility handling.
+
+#### Milestone ID: M64 - Wireless Control Plane + Roaming v1
+
+- Description: Build the user-space wireless manager boundary with scan, select,
+  roam, WPA2/WPA3 handoff, regulatory updates, and power-save transitions. The
+  kernel exposes only 802.11 control and event primitives; policy lives in Go.
+- Dependencies: M56, M62-M63.
+- Contracts/Interfaces: `docs/net/wifi_control_plane_contract_v2.md`,
+  `docs/net/roaming_policy_v1.md`,
+  `docs/abi/wireless_socket_extensions_v1.md`.
+- Tests/Gates: `make test-wireless-stack-v1`;
+  `tests/net/test_wifi_scan_roam_v1.py`,
+  `tests/net/test_wpa3_handshake_v1.py`,
+  `tests/net/test_wifi_loss_recovery_v1.py`; serial markers
+  `WIFI: roam ok`, `WIFI: recover ok`.
+- Hardware Tiers: Audited Wi-Fi adapters can move from Tier 2 to Tier 1
+  candidate only after deterministic roam, reconnect, and power-save campaigns
+  stay green.
+- Implications: Laptop-class connectivity improves, but firmware provenance,
+  regulatory updates, and network-manager privilege boundaries become part of
+  the security model.
+
+#### Milestone ID: M65 - Routing, NAT, and Traffic Control v1
+
+- Description: Add forwarding, NAT state, DHCP/DNS service baseline, and
+  traffic-shaping/qdisc primitives for router and edge-node use. Policy and
+  orchestration stay in Go services; the kernel owns only deterministic data
+  plane hooks and counters.
+- Dependencies: M62-M64, M19.
+- Contracts/Interfaces: `docs/net/routing_dataplane_contract_v1.md`,
+  `docs/net/traffic_control_contract_v1.md`,
+  `docs/abi/network_flow_stats_v1.md`.
+- Tests/Gates: `make test-network-stack-v3`;
+  `tests/net/test_nat_forwarding_v1.py`,
+  `tests/net/test_traffic_shaping_v1.py`,
+  `tests/net/test_lossy_link_service_recovery_v1.py`; serial markers
+  `ROUTE: forward ok`, `QDISC: rate ok`.
+- Hardware Tiers: Tier 1 on dual-NIC wired profiles; mixed wired/Wi-Fi gateway
+  profiles remain Tier 2 until M64 hardware promotions are complete.
+- Implications: Rugo moves toward edge and appliance use, but packet-loss
+  simulation, queue timing, and service startup order must stay seeded and
+  replayable to avoid flaky gates.
+
+### User Interface and Desktop Environment
+
+#### Milestone ID: M66 - Accessibility + Assistive Hooks v1
+
+- Description: Add accessibility tree export, keyboard-only navigation,
+  high-contrast themes, reduced-motion policy, focus narration events, and
+  magnifier hooks. Keep the baseline lightweight and event-driven rather than
+  bundling a heavyweight accessibility suite.
+- Dependencies: M48-M52, M49, M51.
+- Contracts/Interfaces: `docs/desktop/accessibility_contract_v1.md`,
+  `docs/desktop/assistive_event_api_v1.md`,
+  `docs/desktop/focus_semantics_v2.md`.
+- Tests/Gates: `make test-accessibility-v1`;
+  `tests/desktop/test_screen_reader_hooks_v1.py`,
+  `tests/desktop/test_keyboard_navigation_v1.py`,
+  `tests/desktop/test_high_contrast_policy_v1.py`; serial markers
+  `A11Y: tree ok`, `A11Y: nav ok`.
+- Hardware Tiers: Tier 1 desktop profiles on single-monitor USB input paths;
+  multi-monitor validation starts as Tier 2 shadow coverage.
+- Implications: Usability and inclusion improve immediately, but accessibility
+  events must stay machine-readable and deterministic to avoid visual-only
+  release criteria.
+
+#### Milestone ID: M67 - File Manager + Content Workflows v1
+
+- Description: Ship a Go-based file explorer with copy/move/delete/trash,
+  removable-media workflows, MIME/content handlers, and bounded file-open/save
+  integrations for the existing app shell.
+- Dependencies: M52, M58, M61, M46.
+- Contracts/Interfaces: `docs/desktop/file_manager_contract_v1.md`,
+  `docs/pkg/content_handler_contract_v1.md`,
+  `docs/storage/removable_media_ui_policy_v1.md`.
+- Tests/Gates: `make test-file-manager-v1`;
+  `tests/desktop/test_file_manager_workflows_v1.py`,
+  `tests/desktop/test_mime_launch_v1.py`,
+  `tests/desktop/test_removable_media_ui_v1.py`; serial markers
+  `FM: copy ok`, `FM: mount ok`.
+- Hardware Tiers: Tier 1 desktop and removable-media profiles; Tier 2 for
+  large-volume NVMe and multi-monitor drag/drop coverage.
+- Implications: Daily-use desktop value rises, but automount and content-launch
+  paths must remain capability-gated to avoid privilege escalation.
+
+#### Milestone ID: M68 - Settings, Notifications, and Background UX v1
+
+- Description: Add a unified settings app, notification center, network/power/
+  display panels, and bounded background-service prompts so users can manage
+  the system without falling back to shell-only workflows.
+- Dependencies: M52, M56, M65, M66.
+- Contracts/Interfaces: `docs/desktop/settings_panel_contract_v1.md`,
+  `docs/desktop/notification_center_contract_v1.md`,
+  `docs/runtime/background_service_ux_policy_v1.md`.
+- Tests/Gates: `make test-desktop-services-v1`;
+  `tests/desktop/test_settings_panels_v1.py`,
+  `tests/desktop/test_notification_center_v1.py`,
+  `tests/desktop/test_background_service_prompts_v1.py`; serial markers
+  `SHELL: notify ok`, `SHELL: panel ok`.
+- Hardware Tiers: Tier 1 desktop profiles with wired/Wi-Fi and basic power
+  states; Tier 2 for laptop battery and suspend/resume UI integration.
+- Implications: The OS becomes operable for non-shell users, but permission and
+  service prompts must stay explicit to preserve the capability model.
+
+#### Milestone ID: M69 - Multi-Monitor + HiDPI Workspace v1
+
+- Description: Extend the compositor and shell for multi-head layout, mirrored
+  and extended modes, HiDPI scaling, per-display profiles, and deterministic
+  hotplug behavior across virtio and native GPU paths.
+- Dependencies: M55, M66-M68.
+- Contracts/Interfaces: `docs/desktop/multi_monitor_contract_v1.md`,
+  `docs/desktop/hidpi_scaling_policy_v1.md`,
+  `docs/desktop/display_profile_contract_v1.md`.
+- Tests/Gates: `make test-multi-monitor-v1`;
+  `tests/desktop/test_multi_monitor_layout_v1.py`,
+  `tests/desktop/test_hidpi_scaling_v1.py`,
+  `tests/desktop/test_gpu_hotplug_display_v1.py`; serial markers
+  `DISPLAY: head2 ok`, `DISPLAY: scale ok`.
+- Hardware Tiers: Virtio-GPU remains Tier 1; native GPU multi-head support is
+  Tier 2 until hotplug, fallback, and crash-recovery audits are complete.
+- Implications: Workstation usability improves, but visual assertions must use
+  fixed framebuffer capture and pinned DPI fixtures to stay reproducible.
+
+#### Milestone ID: M70 - Desktop Productivity Workflow v1
+
+- Description: Add app search/launcher, clipboard and drag-drop, session
+  restore, and bounded productivity workflows that make the shell feel like a
+  usable desktop without claiming full office/browser parity.
+- Dependencies: M66-M69, M39, M44.
+- Contracts/Interfaces: `docs/desktop/productivity_workflow_profile_v1.md`,
+  `docs/desktop/clipboard_dragdrop_contract_v1.md`,
+  `docs/desktop/session_restore_policy_v1.md`.
+- Tests/Gates: `make test-desktop-productivity-v1`;
+  `tests/desktop/test_app_search_launch_v1.py`,
+  `tests/desktop/test_clipboard_dragdrop_v1.py`,
+  `tests/desktop/test_session_restore_v1.py`; serial markers
+  `DESKTOP: launch ok`, `DESKTOP: restore ok`.
+- Hardware Tiers: Tier 1 desktops; Tier 2 for GPU-accelerated multi-monitor
+  restore and removable-media productivity flows.
+- Implications: End-user adoption improves, but UI timing and persistence logic
+  must be captured through deterministic artifacts, not human-only validation.
+
+### Application Ecosystem and Packaging
+
+#### Milestone ID: M71 - Package Manager + Dependency Solver v1
+
+- Description: Add a first-class Go package manager with dependency solving,
+  transaction rollback, repo pinning, delta download support, and content-
+  addressed local cache management.
+- Dependencies: M26, M39, M70.
+- Contracts/Interfaces: `docs/pkg/package_manager_contract_v1.md`,
+  `docs/pkg/dependency_solver_policy_v1.md`,
+  `docs/pkg/repo_metadata_v4.md`.
+- Tests/Gates: `make test-pkg-manager-v1`;
+  `tests/pkg/test_dependency_solver_v1.py`,
+  `tests/pkg/test_pkg_transaction_rollback_v1.py`,
+  `tests/pkg/test_repo_pinning_v1.py`; serial markers
+  `PKG: solve ok`, `PKG: rollback ok`.
+- Hardware Tiers: N/A; cross-tier feature with desktop and server coverage.
+- Implications: Community porting accelerates, but reproducible vendoring and
+  signed metadata remain non-negotiable for trust and repeatable builds.
+
+#### Milestone ID: M72 - Sandboxed App Bundles + Permissions v1
+
+- Description: Introduce installable app bundles with declared permissions,
+  per-app capability grants, desktop portals, and deterministic denial behavior
+  so third-party applications can be distributed without full system trust.
+- Dependencies: M42, M71, M70.
+- Contracts/Interfaces: `docs/pkg/app_bundle_contract_v1.md`,
+  `docs/security/app_permission_policy_v1.md`,
+  `docs/desktop/portal_api_contract_v1.md`.
+- Tests/Gates: `make test-app-bundles-v1`;
+  `tests/pkg/test_app_bundle_manifest_v1.py`,
+  `tests/security/test_app_permission_prompts_v1.py`,
+  `tests/desktop/test_portal_file_dialog_v1.py`; serial markers
+  `APP: install ok`, `APP: denied capability`.
+- Hardware Tiers: Cross-tier; desktop portal paths validated on Tier 1 GUI
+  profiles only.
+- Implications: Safer app distribution becomes possible, but permission prompts
+  and portal behavior must be deterministic and auditable, not policy-by-UI.
+
+#### Milestone ID: M73 - Developer SDK + Porting Kit v1
+
+- Description: Publish headers, templates, toolchains, CI scaffolds, and
+  porting guides for Go, Rust, and TinyGo apps so external developers can build
+  native software against Rugo's bounded ABI and desktop profiles.
+- Dependencies: M11, M36, M41, M71-M72.
+- Contracts/Interfaces: `docs/pkg/sdk_contract_v1.md`,
+  `docs/abi/app_porting_profile_v1.md`,
+  `docs/build/sdk_repro_policy_v1.md`.
+- Tests/Gates: `make test-sdk-porting-v1`;
+  `tests/pkg/test_sdk_template_builds_v1.py`,
+  `tests/compat/test_app_porting_profile_v1.py`,
+  `tests/build/test_sdk_reproducibility_v1.py`; serial markers
+  `SDK: template ok`, `SDK: repro ok`.
+- Hardware Tiers: Cross-tier; TinyGo bare-metal utility templates remain bound
+  to Tier 0/Tier 1 reference hardware.
+- Implications: Developer adoption improves sharply, but SDK manifests and
+  toolchain versions must stay locked to prevent silent drift.
+
+#### Milestone ID: M74 - Catalog Federation + Build Farm v1
+
+- Description: Add a federated app catalog, community package ingestion,
+  reproducible build-farm attestations, moderation/quarantine workflow, and
+  health scoring so the ecosystem can grow without losing provenance.
+- Dependencies: M31, M39, M40, M71-M73.
+- Contracts/Interfaces: `docs/pkg/catalog_federation_policy_v1.md`,
+  `docs/pkg/build_farm_attestation_v1.md`,
+  `docs/pkg/moderation_workflow_v1.md`.
+- Tests/Gates: `make test-app-catalog-health-v2`;
+  `tests/pkg/test_catalog_federation_v1.py`,
+  `tests/pkg/test_build_farm_attestation_v1.py`,
+  `tests/pkg/test_catalog_quarantine_v1.py`; serial markers
+  `CAT: ingest ok`, `CAT: attest ok`.
+- Hardware Tiers: N/A.
+- Implications: Rugo gains a real community distribution story, but moderation,
+  storage cost, and provenance verification become ongoing operational work.
+
+### Security, Isolation, and Compliance
+
+#### Milestone ID: M75 - Trusted Update Orchestrator v1
+
+- Description: Build a secure update agent with staged rollout policy, rollback
+  guardrails, maintenance windows, snapshot-aware recovery, and mandatory
+  signature/monotonic-version enforcement.
+- Dependencies: M14, M31, M61, M71,
+  `docs/security/rights_capability_model_v1.md`.
+- Contracts/Interfaces: `docs/security/update_orchestrator_policy_v1.md`,
+  `docs/pkg/update_rollout_contract_v1.md`,
+  `docs/runtime/reboot_coordinator_contract_v1.md`.
+- Tests/Gates: `make test-security-hardening-v4`;
+  `tests/security/test_update_orchestrator_v1.py`,
+  `tests/pkg/test_staged_rollout_policy_v1.py`,
+  `tests/security/test_rollback_guardrails_v1.py`; serial markers
+  `UPDATE: stage ok`, `UPDATE: rollback blocked`.
+- Hardware Tiers: Tier 1 can consume signed manual updates; audited Tier 2
+  secure-boot systems are the first candidates for unattended update claims.
+- Implications: Enterprise readiness improves, but signing-key hygiene and
+  rollback-safety semantics become release-critical parts of the threat model.
+
+#### Milestone ID: M76 - Compliance Profiles + Audit Evidence v1
+
+- Description: Add formal compliance profiles (baseline, hardened, regulated)
+  with mapped technical controls, retention/redaction rules, exportable audit
+  bundles, and release checklists tied to actual runtime evidence.
+- Dependencies: M28, M40, M75,
+  `docs/security/rights_capability_model_v1.md`.
+- Contracts/Interfaces: `docs/security/compliance_profile_v1.md`,
+  `docs/security/audit_evidence_contract_v1.md`,
+  `docs/build/compliance_release_checklist_v1.md`.
+- Tests/Gates: `make test-compliance-profile-v1`;
+  `tests/security/test_compliance_control_mapping_v1.py`,
+  `tests/security/test_audit_bundle_redaction_v1.py`,
+  `tests/build/test_compliance_release_gate_v1.py`; serial markers
+  `COMP: profile ok`, `COMP: redaction ok`.
+- Hardware Tiers: Tier 1 can claim baseline compliance evidence; audited Tier 2
+  secure-boot/TPM platforms can claim managed-profile evidence.
+- Implications: Auditability increases, but process and documentation burden
+  rises. Reproducibility now covers evidence-bundle schemas and retention rules.
+
+#### Milestone ID: M77 - Secrets, Attestation, and Fleet Admission v1
+
+- Description: Add device identity, secret sealing, attestation-backed policy,
+  and fleet admission controls so only trusted systems can enroll, receive
+  packages, or join managed update rings.
+- Dependencies: M23, M33, M75-M76.
+- Contracts/Interfaces: `docs/security/attested_identity_contract_v1.md`,
+  `docs/security/secret_sealing_policy_v1.md`,
+  `docs/pkg/fleet_admission_contract_v1.md`.
+- Tests/Gates: `make test-fleet-admission-v1`;
+  `tests/security/test_secret_sealing_v1.py`,
+  `tests/security/test_attestation_admission_v1.py`,
+  `tests/pkg/test_fleet_policy_denial_v1.py`; serial markers
+  `ATTEST: admit ok`, `SECRET: unseal ok`.
+- Hardware Tiers: Attested admission claims are Tier 2 audited-only; QEMU
+  remains simulation-only and cannot qualify for real fleet trust claims.
+- Implications: Fleet security strengthens substantially, but certificate
+  lifecycle and hardware root-of-trust diversity become material risks.
+
+### Performance, Stability, and Observability
+
+#### Milestone ID: M78 - Scheduler Latency + CPU Affinity v1
+
+- Description: Raise the scheduler from a basic fairness baseline to explicit
+  latency budgets, CPU affinity, priority classes, and bounded real-time style
+  behavior for interactive and service workloads on SMP systems.
+- Dependencies: M16, M22, M24, M43.
+- Contracts/Interfaces: `docs/runtime/scheduler_latency_contract_v1.md`,
+  `docs/runtime/cpu_affinity_policy_v1.md`,
+  `docs/abi/thread_priority_contract_v1.md`.
+- Tests/Gates: `make test-process-scheduler-v3`;
+  `tests/sched/test_priority_preemption_v1.py`,
+  `tests/sched/test_cpu_affinity_v1.py`,
+  `tests/runtime/test_scheduler_latency_budget_v1.py`; serial markers
+  `SCHED: rt ok`, `SCHED: affinity ok`.
+- Hardware Tiers: Multi-core Tier 1 and Tier 2 systems are in scope; single-
+  core QEMU profiles stay as a regression floor, not the performance target.
+- Implications: Performance closes toward the legacy C baseline and Linux RT-
+  style responsiveness, but starvation and inversion bugs become more likely.
+
+#### Milestone ID: M79 - Memory Pressure + I/O QoS v1
+
+- Description: Add reclaim policies, pressure accounting, OOM selection,
+  storage/network I/O priorities, and isolation-aware resource backpressure so
+  the system stays stable under mixed interactive and service load.
+- Dependencies: M18, M38, M42, M78.
+- Contracts/Interfaces: `docs/runtime/memory_pressure_contract_v1.md`,
+  `docs/storage/io_qos_policy_v1.md`,
+  `docs/abi/resource_pressure_events_v1.md`.
+- Tests/Gates: `make test-memory-pressure-v1`;
+  `tests/runtime/test_memory_reclaim_v1.py`,
+  `tests/storage/test_io_qos_v1.py`,
+  `tests/runtime/test_oom_policy_v1.py`; serial markers
+  `MEM: reclaim ok`, `QOS: io ok`.
+- Hardware Tiers: Tier 1 multi-core + NVMe profiles; Tier 2 for large-memory
+  hosts and mixed service/Desktop pressure campaigns.
+- Implications: Stability under load improves, but no_std allocator behavior
+  and reclaim heuristics can easily undermine determinism if budgets are not
+  fixed and exposed.
+
+#### Milestone ID: M80 - Observability Pipeline + Perf Telemetry v1
+
+- Description: Add stable metrics, tracepoints, perf counters, and baseline
+  diff tooling so runtime regressions can be measured automatically against both
+  prior Rugo releases and the legacy C reference behavior.
+- Dependencies: M29, M40, M78-M79.
+- Contracts/Interfaces: `docs/runtime/telemetry_contract_v1.md`,
+  `docs/runtime/perf_counter_abi_v1.md`,
+  `docs/build/perf_baseline_policy_v1.md`.
+- Tests/Gates: `make test-observability-v3`;
+  `tests/runtime/test_metric_registry_v1.py`,
+  `tests/runtime/test_perf_counter_abi_v1.py`,
+  `tests/runtime/test_legacy_baseline_diff_v1.py`; serial markers
+  `OBS: metric ok`, `OBS: perf diff ok`.
+- Hardware Tiers: Cross-tier; multi-core Tier 1/Tier 2 machines are used for
+  benchmark and regression budgets, while Tier 0 keeps the schema floor green.
+- Implications: Regression triage becomes much faster, but metric sprawl and
+  privacy/redaction rules need explicit governance.
+
+#### Milestone ID: M81 - Reliability Fuzzing + Chaos Qualification v1
+
+- Description: Add deterministic chaos campaigns, syscall/storage/network/UI
+  fuzzing, long-run soak classification, and auto-bisect hooks so reliability
+  becomes a measured property rather than an anecdotal one.
+- Dependencies: M22, M28, M80.
+- Contracts/Interfaces: `docs/runtime/chaos_qualification_policy_v1.md`,
+  `docs/security/fuzz_coverage_contract_v1.md`,
+  `docs/build/reliability_slo_v1.md`.
+- Tests/Gates: `make test-kernel-reliability-v2`;
+  `tests/runtime/test_chaos_campaign_v1.py`,
+  `tests/security/test_fuzz_coverage_budget_v1.py`,
+  `tests/runtime/test_reliability_slo_v1.py`; serial markers
+  `CHAOS: pass seed=20260311`, `FUZZ: budget ok`.
+- Hardware Tiers: Tier 1 becomes the release-blocking stress floor; audited
+  Tier 2 stress profiles can promote once seed-stable campaigns stay green.
+- Implications: Stability improves and hidden bugs surface earlier, but CI
+  runtime and flaky-seed management will grow unless campaign sizes stay capped.
+
+### Community, Documentation, and Release Engineering
+
+#### Milestone ID: M82 - Contributor Portal + Governance v1
+
+- Description: Establish a contributor portal, RFC process, ownership policy,
+  moderation workflow, and newcomer path so roadmap execution can scale beyond
+  a small core maintainer group.
+- Dependencies: M31, M74.
+- Contracts/Interfaces: `docs/community/contribution_policy_v1.md`,
+  `docs/community/rfc_process_v1.md`,
+  `docs/community/code_of_conduct_enforcement_v1.md`.
+- Tests/Gates: `make test-docs-governance-v1`;
+  `tests/docs/test_contribution_docs_v1.py`,
+  `tests/docs/test_rfc_process_v1.py`.
+- Hardware Tiers: N/A.
+- Implications: Open-source collaboration becomes tractable, but governance and
+  moderation become explicit maintenance costs rather than implicit side work.
+
+#### Milestone ID: M83 - Localization + Docs Quality Pipeline v1
+
+- Description: Add localization workflow for installer, desktop shell, and core
+  docs, starting with an explicit French-Canadian baseline plus glossary,
+  screenshot regeneration, and docs-lint enforcement.
+- Dependencies: M52, M66-M70, M82.
+- Contracts/Interfaces: `docs/community/localization_policy_v1.md`,
+  `docs/build/docs_release_contract_v1.md`,
+  `docs/desktop/string_catalog_contract_v1.md`.
+- Tests/Gates: `make test-doc-quality-v1`;
+  `tests/docs/test_localization_catalog_v1.py`,
+  `tests/docs/test_docs_release_contract_v1.py`,
+  `tests/desktop/test_string_catalog_consistency_v1.py`.
+- Hardware Tiers: N/A.
+- Implications: Broader adoption and clearer docs follow, especially for Quebec
+  and bilingual users, but translation drift can easily block releases if
+  catalog and screenshot schemas are not enforced automatically.
+
+#### Milestone ID: M84 - Community Release Train + Support Channels v1
+
+- Description: Add a public release calendar, support-channel SLAs, forum/
+  discussion operations, public advisory workflow, and maintainer handoff
+  runbooks so releases become predictable and sustainable.
+- Dependencies: M31, M75-M76, M82-M83.
+- Contracts/Interfaces: `docs/build/community_release_train_v1.md`,
+  `docs/community/support_channel_sla_v1.md`,
+  `docs/security/public_advisory_workflow_v1.md`.
+- Tests/Gates: `make test-release-community-v1`;
+  `tests/build/test_release_calendar_contract_v1.py`,
+  `tests/docs/test_support_sla_docs_v1.py`,
+  `tests/security/test_public_advisory_workflow_v1.py`.
+- Hardware Tiers: N/A.
+- Implications: Predictable releases and community trust improve, but support
+  promises, advisory handling, and public maintenance windows become durable
+  operational commitments.
+
 ## Research references (primary sources)
 
 Compatibility and ABI:
