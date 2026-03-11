@@ -56,7 +56,7 @@ endif
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
-       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
+       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
        run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -841,6 +841,16 @@ test-toolkit-compat-v1:
 	$(PYTHON) tools/run_gui_runtime_v1.py --out $(OUT)/gui-runtime-v1.json
 	$(PYTHON) tools/run_toolkit_compat_v1.py --out $(OUT)/toolkit-compat-v1.json
 	$(PYTHON) -m pytest tests/desktop/test_gui_runtime_docs_v1.py tests/desktop/test_gui_app_launch_render_v1.py tests/desktop/test_font_text_rendering_v1.py tests/desktop/test_toolkit_event_loop_v1.py tests/desktop/test_gui_runtime_negative_v1.py tests/desktop/test_toolkit_compat_gate_v1.py -v --junitxml=$(OUT)/pytest-toolkit-compat-v1.xml
+
+test-desktop-shell-v1:
+	$(PYTHON) tools/run_desktop_shell_workflows_v1.py --out $(OUT)/desktop-shell-v1.json
+	$(SUBMAKE) test-desktop-workflows-v1
+	$(PYTHON) -m pytest tests/desktop/test_desktop_shell_docs_v1.py tests/desktop/test_shell_launcher_workflow_v1.py tests/desktop/test_file_open_save_workflow_v1.py tests/desktop/test_settings_workflow_v1.py tests/build/test_graphical_installer_smoke_v1.py tests/desktop/test_desktop_shell_gate_v1.py -v --junitxml=$(OUT)/pytest-desktop-shell-v1.xml
+
+test-desktop-workflows-v1:
+	$(PYTHON) tools/run_desktop_shell_workflows_v1.py --out $(OUT)/desktop-shell-v1.json
+	$(PYTHON) tools/run_graphical_installer_smoke_v1.py --out $(OUT)/graphical-installer-v1.json
+	$(PYTHON) -m pytest tests/desktop/test_desktop_shell_docs_v1.py tests/desktop/test_shell_launcher_workflow_v1.py tests/desktop/test_file_open_save_workflow_v1.py tests/desktop/test_settings_workflow_v1.py tests/build/test_graphical_installer_smoke_v1.py tests/desktop/test_desktop_workflows_gate_v1.py -v --junitxml=$(OUT)/pytest-desktop-workflows-v1.xml
 
 test-real-ecosystem-desktop-v2:
 	$(PYTHON) tools/run_real_gui_app_matrix_v2.py --out $(OUT)/real-gui-matrix-v2.json

@@ -64,6 +64,10 @@ make test-hw-claim-promotion-v1
 make test-hw-support-tier-audit-v1
 make test-display-runtime-v1
 make test-scanout-path-v1
+make test-gui-runtime-v1
+make test-toolkit-compat-v1
+make test-desktop-shell-v1
+make test-desktop-workflows-v1
 make test-real-ecosystem-desktop-v2
 make test-real-app-catalog-v2
 
@@ -134,7 +138,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M49** Input + Seat Management v1 | n/a | done | Rugo: seat-input-contract-v1 / input-event-contract-v1 / focus-routing-policy-v1 contracts plus deterministic seat runtime and HID event-path artifacts, `make test-input-seat-v1`, `make test-hid-event-path-v1`, CI `Input seat v1 gate` + `HID event path v1 gate`, docs in `docs/desktop/seat_input_contract_v1.md`, `docs/desktop/input_event_contract_v1.md`, `docs/desktop/focus_routing_policy_v1.md`, and `docs/M49_EXECUTION_BACKLOG.md`. |
 | **M50** Window System + Composition v1 | n/a | done | Rugo: surface-lifecycle-contract-v1 / compositor-damage-policy-v1 / window-manager-contract-v2 contracts plus deterministic window runtime and compositor damage artifacts, `make test-window-system-v1`, `make test-compositor-damage-v1`, CI `Window system v1 gate` + `Compositor damage v1 gate`, docs in `docs/desktop/surface_lifecycle_contract_v1.md`, `docs/desktop/compositor_damage_policy_v1.md`, `docs/desktop/window_manager_contract_v2.md`, and `docs/M50_EXECUTION_BACKLOG.md`. |
 | **M51** GUI Runtime + Toolkit Bridge v1 | n/a | done | Rugo: gui-runtime-contract-v1 / toolkit-profile-v1 / font-text-rendering-policy-v1 contracts plus deterministic GUI runtime and toolkit compatibility artifacts, `make test-gui-runtime-v1`, `make test-toolkit-compat-v1`, CI `GUI runtime v1 gate` + `Toolkit compatibility v1 gate`, docs in `docs/desktop/gui_runtime_contract_v1.md`, `docs/desktop/toolkit_profile_v1.md`, `docs/desktop/font_text_rendering_policy_v1.md`, and `docs/M51_EXECUTION_BACKLOG.md`. |
-| **M52** Desktop Shell + Workflow Baseline v1 | n/a | ⬜ | Planned: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md` and `docs/M52_EXECUTION_BACKLOG.md`. |
+| **M52** Desktop Shell + Workflow Baseline v1 | n/a | done | Rugo: desktop-shell-contract-v1 / session-workflow-profile-v1 / graphical-installer-ux-v1 contracts plus deterministic desktop shell and graphical installer workflow artifacts, `make test-desktop-shell-v1`, `make test-desktop-workflows-v1`, CI `Desktop shell v1 gate` + `Desktop workflows v1 gate`, docs in `docs/desktop/desktop_shell_contract_v1.md`, `docs/desktop/session_workflow_profile_v1.md`, `docs/build/graphical_installer_ux_v1.md`, and `docs/M52_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -1120,24 +1124,29 @@ Post-G2 planning and execution:
 - `docs/M48_EXECUTION_BACKLOG.md`
 - `docs/M49_EXECUTION_BACKLOG.md`
 - `docs/M50_EXECUTION_BACKLOG.md`
-- Last completed backlog (M50): `docs/M50_EXECUTION_BACKLOG.md`
-- Next proposed roadmap: `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`
-- Planned backlogs:
+- Last completed backlog (M52): `docs/M52_EXECUTION_BACKLOG.md`
+- Completed roadmap (M48-M52): `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`
+- Completed backlogs:
   - `docs/M51_EXECUTION_BACKLOG.md`
   - `docs/M52_EXECUTION_BACKLOG.md`
-- M35-M39 roadmap execution remains complete, and M40-M50 execution is now
+- M35-M39 roadmap execution remains complete, and M40-M52 execution is now
   complete with M40 evidence-integrity closure, M41 process/readiness closure,
   M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
-  M44 real desktop/ecosystem runtime qualification closure, and M45 modern
-  virtual-platform parity shadow closure, M46 bare-metal I/O closure, and M47
-  hardware claim promotion closure, M48 display runtime closure, and M49 input
-  seat runtime closure, and M50 window system and compositor closure.
+  M44 real desktop/ecosystem runtime qualification closure, M45 modern
+  virtual-platform parity shadow closure, M46 bare-metal I/O closure, M47
+  hardware claim promotion closure, M48 display runtime closure, M49 input
+  seat runtime closure, M50 window system and compositor closure, M51 GUI
+  runtime and toolkit bridge closure, and M52 desktop shell and workflow
+  baseline closure.
 - Latest completed hardware expansion phase is M45-M47:
   - M45 modern virtual-platform parity (done),
   - M46 bare-metal I/O baseline (done),
   - M47 hardware claim promotion program (done).
-- Next proposed GUI implementation phase is M51-M52:
-  - M51 GUI runtime + toolkit bridge,
-  - M52 desktop shell + workflow baseline.
+- Latest completed GUI implementation phase is M48-M52:
+  - M48 display runtime + scanout (done),
+  - M49 input + seat management (done),
+  - M50 window system + composition (done),
+  - M51 GUI runtime + toolkit bridge (done),
+  - M52 desktop shell + workflow baseline (done).
 
 

@@ -968,6 +968,34 @@ jobs:
             out/gui-runtime-v1.json
             out/toolkit-compat-v1.json
 
+      - name: Desktop shell v1 gate
+        run: |
+          make test-desktop-shell-v1
+
+      - name: Upload desktop shell v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-shell-v1-artifacts
+          path: |
+            out/pytest-desktop-shell-v1.xml
+            out/desktop-shell-v1.json
+            out/graphical-installer-v1.json
+
+      - name: Desktop workflows v1 gate
+        run: |
+          make test-desktop-workflows-v1
+
+      - name: Upload desktop workflows v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-workflows-v1-artifacts
+          path: |
+            out/pytest-desktop-workflows-v1.xml
+            out/desktop-shell-v1.json
+            out/graphical-installer-v1.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2

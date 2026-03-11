@@ -92,20 +92,20 @@ Source of truth: [MILESTONES.md](MILESTONES.md)
 | Lane | Kernel milestones | Go milestones |
 |------|-------------------|---------------|
 | Legacy (`legacy/`) | M0-M7: done | G0: done |
-| Rugo (repo root) | M0-M51: done; M52: planned | G1: done, G2: done |
+| Rugo (repo root) | M0-M52: done | G1: done, G2: done |
 
 Historical checkpoints retained for closure tests: `M0-M43: done`. `M0-M44: done`.
 
 Latest completed hardware expansion phase: `M45-M47`.
-Latest completed GUI milestone: `M51`.
-Next planned GUI milestone: `M52`.
+Latest completed GUI milestone: `M52`.
+Next planned GUI milestone: none declared.
 
 Tiny visual summary:
 
 ```text
 Legacy: [M0 M1 M2 M3 M4 M5 M6 M7] [G0] complete
-Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35 M36 M37 M38 M39 M40 M41 M42 M43 M44 M45 M46 M47 M48 M49 M50 M51] [G1] complete  [G2] complete
-Next:   [M52] planned GUI implementation phase
+Rugo:   [M0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30 M31 M32 M33 M34 M35 M36 M37 M38 M39 M40 M41 M42 M43 M44 M45 M46 M47 M48 M49 M50 M51 M52] [G1] complete  [G2] complete
+Next:   [GUI shell baseline complete]
 ```
 
 ## Post-G2 roadmap
@@ -114,7 +114,7 @@ Next:   [M52] planned GUI implementation phase
 - Completed roadmap (M35-M39): [docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md](docs/M35_M39_GENERAL_PURPOSE_EXPANSION_ROADMAP.md)
 - Completed roadmap (M40-M44): [docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md](docs/M40_M44_GENERAL_PURPOSE_PARITY_ROADMAP.md)
 - Completed roadmap (M45-M47): [docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md](docs/M45_M47_HARDWARE_EXPANSION_ROADMAP.md)
-- Proposed roadmap (M48-M52): [docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md](docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md)
+- Completed roadmap (M48-M52): [docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md](docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md)
 - M8 execution backlog (completed): `docs/M8_EXECUTION_BACKLOG.md`
 - M9 execution backlog (completed): `docs/M9_EXECUTION_BACKLOG.md`
 - M10 execution backlog (completed): `docs/M10_EXECUTION_BACKLOG.md`
@@ -159,7 +159,7 @@ Next:   [M52] planned GUI implementation phase
 - M49 execution backlog (completed): `docs/M49_EXECUTION_BACKLOG.md`
 - M50 execution backlog (completed): `docs/M50_EXECUTION_BACKLOG.md`
 - M51 execution backlog (completed): `docs/M51_EXECUTION_BACKLOG.md`
-- M52 execution backlog (planned): `docs/M52_EXECUTION_BACKLOG.md`
+- M52 execution backlog (completed): `docs/M52_EXECUTION_BACKLOG.md`
 - Hardware support matrix v1: [docs/hw/support_matrix_v1.md](docs/hw/support_matrix_v1.md)
 - Security baseline docs: [docs/security/rights_capability_model_v1.md](docs/security/rights_capability_model_v1.md)
 - Compatibility profile v1 contract: [docs/abi/compat_profile_v1.md](docs/abi/compat_profile_v1.md)
@@ -251,6 +251,10 @@ make test-input-seat-v1
 make test-hid-event-path-v1
 make test-window-system-v1
 make test-compositor-damage-v1
+make test-gui-runtime-v1
+make test-toolkit-compat-v1
+make test-desktop-shell-v1
+make test-desktop-workflows-v1
 make test-real-ecosystem-desktop-v2
 make test-real-app-catalog-v2
 

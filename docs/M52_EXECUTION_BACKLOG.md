@@ -2,7 +2,7 @@
 
 Date: 2026-03-11  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: proposed
+Status: done
 
 ## Goal
 
@@ -15,11 +15,12 @@ M52 source of truth remains `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`,
 
 ## Current State Summary
 
-- Installer/recovery UX and desktop profile docs already exist.
-- The repo does not yet provide an in-tree graphical shell or daily-use
-  graphical workflows.
-- A real GUI phase is only complete once users can reach and operate a bounded
-  desktop workflow path rather than just pass lower-layer runtime tests.
+- Desktop shell, session workflow, and graphical installer boundaries are now
+  explicit and versioned.
+- Deterministic shell workflow and graphical installer smoke tooling now
+  produce machine-readable artifacts.
+- The bounded graphical shell path is now wired into local and CI release
+  gates.
 
 ## Execution plan
 
@@ -29,9 +30,9 @@ M52 source of truth remains `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`,
 
 ## Execution Result
 
-- PR-1: not started
-- PR-2: not started
-- PR-3: not started
+- PR-1: complete (2026-03-11)
+- PR-2: complete (2026-03-11)
+- PR-3: complete (2026-03-11)
 
 ## PR-1: Shell/Workflow Contract Freeze
 
@@ -64,6 +65,15 @@ for the first usable desktop path.
 
 - Shell and workflow boundaries are explicit and versioned.
 - First-use and installer expectations are reviewable before implementation.
+
+### PR-1 completion summary
+
+- Added contract docs:
+  - `docs/desktop/desktop_shell_contract_v1.md`
+  - `docs/desktop/session_workflow_profile_v1.md`
+  - `docs/build/graphical_installer_ux_v1.md`
+- Added executable doc checks:
+  - `tests/desktop/test_desktop_shell_docs_v1.py`
 
 ## PR-2: Shell Runtime + Workflow Campaigns
 
@@ -102,6 +112,17 @@ artifacts for declared daily-use flows.
 
 - Shell and workflow artifacts are deterministic and machine-readable.
 - Declared user workflows execute through a live graphical shell path.
+
+### PR-2 completion summary
+
+- Added deterministic shell and installer tooling:
+  - `tools/run_desktop_shell_workflows_v1.py`
+  - `tools/run_graphical_installer_smoke_v1.py`
+- Added executable workflow checks:
+  - `tests/desktop/test_shell_launcher_workflow_v1.py`
+  - `tests/desktop/test_file_open_save_workflow_v1.py`
+  - `tests/desktop/test_settings_workflow_v1.py`
+  - `tests/build/test_graphical_installer_smoke_v1.py`
 
 ## PR-3: Desktop Shell Gate + Workflow Sub-gate
 
@@ -142,6 +163,19 @@ stack is in place.
 - The bounded graphical shell path is release-blocking in local and CI lanes.
 - Real desktop workflows, not just lower-layer runtime checks, determine GUI
   readiness for the declared profile.
+
+### PR-3 completion summary
+
+- Added local gates:
+  - `make test-desktop-shell-v1`
+  - `make test-desktop-workflows-v1`
+- Added aggregate gate tests:
+  - `tests/desktop/test_desktop_shell_gate_v1.py`
+  - `tests/desktop/test_desktop_workflows_gate_v1.py`
+- Updated repo-level closure documents:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
 
 ## Non-goals for M52 backlog
 

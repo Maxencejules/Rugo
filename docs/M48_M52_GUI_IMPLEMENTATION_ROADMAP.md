@@ -2,7 +2,7 @@
 
 Date: 2026-03-11  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: Proposed
+Status: completed
 
 ## Why this document exists
 
