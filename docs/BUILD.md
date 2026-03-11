@@ -17,7 +17,7 @@
 ## Building
 
 ```bash
-make demo-go        # recommended: Rust kernel + TinyGo user-space demo
+make demo-go        # recommended: Rust kernel + Go bootstrap demo
 make run-kernel     # kernel-only boot path
 make build          # compile kernel ELF
 make image          # build kernel-only ISO (no network required)
@@ -30,6 +30,7 @@ make repro-check    # deterministic ISO gate (build twice + SHA256 compare)
 
 Default runtime story:
 - `make demo-go` is the recommended front-door demo for the hybrid OS
+  It boots `goinit -> gosvcm -> gosh -> timesvc` on the TinyGo lane.
 - `make run-kernel` is the kernel-only lane
 - `make image-go-std` is experimental and should not be treated as the default
   user-space path

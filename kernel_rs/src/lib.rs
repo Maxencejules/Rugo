@@ -31,7 +31,7 @@ macro_rules! cfg_user {
 macro_rules! cfg_r4 {
     ($($item:item)*) => {
         $(
-            #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
+            #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "go_test"))]
             $item
         )*
     };
@@ -648,14 +648,14 @@ unsafe fn m3_return_to_kernel_halt(frame: *mut u64) {
 
 unsafe fn handle_user_fault(frame: *mut u64) {
     // R4: kill current task and switch to next
-    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
+    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "go_test"))]
     {
         r4_kill_and_switch(frame);
         return;
     }
 
     // M3: kill user task and return to kernel
-    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
+    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "go_test")))]
     {
         serial_write(b"USER: killed\n");
         m3_return_to_kernel_halt(frame);
@@ -694,7 +694,7 @@ unsafe fn syscall_dispatch(frame: *mut u64) {
     }
 
     // R4 dispatch
-    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test"))]
+    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "go_test"))]
     {
         if nr == 98 {
             qemu_exit(arg1 as u8);
@@ -720,7 +720,7 @@ unsafe fn syscall_dispatch(frame: *mut u64) {
     }
 
     // M3 dispatch
-    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
+    #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "go_test")))]
     {
         #[cfg(any(feature = "user_hello_test", feature = "syscall_test", feature = "thread_exit_test", feature = "thread_spawn_test", feature = "vm_map_test", feature = "syscall_invalid_test", feature = "stress_syscall_test", feature = "yield_test", feature = "user_fault_test", feature = "blk_test", feature = "fs_test", feature = "go_test", feature = "go_std_test", feature = "sec_rights_test", feature = "sec_filter_test"))]
         {
@@ -2021,24 +2021,24 @@ static SEC_FILTER_BIN: &[u8] = include_bytes!("../../out/sec-filter.bin");
 cfg_r4! {
     const USER_CODE2_VA: u64   = 0x40_1000;
     const USER_STACK2_TOP: u64 = 0x7F_F000;
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     const USER_CODE3_VA: u64   = 0x40_2000;
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     const USER_STACK3_TOP: u64 = 0x7F_E000;
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     const USER_CODE4_VA: u64   = 0x40_3000;
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     const USER_STACK4_TOP: u64 = 0x7F_D000;
 
     static mut USER_CODE_PAGE_2:  Page = Page([0; 4096]);
     static mut USER_STACK_PAGE_2: Page = Page([0; 4096]);
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     static mut USER_CODE_PAGE_3:  Page = Page([0; 4096]);
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     static mut USER_STACK_PAGE_3: Page = Page([0; 4096]);
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     static mut USER_CODE_PAGE_4:  Page = Page([0; 4096]);
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     static mut USER_STACK_PAGE_4: Page = Page([0; 4096]);
 }
 
@@ -2074,9 +2074,9 @@ cfg_r4! {
     const MAX_THREADS_PER_PROC: usize = 16;
     const MAX_THREADS_GLOBAL: usize = 64;
 
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     const R4_MAX_TASKS: usize = 4;
-    #[cfg(not(feature = "stress_ipc_test"))]
+    #[cfg(not(any(feature = "stress_ipc_test", feature = "go_test")))]
     const R4_MAX_TASKS: usize = 2;
 
     #[derive(Clone, Copy, PartialEq)]
@@ -2109,6 +2109,11 @@ cfg_r4! {
     static mut R4_CURRENT: usize = 0;
     static mut R4_NUM_TASKS: usize = 0;
     static mut R4_THREADS_CREATED: usize = 0;
+
+    #[inline(always)]
+    unsafe fn r4_stack_top_for_slot(slot: usize) -> u64 {
+        USER_STACK_TOP - (slot as u64) * 0x1000
+    }
 
     unsafe fn r4_init_task(tid: usize, code_va: u64, stk_top: u64) {
         R4_TASKS[tid].saved_frame = [0u64; 22];
@@ -2183,6 +2188,8 @@ cfg_r4! {
     extern "C" fn r4_all_done() -> ! {
         #[cfg(feature = "stress_ipc_test")]
         serial_write(b"STRESS: ipc ok");
+        #[cfg(feature = "go_test")]
+        serial_write(b"RUGO: halt ok\n");
         qemu_exit(0x31);
         loop { unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)); } }
     }
@@ -2202,7 +2209,26 @@ cfg_r4! {
             R4_THREADS_CREATED += 1;
             return tid;
         }
-        #[cfg(not(feature = "quota_threads_test"))]
+        #[cfg(all(feature = "go_test", not(feature = "quota_threads_test")))]
+        {
+            if entry >= 0x0000_8000_0000_0000 {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            if !user_pages_ok(entry, 1, USER_PERM_READ) {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            if R4_NUM_TASKS >= R4_MAX_TASKS {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+
+            let tid = R4_NUM_TASKS;
+            r4_init_task(tid, entry, r4_stack_top_for_slot(tid));
+            R4_TASKS[tid].state = R4State::Ready;
+            R4_NUM_TASKS += 1;
+            R4_THREADS_CREATED += 1;
+            tid as u64
+        }
+        #[cfg(all(not(feature = "quota_threads_test"), not(feature = "go_test")))]
         {
             let _ = entry;
             0xFFFF_FFFF_FFFF_FFFF
@@ -2237,7 +2263,7 @@ cfg_r4! {
         [IpcEndpoint::EMPTY; R4_MAX_ENDPOINTS];
 
     unsafe fn sys_ipc_endpoint_create_r4() -> u64 {
-        #[cfg(feature = "quota_endpoints_test")]
+        #[cfg(any(feature = "quota_endpoints_test", feature = "go_test"))]
         {
             if R4_TASKS[R4_CURRENT].endpoint_count >= MAX_ENDPOINTS_PER_PROC {
                 return 0xFFFF_FFFF_FFFF_FFFF;
@@ -2254,7 +2280,7 @@ cfg_r4! {
             }
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
-        #[cfg(not(feature = "quota_endpoints_test"))]
+        #[cfg(all(not(feature = "quota_endpoints_test"), not(feature = "go_test")))]
         {
             0xFFFF_FFFF_FFFF_FFFF
         }
@@ -2578,9 +2604,10 @@ cfg_r4! {
 
         // PT_CODE[0] = task 0 code page at 0x400000 (RX User)
         // PT_CODE[1] = task 1 code page at 0x401000 (RX User)
+        let code_flags = if cfg!(feature = "go_test") { 0x07 } else { 0x05 };
         let pt_code = USER_PT_CODE.0.as_mut_ptr() as *mut u64;
-        *pt_code.add(0) = kv2p(USER_CODE_PAGE.0.as_ptr() as u64) | 0x05;
-        *pt_code.add(1) = kv2p(USER_CODE_PAGE_2.0.as_ptr() as u64) | 0x05;
+        *pt_code.add(0) = kv2p(USER_CODE_PAGE.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(1) = kv2p(USER_CODE_PAGE_2.0.as_ptr() as u64) | code_flags;
 
         // PT_STACK[511] = task 0 stack page at 0x7FF000 (RW User)
         // PT_STACK[510] = task 1 stack page at 0x7FE000 (RW User)
@@ -2602,7 +2629,7 @@ cfg_r4! {
         core::arch::asm!("mov cr3, {}", in(reg) new_pml4_phys, options(nostack));
     }
 
-    #[cfg(feature = "stress_ipc_test")]
+    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
     unsafe fn setup_r4_pages4(blob0: &[u8], blob1: &[u8], blob2: &[u8], blob3: &[u8]) {
         let hhdm_resp_ptr = core::ptr::read_volatile(
             core::ptr::addr_of!(HHDM_REQUEST.response));
@@ -2627,11 +2654,12 @@ cfg_r4! {
         *pd.add(2) = kv2p(USER_PT_CODE.0.as_ptr() as u64) | 0x07;
         *pd.add(3) = kv2p(USER_PT_STACK.0.as_ptr() as u64) | 0x07;
 
+        let code_flags = if cfg!(feature = "go_test") { 0x07 } else { 0x05 };
         let pt_code = USER_PT_CODE.0.as_mut_ptr() as *mut u64;
-        *pt_code.add(0) = kv2p(USER_CODE_PAGE.0.as_ptr() as u64) | 0x05;
-        *pt_code.add(1) = kv2p(USER_CODE_PAGE_2.0.as_ptr() as u64) | 0x05;
-        *pt_code.add(2) = kv2p(USER_CODE_PAGE_3.0.as_ptr() as u64) | 0x05;
-        *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | 0x05;
+        *pt_code.add(0) = kv2p(USER_CODE_PAGE.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(1) = kv2p(USER_CODE_PAGE_2.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(2) = kv2p(USER_CODE_PAGE_3.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | code_flags;
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
         *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
@@ -5267,7 +5295,11 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
-        setup_user_pages(GO_USER_BIN);
+        setup_r4_pages4(GO_USER_BIN, GO_USER_BIN, GO_USER_BIN, GO_USER_BIN);
+        R4_NUM_TASKS = 1;
+        r4_init_task(0, USER_CODE_VA, USER_STACK_TOP);
+        R4_TASKS[0].state = R4State::Running;
+        R4_CURRENT = 0;
         enter_ring3_at(USER_CODE_VA, USER_STACK_TOP);
     }
 

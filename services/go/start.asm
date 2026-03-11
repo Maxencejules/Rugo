@@ -1,70 +1,106 @@
-; Rugo x86_64 user-space startup + syscall wrappers + runtime stubs
-; NASM elf64 — assembled separately, linked via TinyGo ldflags.
-; Kernel loads code at VA 0x400000 (RWX); RSP pre-set by iretq.
+; Rugo x86_64 user-space startup + syscall wrappers + runtime stubs.
+; Built as TinyGo bare-metal glue for the canonical Go userspace lane.
 
 bits 64
 default rel
 
-; ---------- Entry point ----------
 section .text._start
 global _start
 extern main
 _start:
-    call main            ; TinyGo runtime.main (C symbol "main")
-    hlt                  ; GPF in ring 3 -> kernel catches, exits QEMU
-    jmp _start
-
-; ---------- Syscall wrappers ----------
-; TinyGo C ABI (System V AMD64): rdi, rsi, rdx, rcx, r8, r9.
-; Rugo syscall: rax=nr, rdi=a1, rsi=a2, rdx=a3;  int 0x80.
+    call main
+    jmp main.haltForever
 
 section .text
+extern goSpawnedThreadMain
+
 global main.sysDebugWrite
 main.sysDebugWrite:
-    ; rdi=buf, rsi=n -> rax=written
     xor  eax, eax
+    int  0x80
+    ret
+
+global main.sysThreadSpawn
+main.sysThreadSpawn:
+    mov  eax, 1
+    int  0x80
+    ret
+
+global main.sysThreadExit
+main.sysThreadExit:
+    mov  eax, 2
+    int  0x80
+    ret
+
+global main.sysYield
+main.sysYield:
+    mov  eax, 3
     int  0x80
     ret
 
 global main.sysIpcSend
 main.sysIpcSend:
-    ; rdi=ep, rsi=buf, rdx=n -> rax
     mov  eax, 8
     int  0x80
     ret
 
 global main.sysIpcRecv
 main.sysIpcRecv:
-    ; rdi=ep, rsi=buf, rdx=cap -> rax
     mov  eax, 9
+    int  0x80
+    ret
+
+global main.sysTimeNow
+main.sysTimeNow:
+    mov  eax, 10
+    int  0x80
+    ret
+
+global main.sysSvcRegister
+main.sysSvcRegister:
+    mov  eax, 11
     int  0x80
     ret
 
 global main.sysSvcLookup
 main.sysSvcLookup:
-    ; rdi=name, rsi=len -> rax=endpoint
     mov  eax, 12
     int  0x80
     ret
 
-; ---------- Runtime stubs ----------
+global main.sysIpcEndpointCreate
+main.sysIpcEndpointCreate:
+    mov  eax, 17
+    int  0x80
+    ret
+
+global main.sysSpawnEntry
+main.sysSpawnEntry:
+    lea  rax, [rel go_spawn_entry]
+    ret
+
+go_spawn_entry:
+    call goSpawnedThreadMain
+    mov  eax, 2
+    int  0x80
+    jmp main.haltForever
+
+global main.haltForever
+main.haltForever:
+    hlt
+    jmp  main.haltForever
 
 global runtime.alloc
 runtime.alloc:
-    ; Bump allocator using stack page (0x7FF000, mapped RW).
-    ; Heap pointer stored at 0x7FF000; data starts at 0x7FF008.
-    ; Stack grows down from 0x800000 — no collision for small allocs.
-    ; rdi = size -> rax = pointer
     mov  rax, qword [0x7FF000]
     test rax, rax
     jnz  .has_ptr
     mov  rax, 0x7FF008
 .has_ptr:
-    mov  rcx, rax
     add  rdi, 7
-    and  rdi, ~7                 ; align size up to 8 bytes
+    and  rdi, ~7
     lea  rdx, [rax + rdi]
-    mov  qword [0x7FF000], rdx   ; save next free
+    mov  qword [0x7FF000], rdx
     ret
 
 global getrandom
@@ -76,7 +112,6 @@ global tinygo_register_fatal_signals
 tinygo_register_fatal_signals:
     ret
 
-; ---------- C library stubs ----------
 global memset
 memset:
     push rdi
@@ -120,15 +155,12 @@ write:
 
 global abort
 abort:
-    hlt
-    jmp abort
+    jmp  main.haltForever
 
 global exit
 exit:
-    hlt
-    jmp exit
+    jmp  main.haltForever
 
 global _exit
 _exit:
-    hlt
-    jmp _exit
+    jmp  main.haltForever

@@ -22,7 +22,7 @@ Architecture and repo strategy:
 ## Quick Start
 
 ```bash
-make demo-go      # recommended: Rust kernel + TinyGo user-space demo (GOUSR: ok)
+make demo-go      # recommended: Rust kernel + Go bootstrap (goinit -> gosvcm -> gosh -> timesvc)
 make run-kernel   # kernel-only boot path
 make run          # compatibility alias for make run-kernel
 make validate     # compatibility alias for make test-qemu
@@ -85,7 +85,8 @@ the detailed validation ledger that CI gates still reference, see
 
 - Recommended demo path: `make demo-go`
   This is the clearest expression of the intended product direction: a Rust
-  kernel booting a Go user-space payload.
+  kernel booting a Go init task, a Go service manager, a Go shell, and a
+  syscall-backed Go service.
 - Kernel-only smoke path: `make run-kernel`
   Useful when working on boot, paging, traps, or scheduler mechanics.
 - Full acceptance suite: `make test-qemu`

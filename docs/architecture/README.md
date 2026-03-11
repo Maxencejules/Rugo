@@ -14,7 +14,7 @@ Rugo is a hybrid OS with a strict language split:
 | Bucket | Current paths | Notes |
 |--------|---------------|-------|
 | Core runtime | `arch/`, `boot/`, `kernel_rs/` | This is the actual kernel lane, even though it is split across multiple top-level directories. |
-| Userspace runtime | `services/go/` | Current TinyGo demo and syscall-bridge lane. |
+| Userspace runtime | `services/go/` | Canonical TinyGo bootstrap lane: Go init, service manager, shell, and syscall-backed service. |
 | Tooling and support | `tools/`, `.github/`, `vendor/`, `Makefile`, `Dockerfile` | Important, but not the product identity. |
 | Validation | `tests/` | QEMU and artifact gate suite. Extensive, but secondary to the runtime. |
 | Legacy and archive | `legacy/`, historical backlog docs | Useful for reference and closure history, not the active product story. |
@@ -31,5 +31,6 @@ Rugo is a hybrid OS with a strict language split:
 ## Related Docs
 
 - repo strategy: [repo-strategy.md](repo-strategy.md)
+- Go userspace bootstrap: [go_userspace_bootstrap_v1.md](go_userspace_bootstrap_v1.md)
 - roadmap summary: [../roadmap/README.md](../roadmap/README.md)
 - historical archive index: [../archive/README.md](../archive/README.md)
