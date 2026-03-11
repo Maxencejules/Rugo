@@ -22,10 +22,13 @@ Architecture and repo strategy:
 ## Quick Start
 
 ```bash
-make demo-go      # recommended: Rust kernel + Go bootstrap (goinit -> gosvcm -> gosh -> timesvc)
-make run-kernel   # kernel-only boot path
-make run          # compatibility alias for make run-kernel
-make validate     # compatibility alias for make test-qemu
+make help         # show the primary developer workflows
+make kernel       # build the Rust kernel ELF
+make userspace    # build the default TinyGo userspace payload
+make image-demo   # build the default demo ISO
+make boot-demo    # boot the default demo ISO in QEMU
+make smoke-demo   # boot + verify demo serial markers without Python
+make gate-all     # full pytest-backed acceptance suite
 make image-go-std # experimental stock-Go port image
 ```
 
@@ -83,16 +86,22 @@ the detailed validation ledger that CI gates still reference, see
 
 ## Demo And Validation Paths
 
-- Recommended demo path: `make demo-go`
+- Recommended demo path: `make image-demo` then `make boot-demo`
   This is the clearest expression of the intended product direction: a Rust
   kernel booting a Go init task, a Go service manager, a Go shell, and a
   syscall-backed Go service.
-- Kernel-only smoke path: `make run-kernel`
+- Non-Python demo smoke: `make smoke-demo`
+  Verifies the canonical demo serial markers without going through pytest.
+- Kernel-only smoke path: `make image-kernel` then `make boot-kernel`
   Useful when working on boot, paging, traps, or scheduler mechanics.
-- Full acceptance suite: `make test-qemu`
-  Builds all current QEMU images, including TinyGo and stock-Go lanes.
+- Full acceptance suite: `make gate-all`
+  This preserves the historical pytest-backed acceptance path and builds all
+  current QEMU images, including TinyGo and stock-Go lanes.
 - Stock-Go experiment: `make image-go-std`
   This remains an experimental porting lane, not the default repo story.
+
+Compatibility aliases remain available: `make build`, `make image`,
+`make run-kernel`, `make demo-go`, `make validate`, and `make test-qemu`.
 
 ## Detailed Docs
 

@@ -57,6 +57,7 @@ endif
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
        test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
+       help kernel kernel-only kernel-demo userspace userspace-go userspace-std image-kernel image-demo image-std boot-kernel boot-demo boot-std smoke-kernel smoke-demo gate-all \
        run run-kernel demo demo-go validate test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -93,6 +94,10 @@ LDFLAGS   = -nostdlib -static -T boot/linker.ld
 
 # Output
 OUT = out
+GO_USER_BIN = $(OUT)/gousr.bin
+GO_STD_BIN = $(OUT)/gostd.bin
+FS_TEST_IMG = $(OUT)/fs-test.img
+FS_BADMAGIC_IMG = $(OUT)/fs-badmagic.img
 
 # Rust kernel staticlib
 CARGO_TARGET = x86_64-unknown-none
@@ -106,6 +111,18 @@ build: $(ASM_OBJS) boot/linker.ld
 
 $(OUT):
 	mkdir -p $(OUT)
+
+$(GO_USER_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/linker.ld services/go/go.mod | $(OUT)
+	bash tools/build_go.sh
+
+$(GO_STD_BIN): tools/build_go_std_spike.sh tools/gostd_stock_builder/main.go services/go_std/main.go services/go_std/go.mod services/go_std/linker.ld services/go_std/start.asm services/go_std/rt0.asm services/go_std/runtime_stubs.asm services/go_std/syscalls.asm | $(OUT)
+	bash tools/build_go_std_spike.sh
+
+$(FS_TEST_IMG): tools/mkfs.py | $(OUT)
+	$(PYTHON) tools/mkfs.py $(FS_TEST_IMG)
+
+$(FS_BADMAGIC_IMG): tools/mkfs.py | $(OUT)
+	$(PYTHON) tools/mkfs.py $(FS_BADMAGIC_IMG) --corrupt-superblock-magic
 
 # Assembly objects
 ASM_OBJS = $(OUT)/entry.o $(OUT)/isr.o $(OUT)/context.o
@@ -451,7 +468,7 @@ build-fs: $(ASM_OBJS) boot/linker.ld
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-fs.elf $(ASM_OBJS) $(KERNEL_LIB)
 
 image-fs: build-fs
-	$(PYTHON) tools/mkfs.py $(OUT)/fs-test.img
+	$(SUBMAKE) $(FS_TEST_IMG)
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-fs.elf ISO_NAME=os-fs.iso bash tools/mkimage.sh
 
 build-fs-badmagic: $(ASM_OBJS) boot/linker.ld
@@ -459,7 +476,7 @@ build-fs-badmagic: $(ASM_OBJS) boot/linker.ld
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-fs-badmagic.elf $(ASM_OBJS) $(KERNEL_LIB)
 
 image-fs-badmagic: build-fs-badmagic
-	$(PYTHON) tools/mkfs.py $(OUT)/fs-badmagic.img --corrupt-superblock-magic
+	$(SUBMAKE) $(FS_BADMAGIC_IMG)
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-fs-badmagic.elf ISO_NAME=os-fs-badmagic.iso bash tools/mkimage.sh
 
 build-pkg-hash: $(ASM_OBJS) boot/linker.ld
@@ -467,7 +484,7 @@ build-pkg-hash: $(ASM_OBJS) boot/linker.ld
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-pkg-hash.elf $(ASM_OBJS) $(KERNEL_LIB)
 
 image-pkg-hash: build-pkg-hash
-	$(PYTHON) tools/mkfs.py $(OUT)/fs-test.img
+	$(SUBMAKE) $(FS_TEST_IMG)
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-pkg-hash.elf ISO_NAME=os-pkg-hash.iso bash tools/mkimage.sh
 
 # --- M7: VirtIO net test kernel -----------------------------------------------
@@ -481,8 +498,11 @@ image-net: build-net
 
 # --- G1: TinyGo user-space test kernel ----------------------------------------
 
-build-go: $(ASM_OBJS) boot/linker.ld
-	bash tools/build_go.sh
+userspace-go: $(GO_USER_BIN)
+
+userspace: userspace-go
+
+build-go: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN)
 	cd kernel_rs && $(CARGO) build --release --features go_test
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go.elf $(ASM_OBJS) $(KERNEL_LIB)
 
@@ -491,8 +511,9 @@ image-go: build-go
 
 # --- G2 spike: Go std-port candidate kernel -----------------------------------
 
-build-go-std: $(ASM_OBJS) boot/linker.ld
-	bash tools/build_go_std_spike.sh
+userspace-std: $(GO_STD_BIN)
+
+build-go-std: $(ASM_OBJS) boot/linker.ld $(GO_STD_BIN)
 	cd kernel_rs && $(CARGO) build --release --features go_std_test
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go-std.elf $(ASM_OBJS) $(KERNEL_LIB)
 
@@ -519,17 +540,55 @@ build-sec-filter: $(ASM_OBJS) boot/linker.ld
 image-sec-filter: build-sec-filter
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-sec-filter.elf ISO_NAME=os-sec-filter.iso bash tools/mkimage.sh
 
-run-kernel: image
+kernel: build
+
+kernel-only: build
+
+kernel-demo: build-go
+
+image-kernel: image
+
+image-demo: image-go
+
+image-std: image-go-std
+
+boot-kernel: image-kernel
 	./tools/run_qemu.sh --iso $(OUT)/os.iso
+
+run-kernel: boot-kernel
 
 run: run-kernel
 
-demo-go: image-go
+boot-demo: image-demo
 	./tools/run_qemu.sh --iso $(OUT)/os-go.iso
+
+demo-go: boot-demo
+
+boot-std: image-std
+	./tools/run_qemu.sh --iso $(OUT)/os-go-std.iso
 
 demo: demo-go
 
-validate: test-qemu
+smoke-kernel: image-kernel
+	bash tools/smoke_boot.sh --iso $(OUT)/os.iso \
+		--label kernel \
+		--expect "RUGO: boot ok" \
+		--expect "RUGO: halt ok"
+
+smoke-demo: image-demo
+	bash tools/smoke_boot.sh --iso $(OUT)/os-go.iso \
+		--label demo \
+		--expect "RUGO: boot ok" \
+		--expect "GOINIT: start" \
+		--expect "GOSVCM: start" \
+		--expect "TIMESVC: ready" \
+		--expect "GOSH: start" \
+		--expect "GOINIT: ready" \
+		--expect "RUGO: halt ok"
+
+gate-all: test-qemu
+
+validate: gate-all
 
 test-qemu: image image-panic image-pf image-idt image-sched image-user-hello image-syscall image-thread-exit image-thread-spawn image-vm-map image-syscall-invalid image-stress-syscall image-stress-ipc image-stress-blk image-pressure-shm image-yield image-user-fault image-ipc image-ipc-badptr-send image-ipc-badptr-recv image-svc-badptr image-ipc-buffer-full image-ipc-waiter-busy image-ipc-svc-overwrite image-svc-full image-svc-bad-endpoint image-shm image-quota-endpoints image-quota-shm image-quota-threads image-blk image-blk-badlen image-blk-badptr image-blk-invariants image-blk-init-fail image-fs image-fs-badmagic image-pkg-hash image-net image-go image-go-std
 	$(PYTHON) -m pytest tests/ -v
@@ -889,6 +948,22 @@ repro-check:
 clean:
 	rm -rf $(OUT)
 	cd kernel_rs && $(CARGO) clean 2>/dev/null || true
+
+help:
+	@printf '%s\n' \
+		'Primary workflows:' \
+		'  make kernel       - build the Rust kernel ELF' \
+		'  make userspace    - build the default TinyGo userspace payload' \
+		'  make image-demo   - build the default demo ISO (Rust kernel + Go userspace)' \
+		'  make boot-demo    - boot the default demo ISO in QEMU' \
+		'  make smoke-demo   - boot the demo ISO and verify serial markers without Python' \
+		'  make image-kernel - build the kernel-only ISO' \
+		'  make boot-kernel  - boot the kernel-only ISO in QEMU' \
+		'  make smoke-kernel - boot the kernel-only ISO and verify serial markers without Python' \
+		'  make gate-all     - run the historical full pytest-backed acceptance suite' \
+		'' \
+		'Compatibility aliases:' \
+		'  make build, make image, make run-kernel, make demo-go, make validate, make test-qemu'
 
 # --- Legacy C kernel ----------------------------------------------------------
 

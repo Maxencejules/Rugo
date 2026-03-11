@@ -57,10 +57,13 @@ jobs:
         run: cd vendor/limine && sha256sum -c SHA256SUMS
 
       - name: Build kernel
-        run: make build
+        run: make kernel
+
+      - name: Build demo userspace
+        run: make userspace
 
       - name: Create bootable ISO (offline — no git clone)
-        run: make image
+        run: make image-kernel
         env:
           GIT_TERMINAL_PROMPT: "0"
 
@@ -68,7 +71,7 @@ jobs:
         run: make repro-check
 
       - name: QEMU smoke tests
-        run: make test-qemu
+        run: make gate-all
 
       - name: Compatibility profile v1 gate
         env:

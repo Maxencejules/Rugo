@@ -10,40 +10,53 @@
 | xorriso | any recent | ISO image creation |
 | cc (gcc/clang) | C99-capable | Build vendored Limine CLI |
 | qemu-system-x86_64 | any recent | Smoke tests |
-| python3 + pytest | 3.x | Test harness |
 | tinygo | 0.40.1 | Go user-space binary (G1 milestone) |
 | go | 1.25.3 | Required by TinyGo |
+| python3 + pytest | 3.x | Historical validation gates and support tooling |
+
+`python3 + pytest` are not required for the primary developer flow
+(`make kernel`, `make userspace`, `make image-demo`, `make boot-demo`,
+`make smoke-demo`). They remain required for the full gate suite
+(`make gate-all`) and the historical `test-*` targets.
 
 ## Building
 
 ```bash
-make demo-go        # recommended: Rust kernel + Go bootstrap demo
-make run-kernel     # kernel-only boot path
-make build          # compile kernel ELF
-make image          # build kernel-only ISO (no network required)
-make image-go       # build TinyGo user-space ISO (os-go.iso)
+make help           # show the primary developer workflows
+make kernel         # compile the kernel ELF
+make userspace      # build the default TinyGo userspace payload
+make image-demo     # build the default demo ISO (os-go.iso)
+make boot-demo      # boot the demo ISO in QEMU
+make smoke-demo     # boot + verify serial markers without Python
+make image-kernel   # build the kernel-only ISO (os.iso)
+make boot-kernel    # boot the kernel-only ISO in QEMU
 make image-go-std   # build experimental stock-Go ISO (os-go-std.iso)
-make validate       # compatibility alias for make test-qemu
-make test-qemu      # full QEMU smoke-test suite
+make gate-all       # full pytest-backed acceptance suite
 make repro-check    # deterministic ISO gate (build twice + SHA256 compare)
 ```
 
 Default runtime story:
-- `make demo-go` is the recommended front-door demo for the hybrid OS
+- `make image-demo` + `make boot-demo` is the recommended front-door demo
   It boots `goinit -> gosvcm -> gosh -> timesvc` on the TinyGo lane.
-- `make run-kernel` is the kernel-only lane
+- `make smoke-demo` is the fast non-Python serial-marker check for that lane
+- `make image-kernel` + `make boot-kernel` is the kernel-only lane
+- `make gate-all` preserves the historical pytest-backed acceptance suite
 - `make image-go-std` is experimental and should not be treated as the default
   user-space path
+
+Compatibility aliases remain available: `make build`, `make image`,
+`make run-kernel`, `make demo-go`, `make validate`, and `make test-qemu`.
 
 ## Windows (PowerShell)
 
 If you are using `mingw32-make` from PowerShell, use:
 
 ```powershell
-mingw32-make build
-mingw32-make image
-mingw32-make demo-go
-mingw32-make test-qemu
+mingw32-make kernel
+mingw32-make userspace
+mingw32-make image-demo
+mingw32-make boot-demo
+mingw32-make gate-all
 ```
 
 The top-level `Makefile` now forces bash recipe execution and defaults to the
@@ -133,7 +146,9 @@ Rustup manages installation automatically.
 | Go | 1.25.3 | `.github/workflows/ci.yml`, `Dockerfile` |
 | TinyGo | 0.40.1 | `.github/workflows/ci.yml`, `Dockerfile` |
 
-These are host toolchain installs used in CI and Docker, and also required locally for `make image-go`, `make image-go-std`, and the full `make test-qemu` target.
-If you only run `make build` or `make image`, Go/TinyGo are not required.
+These are host toolchain installs used in CI and Docker, and also required
+locally for `make userspace`, `make image-demo`, `make image-go-std`, and the
+full `make gate-all` target. If you only run `make kernel` or
+`make image-kernel`, Go/TinyGo are not required.
 Update the version numbers in CI and Dockerfile together when upgrading.
 
