@@ -57,7 +57,7 @@ endif
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
        test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
-       run test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
+       run run-kernel demo demo-go validate test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
 NASM    ?= nasm
@@ -519,8 +519,17 @@ build-sec-filter: $(ASM_OBJS) boot/linker.ld
 image-sec-filter: build-sec-filter
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-sec-filter.elf ISO_NAME=os-sec-filter.iso bash tools/mkimage.sh
 
-run: image
-	./tools/run_qemu.sh
+run-kernel: image
+	./tools/run_qemu.sh --iso $(OUT)/os.iso
+
+run: run-kernel
+
+demo-go: image-go
+	./tools/run_qemu.sh --iso $(OUT)/os-go.iso
+
+demo: demo-go
+
+validate: test-qemu
 
 test-qemu: image image-panic image-pf image-idt image-sched image-user-hello image-syscall image-thread-exit image-thread-spawn image-vm-map image-syscall-invalid image-stress-syscall image-stress-ipc image-stress-blk image-pressure-shm image-yield image-user-fault image-ipc image-ipc-badptr-send image-ipc-badptr-recv image-svc-badptr image-ipc-buffer-full image-ipc-waiter-busy image-ipc-svc-overwrite image-svc-full image-svc-bad-endpoint image-shm image-quota-endpoints image-quota-shm image-quota-threads image-blk image-blk-badlen image-blk-badptr image-blk-invariants image-blk-init-fail image-fs image-fs-badmagic image-pkg-hash image-net image-go image-go-std
 	$(PYTHON) -m pytest tests/ -v

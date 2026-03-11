@@ -17,12 +17,22 @@
 ## Building
 
 ```bash
+make demo-go        # recommended: Rust kernel + TinyGo user-space demo
+make run-kernel     # kernel-only boot path
 make build          # compile kernel ELF
-make image          # build bootable ISO (no network required)
-make image-go-std   # build G2 spike ISO (os-go-std.iso)
+make image          # build kernel-only ISO (no network required)
+make image-go       # build TinyGo user-space ISO (os-go.iso)
+make image-go-std   # build experimental stock-Go ISO (os-go-std.iso)
+make validate       # compatibility alias for make test-qemu
 make test-qemu      # full QEMU smoke-test suite
 make repro-check    # deterministic ISO gate (build twice + SHA256 compare)
 ```
+
+Default runtime story:
+- `make demo-go` is the recommended front-door demo for the hybrid OS
+- `make run-kernel` is the kernel-only lane
+- `make image-go-std` is experimental and should not be treated as the default
+  user-space path
 
 ## Windows (PowerShell)
 
@@ -31,6 +41,7 @@ If you are using `mingw32-make` from PowerShell, use:
 ```powershell
 mingw32-make build
 mingw32-make image
+mingw32-make demo-go
 mingw32-make test-qemu
 ```
 

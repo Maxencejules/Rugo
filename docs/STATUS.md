@@ -1,5 +1,9 @@
 # Rugo — Status
 
+This file is the detailed validation ledger. For the architecture-first repo
+story, start with `README.md`, `docs/architecture/README.md`, and
+`docs/roadmap/README.md`.
+
 ## What this repo contains
 
 | Track | Language | Location | Role |

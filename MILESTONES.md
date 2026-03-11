@@ -7,25 +7,37 @@ Target: x86-64, tiered hardware support model (QEMU Tier 0/Tier 1 release floor)
 
 ## How to read this document
 
-This repository contains two implementation lanes for the same OS design:
+Treat this file as the exhaustive completion ledger. The architecture-first
+repo story now lives in `README.md`, `docs/architecture/README.md`, and
+`docs/roadmap/README.md`.
 
-Hardware support is tracked through a tiered matrix. QEMU Tier 0/Tier 1 remain
-the active release-blocking floor, while broader bare-metal classes advance
+The default product direction is:
+
+- Rust `no_std` kernel for mechanisms
+- Go user space for services and higher-level policy
+- TinyGo-first integration path for the default demo lane
+- stock-Go bring-up kept as experimental until the repo structure is migrated
+- legacy C lane preserved as a reference baseline, not as an equal-status lane
+
+Hardware support is still tracked through a tiered matrix. QEMU Tier 0/Tier 1
+remain the release-blocking floor, while broader bare-metal classes advance
 only through explicit promotion and audit policy.
 
 | Lane | Language | Location | Purpose |
 |------|----------|----------|---------|
-| **Legacy** | C + Go (gccgo) | `legacy/` | Completed reference baseline (M0-M7 + G0). Preserved as a working fallback and architectural reference. |
-| **Rugo** | Rust (no_std) + Go (TinyGo, planned) | repo root | Rewrite target. The default build. Milestones are re-implemented in Rust with the same acceptance criteria. |
+| **Legacy** | C + Go (gccgo) | `legacy/` | Completed reference baseline (M0-M7 + G0). Preserved for comparison and regression context. |
+| **Rugo** | Rust (no_std) + Go (TinyGo-first) | repo root | Default hybrid OS lane. The production rewrite and the active repo story. |
+| **Experimental** | Rust + stock-Go bridge work | `services/go_std/`, `tools/gostd_stock_builder/` | Bring-up and contract experiments for the stock-Go port. |
 
-**Legacy is not Rugo.** Legacy is a reference implementation that proved out the
-milestone design. Rugo is the production rewrite. Both share the same milestone
-definitions and acceptance tests, but track completion independently.
+**Legacy is not Rugo.** Legacy proved out the early milestone design. Rugo is
+the production lane. The stock-Go lane is also not the default user-space path;
+it remains an experiment until the repo structure is explicitly migrated around
+it.
 
 Milestones M0-M7 define kernel functionality (boot, memory, scheduling, user
 mode, IPC, drivers, filesystem, networking). Go milestones define user-space
-service integration: G0 is legacy-only (gccgo kernel entry), G1 and G2 are
-Rugo-only (TinyGo services and full Go port).
+integration: G0 is legacy-only (gccgo kernel entry), G1 is the TinyGo-first
+user-space lane, and G2 is the stock-Go contract path.
 
 ---
 
@@ -34,19 +46,33 @@ Rugo-only (TinyGo services and full Go port).
 ### Rugo (default)
 
 ```bash
-# Native (requires nightly Rust, nasm, ld, xorriso, qemu, pytest)
+# Recommended quick paths
+make demo-go      # Rust kernel + TinyGo user-space demo
+make run-kernel   # kernel-only boot path
+make validate     # compatibility alias for make test-qemu
+
+# Full native flow (requires nightly Rust, nasm, ld, xorriso, qemu, pytest)
 make build        # Compile Rust kernel → out/kernel.elf
 make image        # Build bootable ISO → out/os.iso
 make image-panic  # Build panic-test ISO → out/os-panic.iso
+make image-go     # Build TinyGo user-space ISO -> out/os-go.iso
+make image-go-std # Build stock-Go experimental ISO -> out/os-go-std.iso
 make test-qemu    # Build all Rugo test images, run pytest tests/
 
 # Docker (cross-platform, no host toolchain needed)
 make docker-all
 ```
 
-Tests: `tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net, go, stress, quota, pressure)
+Primary source map:
+- kernel mechanisms: `arch/`, `boot/`, `kernel_rs/`
+- default Go user space: `services/go/`
+- experimental stock-Go lane: `services/go_std/`
+- tooling and validation: `tools/`, `tests/`, `.github/`, `docs/`
 
-### Legacy
+Tests: `tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net, go,
+stress, quota, pressure)
+
+### Legacy (reference only)
 
 ```bash
 # From repo root (requires nasm, gcc, gccgo, ld, objcopy, xorriso, qemu, pytest)
@@ -59,6 +85,11 @@ Tests: `legacy/tests/` (boot, trap, sched, user, ipc, drivers, fs, pkg, net)
 
 **Note:** Both lanes output to `out/`. Building one lane overwrites the other's
 `kernel.elf` and `os.iso`.
+
+Current structure and migration plan:
+- architecture overview: `docs/architecture/README.md`
+- repo strategy and target layout: `docs/architecture/repo-strategy.md`
+- milestone streams and roadmap summary: `docs/roadmap/README.md`
 
 ---
 

@@ -1,6 +1,8 @@
 # Legacy C Kernel (M0-M7 + G0)
 
-This directory contains the original C+Go kernel implementation, preserved as a reference and fallback.
+This directory contains the original C+Go implementation. It is preserved as a
+reference baseline for comparison, regression context, and historical
+architecture review. It is not the active product lane.
 
 ## Status
 

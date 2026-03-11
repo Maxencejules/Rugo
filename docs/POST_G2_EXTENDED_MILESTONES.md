@@ -4,6 +4,10 @@ Date: 2026-03-04
 Status: Complete (M8-M14 complete)  
 Scope: Rugo lane after G2 completion
 
+Archive note: this document remains the detailed research roadmap and milestone
+history. The current architecture-first summary now lives in
+`docs/roadmap/README.md`.
+
 ---
 
 ## Why this document exists

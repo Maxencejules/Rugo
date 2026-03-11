@@ -4,6 +4,9 @@ Date: 2026-03-11
 Lane: Rugo (Rust kernel + Go user space)  
 Status: done
 
+Archive note: this is a historical execution record. The current repo intro is
+architecture-first and now lives in `README.md` plus `docs/roadmap/README.md`.
+
 ## Goal
 
 Deliver a bounded GUI runtime that lets declared in-tree apps and toolkit
