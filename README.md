@@ -16,13 +16,14 @@ Rust kernel with Go user-space services.
 Placeholders (real captures only):
 
 - `TODO`: add `docs/visuals/screenshots/boot-qemu.png` (QEMU boot screenshot)
-- `TODO`: add `docs/visuals/screenshots/make-run-demo.gif` (10-20s capture of `make run` or `make test-qemu`)
+- `TODO`: add `docs/visuals/screenshots/make-run-demo.gif` (10-20s capture of the recommended `make run` flow)
+- Optional: add `docs/visuals/screenshots/make-test-qemu-demo.gif` only if you also want a full smoke-suite capture
 
 Exact capture steps:
 
 1. Build an image: `make image`
-2. Record boot output: `make run`
-3. Record test flow (optional GIF source): `make test-qemu`
+2. Recommended quick demo: run and capture `make run`
+3. Optional extended validation capture: run `make test-qemu` (full QEMU smoke suite)
 4. Follow the strict media recipe in `docs/visuals/screenshots/README.md`
 
 ## Architecture
