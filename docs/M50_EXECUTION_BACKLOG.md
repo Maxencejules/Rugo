@@ -2,7 +2,7 @@
 
 Date: 2026-03-11  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: proposed
+Status: done
 
 ## Goal
 
@@ -14,10 +14,11 @@ M50 source of truth remains `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`,
 
 ## Current State Summary
 
-- Window-manager contracts and bounded desktop qualifications already exist.
-- The repo does not yet have a live window server/compositor/surface runtime.
-- Input and display milestones can only support a real desktop once window and
-  composition semantics are executable in-tree.
+- Surface lifecycle, compositor damage, and window-manager v2 contracts now
+  define the first live in-tree window system.
+- Deterministic runtime and damage tooling now produce machine-readable surface,
+  z-order, move/resize, and composition artifacts.
+- Live window/compositor behavior is now wired into local and CI release gates.
 
 ## Execution plan
 
@@ -27,9 +28,9 @@ M50 source of truth remains `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`,
 
 ## Execution Result
 
-- PR-1: not started
-- PR-2: not started
-- PR-3: not started
+- PR-1: complete (2026-03-11)
+- PR-2: complete (2026-03-11)
+- PR-3: complete (2026-03-11)
 
 ## PR-1: Window/Compositor Contract Freeze
 
@@ -62,6 +63,15 @@ the first real window system.
 
 - Surface lifecycle and composition semantics are explicit and versioned.
 - Damage and visibility behavior are reviewable before runtime code lands.
+
+### PR-1 completion summary
+
+- Added contract docs:
+  - `docs/desktop/surface_lifecycle_contract_v1.md`
+  - `docs/desktop/compositor_damage_policy_v1.md`
+  - `docs/desktop/window_manager_contract_v2.md`
+- Added executable doc checks:
+  - `tests/desktop/test_window_system_docs_v1.py`
 
 ## PR-2: Window Runtime + Composition Campaigns
 
@@ -101,6 +111,17 @@ composition evidence.
 - Window-system artifacts are deterministic and machine-readable.
 - Real composition behavior is exercised through live surfaces and windows.
 
+### PR-2 completion summary
+
+- Added deterministic window-system tooling:
+  - `tools/run_window_system_runtime_v1.py`
+  - `tools/run_compositor_damage_v1.py`
+- Added executable runtime and compositor checks:
+  - `tests/desktop/test_surface_lifecycle_v1.py`
+  - `tests/desktop/test_window_zorder_v1.py`
+  - `tests/desktop/test_compositor_damage_regions_v1.py`
+  - `tests/desktop/test_window_resize_move_v1.py`
+
 ## PR-3: Window System Gate + Compositor Sub-gate
 
 ### Objective
@@ -139,6 +160,22 @@ profile.
 
 - Window-system and compositor regressions are blocked in local and CI lanes.
 - Damage, z-order, and lifecycle behavior are tied to explicit runtime artifacts.
+
+### PR-3 completion summary
+
+- Added aggregate gate checks:
+  - `tests/desktop/test_window_system_gate_v1.py`
+  - `tests/desktop/test_compositor_damage_gate_v1.py`
+- Added local gates:
+  - `make test-window-system-v1`
+  - `make test-compositor-damage-v1`
+- Added CI qualification gates and artifacts:
+  - `Window system v1 gate`
+  - `Compositor damage v1 gate`
+- Updated closure docs:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
 
 ## Non-goals for M50 backlog
 

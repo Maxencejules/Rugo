@@ -912,6 +912,34 @@ jobs:
             out/input-seat-v1.json
             out/hid-event-path-v1.json
 
+      - name: Window system v1 gate
+        run: |
+          make test-window-system-v1
+
+      - name: Upload window system v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-system-v1-artifacts
+          path: |
+            out/pytest-window-system-v1.xml
+            out/window-system-v1.json
+            out/compositor-damage-v1.json
+
+      - name: Compositor damage v1 gate
+        run: |
+          make test-compositor-damage-v1
+
+      - name: Upload compositor damage v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compositor-damage-v1-artifacts
+          path: |
+            out/pytest-compositor-damage-v1.xml
+            out/window-system-v1.json
+            out/compositor-damage-v1.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2
