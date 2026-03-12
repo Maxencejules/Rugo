@@ -16,7 +16,7 @@ than the currently visible runtime path.
 |---|---|---|---|---|
 | `M10 Security baseline v1` | `Runtime-partial` | Rights and filtering now cover both the M3 fd layer and the default Go lane's IPC/service-launch path, but storage, networking, and shared-memory rights are still not first-class end to end. | The default lane enforces capabilities or equivalent rights across handles, IPC, shared memory, storage, networking, and service launch. | Finish per-object rights for shared memory, storage, and networking, add explicit transfer semantics beyond the current owner-only R4 controls, and keep surfacing denial paths to the default Go services. |
 | `M16 Process + Scheduler Model v2` | `Runtime-partial` | The default Go lane now uses kernel wait/reap semantics to block on child service exits, restart failed services, and reuse child slots on the real boot path, but there is still no fuller process-object model, resource accounting surface, or scheduler policy control plane. | The service OS has a stable process/thread lifecycle with wait, exit, blocking, wakeup, accounting, and scheduler behavior that the default Go lane truly depends on. | Add explicit process objects beyond the current task model, expose resource accounting and scheduler policy controls, and broaden recovery behavior from bounded service restarts to wedged-service detection and operator-visible control. |
-| `M25 Userspace Service Model + Init v2` | `Runtime-backed` | `services/go/runtime.go` and `services/go/services.go` now boot the default Go lane through a manifest-driven service manager with dependency ordering, restart bookkeeping, lifecycle state logs, and a boot-backed M25 gate. | The default Go lane boots through declarative service definitions with dependency ordering, restart policy, health state, logs, and IPC contracts. | Broaden the same runtime model beyond the current time-service plus shell manifest, add richer service contracts, and keep later multi-service lanes bound to real boot evidence. |
+| `M25 Userspace Service Model + Init v2` | `Runtime-backed` | `services/go/runtime.go` and `services/go/services.go` now boot the default Go lane through a manifest-driven service manager with phased startup, restart bookkeeping, lifecycle state logs, a live `diagsvc` control/diagnostic endpoint, and a boot-backed M25 gate. | The default Go lane boots through declarative service definitions with dependency ordering, restart policy, health state, logs, and IPC contracts. | Keep broadening the same runtime model toward fuller storage/network service sets and keep later multi-service lanes bound to real boot evidence. |
 
 ## C4: Durable And Connected Runtime
 
@@ -40,8 +40,8 @@ than the currently visible runtime path.
   security, and isolation modules. The current monolith makes later core claims
   hard to reason about and harder to extend safely.
 - Keep the new manifest-driven Go init/service runtime as the default lane and
-  extend the same model to broader service sets instead of reintroducing
-  one-off demo boot paths.
+  keep extending the same model to broader service sets instead of
+  reintroducing one-off demo boot paths.
 - Require later core tests to boot the actual system and collect runtime
   artifacts. A core milestone should not be closable from schema-level evidence
   alone.

@@ -23,9 +23,12 @@ Current task graph:
 2. `gosvcm` is spawned by `goinit` and acts as the service manager.
 3. `timesvc` is launched by `gosvcm`, creates an IPC endpoint, and registers
    itself through `sys_svc_register`.
-4. `gosh` is launched after service registration, resolves `timesvc` through
-   `sys_svc_lookup`, sends a request over `sys_ipc_send`, and waits for a reply
-   with `sys_ipc_recv`.
+4. `diagsvc` is launched after `timesvc`, exposes a small diagnostic/control
+   endpoint, and reports live service-manager accounting from the default lane.
+5. `gosh` is launched after service registration, resolves `timesvc` and
+   `diagsvc` through `sys_svc_lookup`, exercises policy-denial paths, requests
+   time service work, consumes a diagnostic snapshot, and then drives bounded
+   shutdown.
 
 This is intentionally a bootstrap-grade userspace stack, not a fake simulation:
 the shell-to-service path crosses the kernel syscall boundary for registry,
@@ -52,8 +55,8 @@ endpoint creation, IPC, scheduling, and time reads.
 
 - This is a single-address-space bootstrap image, not a full multiprocess
   `spawn+exec` userspace.
-- The current TinyGo lane still relies on the mapped 4 KiB bootstrap image
-  limit enforced by `tools/build_go.sh`.
+- The current TinyGo lane still relies on a bounded bootstrap image mapped into
+  four contiguous 4 KiB user pages (`16 KiB` total).
 - The stack is cooperative because it uses the existing R4 task model.
 
 ## Serial contract
@@ -65,11 +68,15 @@ Expected boot markers for the canonical path:
 - `GOSVCM: start`
 - `TIMESVC: start`
 - `TIMESVC: ready`
+- `DIAGSVC: start`
+- `DIAGSVC: ready`
 - `GOSVCM: shell`
 - `GOSH: start`
 - `GOSH: lookup ok`
 - `TIMESVC: req ok`
 - `TIMESVC: time ok`
+- `DIAGSVC: snapshot`
+- `GOSH: diag ok`
 - `GOSH: reply ok`
 - `GOINIT: ready`
 

@@ -140,8 +140,8 @@ cd "$SVC"
 echo "==> Converting to flat binary..."
 "$OBJCOPY_BIN" -O binary "$OBJCOPY_IN" "$OBJCOPY_OUT"
 BIN_SIZE=$(stat -c%s "$OUT/gousr.bin" 2>/dev/null || stat -f%z "$OUT/gousr.bin" 2>/dev/null || wc -c < "$OUT/gousr.bin")
-if [ "$BIN_SIZE" -gt 4096 ]; then
-    echo "ERROR: Go user binary exceeds the current 4096-byte userspace image limit ($BIN_SIZE bytes)"
+if [ "$BIN_SIZE" -gt 16384 ]; then
+    echo "ERROR: Go user binary exceeds the current 16384-byte userspace image limit ($BIN_SIZE bytes)"
     exit 1
 fi
 echo "==> Go user binary: $OUT/gousr.bin ($BIN_SIZE bytes)"

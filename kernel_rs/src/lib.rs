@@ -3,6 +3,8 @@
 
 use core::panic::PanicInfo;
 
+mod runtime;
+
 // Shorthand for "any M3 user-mode test feature is active (includes M5 blk_test, M6 fs_test, G1 go_test, G2 spike go_std_test, M10 security tests)"
 macro_rules! cfg_m3 {
     ($($item:item)*) => {
@@ -809,6 +811,7 @@ unsafe fn sys_time_now() -> u64 {
         feature = "syscall_test",
         feature = "stress_syscall_test",
         feature = "user_fault_test",
+        feature = "go_test",
         feature = "go_std_test",
         feature = "sec_rights_test",
         feature = "sec_filter_test"
@@ -823,6 +826,7 @@ unsafe fn sys_time_now() -> u64 {
         feature = "syscall_test",
         feature = "stress_syscall_test",
         feature = "user_fault_test",
+        feature = "go_test",
         feature = "go_std_test",
         feature = "sec_rights_test",
         feature = "sec_filter_test"
@@ -1471,10 +1475,10 @@ cfg_m3! {
     const M3_MAX_VM_MAPS: usize = 8;
     const M3_VM_PAGE_SIZE: u64 = 4096;
     const M8_FD_MAX: usize = 16;
-    const M10_RIGHT_READ: u64 = 1 << 0;
-    const M10_RIGHT_WRITE: u64 = 1 << 1;
-    const M10_RIGHT_POLL: u64 = 1 << 2;
-    const M10_RIGHT_MASK: u64 = M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL;
+    const M10_RIGHT_READ: u64 = runtime::security::HANDLE_RIGHT_READ;
+    const M10_RIGHT_WRITE: u64 = runtime::security::HANDLE_RIGHT_WRITE;
+    const M10_RIGHT_POLL: u64 = runtime::security::HANDLE_RIGHT_POLL;
+    const M10_RIGHT_MASK: u64 = runtime::security::HANDLE_RIGHT_MASK;
     const M10_OPEN_MODE_MASK: u64 = 0x3;
     const M10_OPEN_RDONLY: u64 = 0;
     const M10_OPEN_WRONLY: u64 = 1;
@@ -1656,15 +1660,13 @@ cfg_m3! {
     }
 
     fn m10_open_requested_rights(flags: u64) -> Option<u64> {
-        if flags & !M10_OPEN_MODE_MASK != 0 {
-            return None;
-        }
-        match flags & M10_OPEN_MODE_MASK {
-            M10_OPEN_RDONLY => Some(M10_RIGHT_READ),
-            M10_OPEN_WRONLY => Some(M10_RIGHT_WRITE),
-            M10_OPEN_RDWR => Some(M10_RIGHT_READ | M10_RIGHT_WRITE),
-            _ => None,
-        }
+        runtime::security::requested_open_rights(
+            flags,
+            M10_OPEN_MODE_MASK,
+            M10_OPEN_RDONLY,
+            M10_OPEN_WRONLY,
+            M10_OPEN_RDWR,
+        )
     }
 
     fn m10_profile_path_allowed(path: &[u8]) -> bool {
@@ -1717,10 +1719,10 @@ cfg_m3! {
         if M8_FD_TABLE[idx].kind == M8FdKind::Free {
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
-        let req = rights & M10_RIGHT_MASK;
-        if req & !M8_FD_TABLE[idx].rights != 0 {
-            return 0xFFFF_FFFF_FFFF_FFFF;
-        }
+        let req = match runtime::security::monotonic_rights(M8_FD_TABLE[idx].rights, rights) {
+            Some(req) => req,
+            None => return 0xFFFF_FFFF_FFFF_FFFF,
+        };
         M8_FD_TABLE[idx].rights = req;
         0
     }
@@ -1735,7 +1737,7 @@ cfg_m3! {
         if src.kind == M8FdKind::Free {
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
-        let req = rights & M10_RIGHT_MASK;
+        let req = runtime::security::clamp_rights(rights);
         if req == 0 {
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
@@ -2305,10 +2307,13 @@ cfg_r4! {
         #[cfg(feature = "quota_threads_test")]
         {
             if entry >= 0x0000_8000_0000_0000 { return 0xFFFF_FFFF_FFFF_FFFF; }
-            if R4_TASKS[R4_CURRENT].thread_count >= MAX_THREADS_PER_PROC {
+            if !runtime::isolation::under_quota(
+                R4_TASKS[R4_CURRENT].thread_count,
+                MAX_THREADS_PER_PROC,
+            ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
-            if R4_THREADS_CREATED >= MAX_THREADS_GLOBAL {
+            if !runtime::isolation::under_quota(R4_THREADS_CREATED, MAX_THREADS_GLOBAL) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
             let tid = R4_TASKS[R4_CURRENT].thread_count as u64;
@@ -2441,8 +2446,12 @@ cfg_r4! {
     unsafe fn r4_endpoint_owner_has_right(ep: usize, right: u8) -> bool {
         #[cfg(feature = "go_test")]
         {
-            R4_ENDPOINTS[ep].owner_tid == R4_CURRENT
-                && (R4_ENDPOINTS[ep].owner_rights & right) != 0
+            runtime::isolation::owner_has_right(
+                R4_ENDPOINTS[ep].owner_tid,
+                R4_CURRENT,
+                R4_ENDPOINTS[ep].owner_rights,
+                right,
+            )
         }
         #[cfg(not(feature = "go_test"))]
         {
@@ -2455,7 +2464,10 @@ cfg_r4! {
     unsafe fn sys_ipc_endpoint_create_r4() -> u64 {
         #[cfg(any(feature = "quota_endpoints_test", feature = "go_test"))]
         {
-            if R4_TASKS[R4_CURRENT].endpoint_count >= MAX_ENDPOINTS_PER_PROC {
+            if !runtime::isolation::under_quota(
+                R4_TASKS[R4_CURRENT].endpoint_count,
+                MAX_ENDPOINTS_PER_PROC,
+            ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
             for i in 0..R4_MAX_ENDPOINTS {
@@ -2677,7 +2689,10 @@ cfg_r4! {
         #[cfg(any(feature = "shm_test", feature = "quota_shm_test"))]
         {
             if size == 0 || size > 4096 { return 0xFFFF_FFFF_FFFF_FFFF; }
-            if R4_TASKS[R4_CURRENT].shm_count >= MAX_SHM_PER_PROC {
+            if !runtime::isolation::under_quota(
+                R4_TASKS[R4_CURRENT].shm_count,
+                MAX_SHM_PER_PROC,
+            ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
             for i in 0..R4_MAX_SHM {
@@ -2876,6 +2891,84 @@ cfg_r4! {
             blob2.as_ptr(), USER_CODE_PAGE_3.0.as_mut_ptr(), blob2.len());
         core::ptr::copy_nonoverlapping(
             blob3.as_ptr(), USER_CODE_PAGE_4.0.as_mut_ptr(), blob3.len());
+
+        let new_pml4_phys = kv2p(new_pml4 as u64);
+        core::arch::asm!("mov cr3, {}", in(reg) new_pml4_phys, options(nostack));
+    }
+
+    #[cfg(feature = "go_test")]
+    unsafe fn setup_go_user_pages(blob: &[u8]) {
+        if blob.is_empty() || blob.len() > runtime::process::GO_IMAGE_MAX_BYTES {
+            serial_write(b"GO: image too large\n");
+            qemu_exit(0x33);
+            loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
+        }
+
+        let hhdm_resp_ptr = core::ptr::read_volatile(
+            core::ptr::addr_of!(HHDM_REQUEST.response));
+        let kaddr_resp_ptr = core::ptr::read_volatile(
+            core::ptr::addr_of!(KADDR_REQUEST.response));
+        let hhdm = (*hhdm_resp_ptr).offset;
+        let kphys = (*kaddr_resp_ptr).physical_base;
+        let kvirt = (*kaddr_resp_ptr).virtual_base;
+        HHDM_OFFSET = hhdm;
+        let kv2p = |va: u64| -> u64 { va - kvirt + kphys };
+
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+        let old_pml4 = ((cr3 & 0x000F_FFFF_FFFF_F000) + hhdm) as *const u64;
+        let new_pml4 = USER_PML4.0.as_mut_ptr() as *mut u64;
+        for i in 0..512 { *new_pml4.add(i) = *old_pml4.add(i); }
+
+        let pdpt = USER_PDPT.0.as_mut_ptr() as *mut u64;
+        *pdpt = kv2p(USER_PD.0.as_ptr() as u64) | 0x07;
+
+        let pd = USER_PD.0.as_mut_ptr() as *mut u64;
+        *pd.add(2) = kv2p(USER_PT_CODE.0.as_ptr() as u64) | 0x07;
+        *pd.add(3) = kv2p(USER_PT_STACK.0.as_ptr() as u64) | 0x07;
+
+        let pt_code = USER_PT_CODE.0.as_mut_ptr() as *mut u64;
+        let code_flags = 0x07;
+        *pt_code.add(0) = kv2p(USER_CODE_PAGE.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(1) = kv2p(USER_CODE_PAGE_2.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(2) = kv2p(USER_CODE_PAGE_3.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | code_flags;
+
+        let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
+        *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
+        *pt_stack.add(510) = kv2p(USER_STACK_PAGE_2.0.as_ptr() as u64) | 0x07;
+        *pt_stack.add(509) = kv2p(USER_STACK_PAGE_3.0.as_ptr() as u64) | 0x07;
+        *pt_stack.add(508) = kv2p(USER_STACK_PAGE_4.0.as_ptr() as u64) | 0x07;
+
+        *new_pml4 = kv2p(USER_PDPT.0.as_ptr() as u64) | 0x07;
+
+        core::ptr::write_bytes(USER_CODE_PAGE.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_2.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_3.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_4.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+
+        let chunks = [
+            runtime::process::go_image_chunk(blob, 0),
+            runtime::process::go_image_chunk(blob, 1),
+            runtime::process::go_image_chunk(blob, 2),
+            runtime::process::go_image_chunk(blob, 3),
+        ];
+        let pages = [
+            USER_CODE_PAGE.0.as_mut_ptr(),
+            USER_CODE_PAGE_2.0.as_mut_ptr(),
+            USER_CODE_PAGE_3.0.as_mut_ptr(),
+            USER_CODE_PAGE_4.0.as_mut_ptr(),
+        ];
+        for i in 0..runtime::process::GO_IMAGE_MAX_PAGES {
+            if chunks[i].is_empty() {
+                continue;
+            }
+            core::ptr::copy_nonoverlapping(
+                chunks[i].as_ptr(),
+                pages[i],
+                chunks[i].len(),
+            );
+        }
 
         let new_pml4_phys = kv2p(new_pml4 as u64);
         core::arch::asm!("mov cr3, {}", in(reg) new_pml4_phys, options(nostack));
@@ -3258,7 +3351,7 @@ unsafe fn virtio_blk_io(write: bool, sector: u64, len: usize) -> bool {
 /// len must be a multiple of 512, max 4096.
 #[cfg(feature = "blk_test")]
 unsafe fn sys_blk_read(lba: u64, buf: u64, len: u64) -> u64 {
-    if len == 0 || len > 4096 || len % 512 != 0 {
+    if !runtime::storage::block_io_len_valid(len) {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     let n = len as usize;
@@ -3280,7 +3373,7 @@ unsafe fn sys_blk_read(lba: u64, buf: u64, len: u64) -> u64 {
 /// len must be a multiple of 512, max 4096.
 #[cfg(feature = "blk_test")]
 unsafe fn sys_blk_write(lba: u64, buf: u64, len: u64) -> u64 {
-    if len == 0 || len > 4096 || len % 512 != 0 {
+    if !runtime::storage::block_io_len_valid(len) {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     let n = len as usize;
@@ -4293,7 +4386,7 @@ const VIRTIO_NET_HDR_SIZE: usize = 10; // legacy, no MRG_RXBUF
 const NET_GUEST_IP: [u8; 4] = [10, 0, 2, 15]; // QEMU SLIRP default
 
 #[cfg(feature = "net_test")]
-const NET_ECHO_PORT: u16 = 7;
+const NET_ECHO_PORT: u16 = runtime::networking::UDP_ECHO_PORT;
 
 // --------------- M7: PCI scan for virtio-net ---------------------------------
 
@@ -4590,8 +4683,8 @@ unsafe fn net_handle_frame(frame: &[u8]) -> bool {
     if frame.len() < 14 { return false; }
     let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
     match ethertype {
-        0x0806 => { net_handle_arp(frame); false }
-        0x0800 => net_handle_ipv4(frame),
+        runtime::networking::ETHERTYPE_ARP => { net_handle_arp(frame); false }
+        runtime::networking::ETHERTYPE_IPV4 => net_handle_ipv4(frame),
         _ => false,
     }
 }
@@ -4637,7 +4730,7 @@ unsafe fn net_handle_ipv4(frame: &[u8]) -> bool {
     if ip_hdr_len < 20 { return false; }
     if frame.len() < 14 + ip_hdr_len + 8 { return false; }
     // Check protocol = UDP (17)
-    if ip[9] != 17 { return false; }
+    if ip[9] != runtime::networking::IPPROTO_UDP { return false; }
     // Check destination IP is ours
     if ip[16] != NET_GUEST_IP[0] || ip[17] != NET_GUEST_IP[1]
         || ip[18] != NET_GUEST_IP[2] || ip[19] != NET_GUEST_IP[3] { return false; }
@@ -4646,7 +4739,7 @@ unsafe fn net_handle_ipv4(frame: &[u8]) -> bool {
     let udp = &ip[ip_hdr_len..];
     let src_port = u16::from_be_bytes([udp[0], udp[1]]);
     let dst_port = u16::from_be_bytes([udp[2], udp[3]]);
-    if dst_port != NET_ECHO_PORT { return false; }
+    if !runtime::networking::is_udp_echo_port(dst_port) { return false; }
 
     // Build echo reply — copy entire frame, then swap fields
     let total = frame.len();
@@ -5388,7 +5481,7 @@ pub extern "C" fn kmain() -> ! {
             BLK_DATA_PAGE.0[0], BLK_DATA_PAGE.0[1],
             BLK_DATA_PAGE.0[2], BLK_DATA_PAGE.0[3],
         ]);
-        if sb_magic != 0x5346_5331u32 { // "SFS1"
+        if sb_magic != runtime::storage::SIMPLEFS_MAGIC {
             serial_write(b"FSD: bad magic\n");
             qemu_exit(0x31);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
@@ -5456,7 +5549,7 @@ pub extern "C" fn kmain() -> ! {
             BLK_DATA_PAGE.0[0], BLK_DATA_PAGE.0[1],
             BLK_DATA_PAGE.0[2], BLK_DATA_PAGE.0[3],
         ]);
-        if pkg_magic != 0x0147_4B50u32 { // "PKG\x01"
+        if pkg_magic != runtime::storage::PKG_MAGIC_V1 {
             serial_write(b"PKG: bad magic\n");
             qemu_exit(0x31);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
@@ -5494,7 +5587,7 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
-        setup_r4_pages4(GO_USER_BIN, GO_USER_BIN, GO_USER_BIN, GO_USER_BIN);
+        setup_go_user_pages(GO_USER_BIN);
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         R4_TASKS[0].state = R4State::Running;

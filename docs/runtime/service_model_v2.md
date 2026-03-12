@@ -12,6 +12,9 @@ Restart report schema: `rugo.restart_policy_report.v2`
 Define deterministic userspace service lifecycle behavior for startup, shutdown,
 failure handling, and restart decisions.
 
+The live default Go lane now exercises this model with `timesvc`, `diagsvc`,
+and `shell` on the real `go_test` boot path.
+
 ## Lifecycle states
 
 Services move through these states only:
@@ -59,6 +62,20 @@ Bounded restart controls:
 If the cap is reached, the service transitions to `failed` and remains stopped
 until a manual recovery action.
 
+## Runtime service contract fields
+
+Each declared service may also carry:
+
+- a startup phase (`core` or `services`)
+- a bounded startup budget before the manager declares the service wedged
+- an optional stop command for controlled shutdown
+
+The default Go lane uses those fields to:
+
+- reach `operational` only after the `core` phase is healthy
+- emit deterministic wedge markers instead of waiting forever in `starting`
+- request orderly shutdown of remaining services after the shell completes
+
 ## Enforcement
 
 - Local gate: `make test-userspace-model-v2`
@@ -81,3 +98,5 @@ Runtime-backed default-lane evidence:
 - The live boot path now reaps exited service tasks through `sys_wait` and
   exercises bounded restart on the default shell service before the successful
   run reaches `ready`.
+- The same boot path now launches `diagsvc`, services a live diagnostic request
+  from `shell`, and performs bounded stop control on the remaining services.

@@ -674,7 +674,7 @@ test-perf-regression-v1:
 	$(PYTHON) -m pytest tests/runtime/test_perf_budget_docs_v1.py tests/runtime/test_perf_regression_v1.py tests/runtime/test_perf_gate_v1.py -v --junitxml=$(OUT)/pytest-perf-regression-v1.xml
 
 test-userspace-model-v2: image-go
-	$(PYTHON) -m pytest tests/runtime/test_service_model_docs_v2.py tests/runtime/test_service_lifecycle_v2.py tests/runtime/test_service_boot_runtime_v2.py tests/runtime/test_service_dependency_order_v2.py tests/runtime/test_restart_policy_v2.py tests/runtime/test_userspace_model_gate_v2.py -v --junitxml=$(OUT)/pytest-userspace-model-v2.xml
+	$(PYTHON) -m pytest tests/runtime/test_service_model_docs_v2.py tests/runtime/test_service_lifecycle_v2.py tests/runtime/test_service_boot_runtime_v2.py tests/runtime/test_service_dependency_order_v2.py tests/runtime/test_restart_policy_v2.py tests/runtime/test_service_control_runtime_v1.py tests/runtime/test_userspace_model_gate_v2.py -v --junitxml=$(OUT)/pytest-userspace-model-v2.xml
 
 test-pkg-ecosystem-v3:
 	$(PYTHON) tools/repo_policy_check_v3.py --out $(OUT)/repo-policy-v3.json
