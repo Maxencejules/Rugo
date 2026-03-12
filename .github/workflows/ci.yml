@@ -999,6 +999,32 @@ jobs:
             out/desktop-shell-v1.json
             out/graphical-installer-v1.json
 
+      - name: Native driver contract v1 gate
+        run: |
+          make test-native-driver-contract-v1
+
+      - name: Upload native driver contract v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-driver-contract-v1-artifacts
+          path: |
+            out/pytest-native-driver-contract-v1.xml
+            out/native-driver-diagnostics-v1.json
+
+      - name: Native driver diagnostics v1 gate
+        run: |
+          make test-native-driver-diagnostics-v1
+
+      - name: Upload native driver diagnostics v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-driver-diagnostics-v1-artifacts
+          path: |
+            out/pytest-native-driver-diagnostics-v1.xml
+            out/native-driver-diagnostics-v1.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2

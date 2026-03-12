@@ -943,9 +943,11 @@ auditable promotion criteria before broad claims are made.
   `docs/hw/firmware_blob_policy_v1.md`,
   `docs/hw/native_driver_diag_schema_v1.md`.
 - Tests/Gates: `make test-native-driver-contract-v1`;
+  sub-gate `make test-native-driver-diagnostics-v1`;
   `tests/hw/test_native_driver_docs_v1.py`,
   `tests/hw/test_pcie_dma_contract_v1.py`,
-  `tests/hw/test_firmware_blob_policy_v1.py`; serial markers
+  `tests/hw/test_firmware_blob_policy_v1.py`,
+  `tests/hw/test_native_driver_diagnostics_v1.py`; serial markers
   `DRV: bind`, `DMA: map ok`, `FW: denied unsigned`.
 - Hardware Tiers: QEMU Tier 0/Tier 1 remain the release floor; native NVMe,
   GPU, and Wi-Fi rows are added as Tier 1 candidate or Tier 2 shadow targets
