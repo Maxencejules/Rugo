@@ -80,6 +80,8 @@ make test-gui-runtime-v1
 make test-toolkit-compat-v1
 make test-desktop-shell-v1
 make test-desktop-workflows-v1
+make test-native-storage-v1
+make test-hw-matrix-v7
 make test-real-ecosystem-desktop-v2
 make test-real-app-catalog-v2
 
@@ -152,6 +154,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M51** GUI Runtime + Toolkit Bridge v1 | n/a | done | Rugo: gui-runtime-contract-v1 / toolkit-profile-v1 / font-text-rendering-policy-v1 contracts plus deterministic GUI runtime and toolkit compatibility artifacts, `make test-gui-runtime-v1`, `make test-toolkit-compat-v1`, CI `GUI runtime v1 gate` + `Toolkit compatibility v1 gate`, docs in `docs/desktop/gui_runtime_contract_v1.md`, `docs/desktop/toolkit_profile_v1.md`, `docs/desktop/font_text_rendering_policy_v1.md`, and `docs/M51_EXECUTION_BACKLOG.md`. |
 | **M52** Desktop Shell + Workflow Baseline v1 | n/a | done | Rugo: desktop-shell-contract-v1 / session-workflow-profile-v1 / graphical-installer-ux-v1 contracts plus deterministic desktop shell and graphical installer workflow artifacts, `make test-desktop-shell-v1`, `make test-desktop-workflows-v1`, CI `Desktop shell v1 gate` + `Desktop workflows v1 gate`, docs in `docs/desktop/desktop_shell_contract_v1.md`, `docs/desktop/session_workflow_profile_v1.md`, `docs/build/graphical_installer_ux_v1.md`, and `docs/M52_EXECUTION_BACKLOG.md`. |
 | **M53** Native Driver Contract Expansion v1 | n/a | done | Rugo: native-driver-contract-v1 / pcie-dma-contract-v1 / firmware-blob-policy-v1 / native-driver-diag-schema-v1 contracts plus deterministic native-driver diagnostics artifacts, `make test-native-driver-contract-v1`, `make test-native-driver-diagnostics-v1`, CI `Native driver contract v1 gate` + `Native driver diagnostics v1 gate`, docs in `docs/hw/native_driver_contract_v1.md`, `docs/hw/pcie_dma_contract_v1.md`, `docs/hw/firmware_blob_policy_v1.md`, `docs/hw/native_driver_diag_schema_v1.md`, and `docs/M53_EXECUTION_BACKLOG.md`. |
+| **M54** Native Storage Drivers v1 | n/a | done | Rugo: nvme-ahci-contract-v1 / support-matrix-v7 / block-flush-contract-v1 contracts plus deterministic native-storage and matrix-v7 artifacts, `make test-native-storage-v1`, `make test-hw-matrix-v7`, CI `Native storage v1 gate` + `Hardware matrix v7 gate`, docs in `docs/hw/nvme_ahci_contract_v1.md`, `docs/hw/support_matrix_v7.md`, `docs/storage/block_flush_contract_v1.md`, and `docs/M54_EXECUTION_BACKLOG.md`. |
 
 ✅ done &ensp; ◐ in progress (prep) &ensp; ⬜ not started &ensp; n/a not applicable
 
@@ -1137,12 +1140,13 @@ Post-G2 planning and execution:
 - `docs/M48_EXECUTION_BACKLOG.md`
 - `docs/M49_EXECUTION_BACKLOG.md`
 - `docs/M50_EXECUTION_BACKLOG.md`
-- Last completed backlog (M53): `docs/M53_EXECUTION_BACKLOG.md`
+- Last completed backlog (M54): `docs/M54_EXECUTION_BACKLOG.md`
 - Completed roadmap (M48-M52): `docs/M48_M52_GUI_IMPLEMENTATION_ROADMAP.md`
 - Completed backlogs:
   - `docs/M52_EXECUTION_BACKLOG.md`
   - `docs/M53_EXECUTION_BACKLOG.md`
-- M35-M39 roadmap execution remains complete, and M40-M53 execution is now
+  - `docs/M54_EXECUTION_BACKLOG.md`
+- M35-M39 roadmap execution remains complete, and M40-M54 execution is now
   complete with M40 evidence-integrity closure, M41 process/readiness closure,
   M42 isolation/namespace baseline closure, M43 hardware/firmware/SMP closure,
   M44 real desktop/ecosystem runtime qualification closure, M45 modern
@@ -1150,13 +1154,16 @@ Post-G2 planning and execution:
   hardware claim promotion closure, M48 display runtime closure, M49 input
   seat runtime closure, M50 window system and compositor closure, M51 GUI
   runtime and toolkit bridge closure, M52 desktop shell and workflow baseline
-  closure, and M53 native-driver contract expansion closure.
+  closure, M53 native-driver contract expansion closure, and M54 native
+  storage driver closure.
 - Latest completed hardware expansion phase is M45-M47:
   - M45 modern virtual-platform parity (done),
   - M46 bare-metal I/O baseline (done),
   - M47 hardware claim promotion program (done).
 - Latest completed native-driver contract baseline is M53:
   - M53 native driver contract expansion (done).
+- Latest completed native storage baseline is M54:
+  - M54 native storage drivers (done).
 - Latest completed GUI implementation phase is M48-M52:
   - M48 display runtime + scanout (done),
   - M49 input + seat management (done),

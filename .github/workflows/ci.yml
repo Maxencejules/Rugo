@@ -1025,6 +1025,33 @@ jobs:
             out/pytest-native-driver-diagnostics-v1.xml
             out/native-driver-diagnostics-v1.json
 
+      - name: Native storage v1 gate
+        run: |
+          make test-native-storage-v1
+
+      - name: Upload native storage v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-storage-v1-artifacts
+          path: |
+            out/pytest-native-storage-v1.xml
+            out/native-storage-v1.json
+            out/hw-matrix-v7.json
+
+      - name: Hardware matrix v7 gate
+        run: |
+          make test-hw-matrix-v7
+
+      - name: Upload hardware matrix v7 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw-matrix-v7-artifacts
+          path: |
+            out/pytest-hw-matrix-v7.xml
+            out/hw-matrix-v7.json
+
       - name: Real ecosystem desktop v2 gate
         run: |
           make test-real-ecosystem-desktop-v2

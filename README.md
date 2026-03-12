@@ -53,6 +53,14 @@ Visible proof paths:
   Emits the machine-readable M53 diagnostics bundle for bind, IRQ or DMA, and
   firmware allow or deny paths.
   Proof: `tests/hw/test_native_driver_diag_gate_v1.py`
+- `make test-hw-matrix-v7`
+  Emits the machine-readable M54 matrix bundle for q35 NVMe and i440fx AHCI
+  coverage on top of the v6 baseline.
+  Proof: `tests/hw/test_hw_gate_v7.py`
+- `make test-native-storage-v1`
+  Freezes the M54 native storage contract for identify, queue, reset, and
+  flush semantics.
+  Proof: `tests/hw/test_native_storage_gate_v1.py`
 - external package bootstrap and run path
   Proof: `tests/pkg/test_pkg_external_apps.py`
 
@@ -99,7 +107,7 @@ Detailed build and host prerequisites live in [docs/BUILD.md](docs/BUILD.md).
 |------|--------------------------|---------------|--------------------|
 | Core Hybrid OS | The default Rust-kernel plus Go-service lane boots, runs native services, persists data, performs network I/O, and enforces runtime isolation on declared baseline targets. | `C5` complete; next core phase is `C6 Runtime Quality Under Load`. | `M0-M7`, `G1`, `M10`, `M12`, `M13`, `M16`, `M18`, `M19`, `M22`, `M25`, `M42` |
 | Tooling / Validation / Release Infrastructure | Confidence, reproducibility, qualification, release, and fleet discipline around the core lane improve. | `T4` complete; next infrastructure phase is `T5 Advanced Trust and Compliance Infrastructure`. | `G2`, `M11`, `M14`, `M20`, `M21`, `M24`, `M28`, `M29`, `M30-M34`, `M40` |
-| Expansion / Research / Platform Breadth | Compatibility, hardware breadth, desktop breadth, packaging breadth, and other product-surface expansion increase. | `X4` complete; next breadth phase is `X5 Next-Wave Breadth Research`. | `M8`, `M9`, `M15`, `M17`, `M23`, `M26`, `M27`, `M35-M39`, `M41`, `M43-M53` |
+| Expansion / Research / Platform Breadth | Compatibility, hardware breadth, desktop breadth, packaging breadth, and other product-surface expansion increase. | `X4` complete; next breadth phase is `X5 Next-Wave Breadth Research`. | `M8`, `M9`, `M15`, `M17`, `M23`, `M26`, `M27`, `M35-M39`, `M41`, `M43-M54` |
 
 Primary scoring rule:
 - the first row is the answer to "how close is the repo to the stated product?"

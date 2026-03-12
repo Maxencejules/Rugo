@@ -966,11 +966,12 @@ auditable promotion criteria before broad claims are made.
 - Contracts/Interfaces: `docs/hw/nvme_ahci_contract_v1.md`,
   `docs/hw/support_matrix_v7.md`,
   `docs/storage/block_flush_contract_v1.md`.
-- Tests/Gates: `make test-native-storage-v1`;
+- Tests/Gates: `make test-native-storage-v1`; `make test-hw-matrix-v7`;
   `tests/hw/test_nvme_identify_v1.py`,
   `tests/hw/test_nvme_io_queue_v1.py`,
   `tests/hw/test_ahci_rw_v1.py`,
-  `tests/storage/test_nvme_fsync_integration_v1.py`; serial markers
+  `tests/storage/test_nvme_fsync_integration_v1.py`,
+  `tests/hw/test_native_storage_negative_v1.py`; serial markers
   `NVME: ready`, `AHCI: port up`, `BLK: fua ok`.
 - Hardware Tiers: Emulated NVMe becomes a Tier 1 target; audited bare-metal
   AHCI/NVMe desktops remain Tier 2 until repeatable reset and durability

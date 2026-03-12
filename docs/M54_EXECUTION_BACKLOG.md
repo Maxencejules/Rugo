@@ -1,8 +1,11 @@
 # M54 Execution Backlog (Native Storage Drivers v1)
 
-Date: 2026-03-11  
+Date: 2026-03-12  
 Lane: Rugo (Rust kernel + Go user space)  
-Status: planned
+Status: done
+
+Archive note: this is a historical execution record. The current repo intro is
+architecture-first and now lives in `README.md` plus `docs/roadmap/README.md`.
 
 ## Goal
 
@@ -18,13 +21,14 @@ M54 source of truth remains:
 
 ## Current State Summary
 
-- M53 establishes the generic native-driver contract needed for safe PCIe/DMA
-  expansion.
-- Existing storage reliability and feature work assumes virtio-backed block
-  paths for the release floor.
-- Native NVMe and AHCI behavior is not yet a versioned, release-gated contract.
-- M54 must freeze those device-family semantics before broader Tier 1 storage
-  claims are made.
+- M53 established the generic native-driver contract that M54 now inherits for
+  safe PCIe, IRQ, DMA, and diagnostics behavior.
+- Explicit M54 contracts now define bounded NVMe and AHCI queue, reset, and
+  flush semantics plus the matrix-v7 rows that make those claims auditable.
+- Deterministic matrix-v7 and native-storage tooling now emit machine-readable
+  evidence for q35 NVMe and i440fx AHCI release lanes.
+- The M54 storage baseline is now wired into local and CI gates before later
+  filesystem and wireless milestones broaden their assumptions.
 
 ## Execution plan
 
@@ -32,29 +36,30 @@ M54 source of truth remains:
 - PR-2: NVMe/AHCI campaign baseline
 - PR-3: native storage gate wiring + closure
 
-## Execution status
+## Execution Result
 
-- PR-1: pending
-- PR-2: pending
-- PR-3: pending
+- PR-1: complete (2026-03-12)
+- PR-2: complete (2026-03-12)
+- PR-3: complete (2026-03-12)
 
-## Rugo implementation map
+## Historical Rugo implementation summary
 
-### Rust kernel changes
+### Historical Rust kernel surface
 
-- `kernel_rs/src/`: NVMe/AHCI probe, queue setup, reset handling, and flush/FUA
-  semantics that back the native-storage contract.
-- `arch/` and `boot/`: low-level IRQ, MMIO, and early-device-init plumbing
-  needed for deterministic native-storage bring-up on the release floor.
+- `kernel_rs/src/`: bounded NVMe and AHCI probe, queue, reset, and flush
+  semantics were frozen as the release contract surface even though this repo
+  milestone remains tooling-first.
+- `arch/` and `boot/`: low-level IRQ and platform-init expectations stayed
+  bounded to deterministic native-storage bring-up evidence.
 
-### Go user space changes
+### Historical Go user space surface
 
 - `services/go/`: storage diagnostics, device-class reporting, and durability
-  probes that make native-storage behavior visible above the kernel boundary.
-- `services/go_std/`: optional comparison lane only. It is not the authority
-  for M54 storage semantics.
+  evidence packaging are the userspace-facing contract outputs for M54.
+- `services/go_std/`: optional comparison lane only. It could exercise the
+  path, but it did not define M54 completion.
 
-### Language-native verification
+### Historical Language-Native Verification
 
 - `make kernel`
 - `make userspace`
@@ -62,6 +67,8 @@ M54 source of truth remains:
 - `make smoke-demo`
 - `python tools/run_hw_matrix_v7.py --out out/hw-matrix-v7.json`
 - `python tools/run_native_storage_diagnostics_v1.py --out out/native-storage-v1.json`
+- `make test-native-storage-v1`
+- `make test-hw-matrix-v7`
 
 ## PR-1: Native Storage Contract Freeze
 
@@ -97,6 +104,16 @@ implementation broadens support claims.
 - NVMe/AHCI queue, reset, and flush semantics are explicit and versioned.
 - Matrix v7 target rows and native-storage negative paths are reviewable before
   driver enablement lands.
+
+### PR-1 completion summary
+
+- Added contract docs:
+  - `docs/hw/nvme_ahci_contract_v1.md`
+  - `docs/hw/support_matrix_v7.md`
+  - `docs/storage/block_flush_contract_v1.md`
+- Added executable doc and durability checks:
+  - `tests/hw/test_nvme_ahci_docs_v1.py`
+  - `tests/storage/test_block_flush_contract_v1.py`
 
 ## PR-2: NVMe/AHCI Campaign Baseline
 
@@ -139,6 +156,18 @@ them to the storage durability model.
 - `NVME: ready`, `AHCI: port up`, and `BLK: fua ok` style markers are stable.
 - Storage durability tests can name the native device class used for evidence.
 
+### PR-2 completion summary
+
+- Added deterministic native-storage tooling:
+  - `tools/run_hw_matrix_v7.py`
+  - `tools/run_native_storage_diagnostics_v1.py`
+- Added executable storage-class diagnostics and negative-path checks:
+  - `tests/hw/test_nvme_identify_v1.py`
+  - `tests/hw/test_nvme_io_queue_v1.py`
+  - `tests/hw/test_ahci_rw_v1.py`
+  - `tests/storage/test_nvme_fsync_integration_v1.py`
+  - `tests/hw/test_native_storage_negative_v1.py`
+
 ## PR-3: Native Storage Gate + Matrix v7 Sub-gate
 
 ### Objective
@@ -178,6 +207,19 @@ Make native storage qualification enforceable in local and CI lanes.
   lanes.
 - M54 can be marked done only with release-gated NVMe/AHCI evidence and no
   undocumented fallback broadening.
+
+### PR-3 completion summary
+
+- Added local gates:
+  - `make test-native-storage-v1`
+  - `make test-hw-matrix-v7`
+- Added aggregate gate tests:
+  - `tests/hw/test_native_storage_gate_v1.py`
+  - `tests/hw/test_hw_gate_v7.py`
+- Updated repo-level closure documents:
+  - `MILESTONES.md`
+  - `docs/STATUS.md`
+  - `README.md`
 
 ## Non-goals for M54 backlog
 
