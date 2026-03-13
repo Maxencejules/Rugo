@@ -12,15 +12,34 @@ sys.path.append(str(ROOT / "tools"))
 
 import check_abi_diff_v3 as abi_diff  # noqa: E402
 import check_syscall_compat_v3 as compat_check  # noqa: E402
+import extract_go_std_syscalls  # noqa: E402
+import extract_kernel_syscalls  # noqa: E402
 
 
 def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def test_syscall_compat_matrix_v3_repo_baseline(tmp_path: Path):
     diff_out = tmp_path / "abi-diff-v3.json"
     compat_out = tmp_path / "syscall-compat-v3.json"
+    kernel_report = tmp_path / "kernel-syscall-table.json"
+    interface_report = tmp_path / "gostd-syscall-interface.json"
+
+    _write_json(
+        kernel_report,
+        extract_kernel_syscalls.build_report(ROOT / "kernel_rs" / "src" / "lib.rs"),
+    )
+    _write_json(
+        interface_report,
+        extract_go_std_syscalls.build_report(
+            ROOT / "services" / "go_std" / "syscalls.asm"
+        ),
+    )
 
     assert abi_diff.main(["--out", str(diff_out)]) == 0
     assert (
@@ -28,6 +47,10 @@ def test_syscall_compat_matrix_v3_repo_baseline(tmp_path: Path):
             [
                 "--diff-report",
                 str(diff_out),
+                "--kernel-report",
+                str(kernel_report),
+                "--interface-report",
+                str(interface_report),
                 "--out",
                 str(compat_out),
             ]
@@ -42,6 +65,10 @@ def test_syscall_compat_matrix_v3_repo_baseline(tmp_path: Path):
     assert data["compat_matrix"][0]["direction"] == "backward"
     assert data["compat_matrix"][0]["compatible"] is True
     assert data["requires_explicit_migration"] is False
+    assert data["source_truth"]["kernel"]["checked"] is True
+    assert data["source_truth"]["kernel"]["issues"] == []
+    assert data["source_truth"]["gostd_interface"]["checked"] is True
+    assert data["source_truth"]["gostd_interface"]["issues"] == []
     assert data["policy_issues"] == []
     assert data["gate_pass"] is True
 

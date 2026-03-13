@@ -710,7 +710,9 @@ unsafe fn syscall_dispatch(frame: *mut u64) {
             17 => { *frame.add(14) = sys_ipc_endpoint_create_r4(); }
             6  => { *frame.add(14) = sys_shm_create_r4(arg1); }
             7  => { *frame.add(14) = sys_shm_map_r4(arg1, arg2, arg3); }
-            15 => { *frame.add(14) = sys_shm_unmap_r4(arg1); }
+            15 => { *frame.add(14) = sys_net_send(arg1, arg2); }
+            16 => { *frame.add(14) = sys_net_recv(arg1, arg2); }
+            42 => { *frame.add(14) = sys_shm_unmap_r4(arg1); }
             8  => { *frame.add(14) = sys_ipc_send_r4(arg1, arg2, arg3); }
             9  => { sys_ipc_recv_r4(frame, arg1, arg2, arg3); } // may swap frame
             10 => { *frame.add(14) = sys_time_now(); }

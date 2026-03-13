@@ -6,8 +6,9 @@ Status: active release gate
 
 ## Purpose
 
-Define the maintainer-grade runtime/toolchain contract for the Rugo stock-Go
-path so releases do not depend on implicit assumptions from the G2 spike.
+Define the maintainer-grade runtime/toolchain contract for the Rugo supported
+stock-Go lane so releases do not depend on implicit assumptions from the G2
+spike.
 
 ## Target contract
 
@@ -17,6 +18,11 @@ path so releases do not depend on implicit assumptions from the G2 spike.
   `docs/abi/syscall_v0.md` and `docs/abi/syscall_v1.md`
 - Runtime binary artifact: `out/gostd.bin`
 - Runtime contract artifact: `out/gostd-contract.env`
+- Supported build path:
+  - `make build-go-std`
+  - `make image-std`
+  - `make boot-std`
+  - `make smoke-std`
 
 ## Runtime behavior contract (v1 lane)
 
@@ -34,6 +40,8 @@ path so releases do not depend on implicit assumptions from the G2 spike.
 - Toolchain reproducibility artifacts:
   - `out/runtime-toolchain-contract.env`
   - `out/runtime-toolchain-repro.json`
+- Source-of-truth interface artifact:
+  - `out/gostd-syscall-interface.json`
 - Bootstrap check entrypoint:
   - `tools/bootstrap_go_port_v1.sh --check`
 

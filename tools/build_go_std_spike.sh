@@ -6,6 +6,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out"
 mkdir -p "$OUT"
+GO_CACHE="$OUT/go-build-cache"
+GO_TMP="$OUT/go-tmp"
+mkdir -p "$GO_CACHE" "$GO_TMP"
 
 prepend_path_if_dir() {
     if [ -d "$1" ]; then
@@ -61,9 +64,11 @@ echo "==> Building Go std stock artifact with Go toolchain..."
         }
         GO_HOST="$(to_host_path "$GO_BIN")"
         ROOT_HOST="$(to_host_path "$ROOT")"
-        "$POWERSHELL_BIN" -NoProfile -Command "\$env:CC=''; \$env:CXX=''; \$env:GOENV='off'; \$env:CGO_ENABLED='0'; Set-Location -LiteralPath '$ROOT_HOST'; & '$GO_HOST' run .\\tools\\gostd_stock_builder\\main.go"
+        GO_CACHE_HOST="$(to_host_path "$GO_CACHE")"
+        GO_TMP_HOST="$(to_host_path "$GO_TMP")"
+        "$POWERSHELL_BIN" -NoProfile -Command "\$env:CC=''; \$env:CXX=''; \$env:GOENV='off'; \$env:CGO_ENABLED='0'; \$env:GOCACHE='$GO_CACHE_HOST'; \$env:GOTMPDIR='$GO_TMP_HOST'; Set-Location -LiteralPath '$ROOT_HOST'; & '$GO_HOST' run .\\tools\\gostd_stock_builder\\main.go"
     else
-        GOENV=off CGO_ENABLED=0 "$GO_BIN" run ./tools/gostd_stock_builder/main.go
+        GOENV=off CGO_ENABLED=0 GOCACHE="$GO_CACHE" GOTMPDIR="$GO_TMP" "$GO_BIN" run ./tools/gostd_stock_builder/main.go
     fi
 )
 

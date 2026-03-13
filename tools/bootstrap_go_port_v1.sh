@@ -79,6 +79,8 @@ fi
 require_file "tools/build_go_std_spike.sh"
 require_file "tools/gostd_stock_builder/main.go"
 require_file "tools/runtime_toolchain_contract_v1.py"
+require_file "tools/extract_kernel_syscalls.py"
+require_file "tools/extract_go_std_syscalls.py"
 require_file "docs/runtime/port_contract_v1.md"
 require_file "docs/runtime/syscall_coverage_matrix_v1.md"
 require_file "docs/runtime/abi_stability_policy_v1.md"

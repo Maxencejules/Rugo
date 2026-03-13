@@ -179,6 +179,7 @@ jobs:
         with:
           name: runtime-maturity-artifacts
           path: |
+            out/gostd-contract.env
             out/runtime-toolchain-contract.env
             out/runtime-toolchain-repro.json
 
@@ -268,6 +269,8 @@ jobs:
             out/pytest-abi-stability-v3.xml
             out/abi-diff-v3.json
             out/syscall-compat-v3.json
+            out/kernel-syscall-table.json
+            out/gostd-syscall-interface.json
 
       - name: Kernel reliability v1 gate
         run: |

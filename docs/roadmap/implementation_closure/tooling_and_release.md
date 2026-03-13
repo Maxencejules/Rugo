@@ -9,13 +9,13 @@ real without proving new runtime breadth, and some current closures still rely
 too heavily on deterministic reports rather than on artifacts produced by the
 booted system.
 
-## T1: Experimental Go Port And ABI Qualification
+## T1: Supported Stock-Go Lane And ABI Qualification
 
 | Backlog | Current class | Current repo reading | Literal implementation target | Still required |
 |---|---|---|---|---|
-| `G2 Full Go port` | `Evidence-first` | The repo treats the stock-Go lane as experimental and mostly proves artifact contracts, not a default or broad runtime path. | Stock Go boots as a first-class supported userspace lane with enough ABI surface to run non-trivial services. | Make stock Go boot on the default image, expand syscall and process coverage, port real services onto that lane, and keep the experimental label only if the runtime surface truly remains limited. |
-| `M11 Runtime + toolchain maturity v1` | `Process-backed` | Toolchain and maturity docs plus gates exist, but the visible product story is still thin. | Supported toolchain versions, bootstrap steps, and host reproducibility are versioned and actually used to build shipping artifacts. | Turn the bootstrap rules into the normal build path, verify reproducibility across supported hosts, and keep toolchain breakage from silently drifting past the published policy. |
-| `M21 ABI + API Stability Program v3` | `Process-backed` | ABI stability is documented and gated, but the runtime surface it governs is still relatively small. | Syscall and API compatibility windows are generated from real source-of-truth interfaces and enforced against real consumers. | Generate ABI diffs from the actual syscall tables and headers, version deprecations against shipped userspace, and attach breakage reports to the release flow. |
+| `G2 Full Go port` | `Runtime-partial` | The repo now treats stock Go as a supported non-default userspace lane with build, boot, smoke, and ABI gates, but it is still not the default service stack. | Stock Go boots as a first-class supported userspace lane with enough ABI surface to run non-trivial services. | Port richer service workflows onto that lane or keep product claims limited to the supported non-default stock-Go surface. |
+| `M11 Runtime + toolchain maturity v1` | `Process-backed` | Toolchain and maturity docs plus gates now feed the real stock-Go build path and emit shipping artifacts, but host breadth is still limited. | Supported toolchain versions, bootstrap steps, and host reproducibility are versioned and actually used to build shipping artifacts. | Verify reproducibility across the declared host matrix and keep toolchain breakage from silently drifting past the published policy. |
+| `M21 ABI + API Stability Program v3` | `Process-backed` | ABI stability gates now derive kernel and stock-Go interface reports from source and fail on drift, but the governed userspace surface remains bounded. | Syscall and API compatibility windows are generated from real source-of-truth interfaces and enforced against real consumers. | Extend deprecation and compatibility reporting as more shipped userspace begins to consume the wider ABI line. |
 
 ## T2: Observability, Performance, And Evidence Discipline
 
@@ -49,5 +49,5 @@ booted system.
   from the same images and boot flows that the repo claims to ship.
 - Convert policy docs into the default automation path. A policy that only
   exists in docs and isolated tests is not yet a release discipline.
-- Keep experimental lanes clearly labeled. `G2` should not be mistaken for the
+- Keep non-default lanes clearly labeled. `G2` should not be mistaken for the
   default product state unless the runtime really reaches that bar.

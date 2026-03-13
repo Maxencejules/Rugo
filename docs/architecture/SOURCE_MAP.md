@@ -6,7 +6,7 @@ This document answers four questions quickly:
 2. Which commands prove that code is live?
 3. Which evidence is direct runtime evidence versus deterministic
    qualification scaffolding?
-4. Which paths are archival or experimental rather than the default product
+4. Which paths are archival or supported non-default rather than the default product
    lane?
 
 ## Read This Repo In Two Layers
@@ -14,7 +14,7 @@ This document answers four questions quickly:
 Layer 1: implementation
 - kernel source in `arch/`, `boot/`, and `kernel_rs/src/`
 - default Go userspace in `services/go/`
-- experimental stock-Go userspace in `services/go_std/`
+- supported stock-Go userspace in `services/go_std/`
 
 Layer 2: qualification
 - report generators, build helpers, and acceptance tooling in `tools/`
@@ -34,7 +34,7 @@ gate test that validates that report, treat it as qualification scaffolding.
 | Boot, traps, paging, scheduler, user entry | `arch/`, `boot/`, `kernel_rs/src/lib.rs` | `make image-kernel`, `make boot-kernel`, `tests/boot/*`, `tests/trap/*`, `tests/sched/*`, `tests/user/*` | live runtime | The kernel implementation is real, but it is concentrated in one large Rust file. |
 | Default Go bootstrap lane | `services/go/` | `make image-demo`, `make boot-demo`, `tests/go/test_go_user_service.py` | live runtime | This is the clearest proof of the Rust-kernel plus Go-userspace identity. |
 | Filesystem, package, and external package run path | `kernel_rs/src/lib.rs`, `tools/mkfs.py`, `tools/pkg_bootstrap_v1.py` | `tests/fs/*`, `tests/pkg/test_pkg_install_run.py`, `tests/pkg/test_pkg_external_apps.py` | mixed | Boot and package-run proofs are live; repo metadata tooling is support code. |
-| Experimental stock-Go lane | `services/go_std/`, `tools/build_go_std_spike.sh`, `tools/gostd_stock_builder/` | `make image-go-std`, `tests/go/test_std_go_binary.py` | live runtime, experimental | This is a bring-up and qualification lane, not the default repo story. |
+| Supported stock-Go lane | `services/go_std/`, `tools/build_go_std_spike.sh`, `tools/gostd_stock_builder/` | `make image-std`, `make boot-std`, `make smoke-std`, `tests/go/test_std_go_binary.py` | live runtime, supported non-default | This is a supported build and boot lane, but it is not the default repo story. |
 | Compatibility, desktop, hardware, release, fleet, and similar qualification lanes | `tools/run_*`, `tests/*gate*`, contract docs in `docs/` | usually `make test-*` | deterministic qualification | Useful repo discipline. Do not read these as proof that a correspondingly large runtime tree exists. |
 | Historical baseline | `legacy/` | `make -C legacy test-qemu` | live runtime, archival | Kept for comparison and regression context. |
 
@@ -44,7 +44,8 @@ Recommended direct proofs:
 - kernel-only boot: `make image-kernel` then `make boot-kernel`
 - default product demo: `make image-demo` then `make boot-demo`
 - default product smoke without pytest: `make smoke-demo`
-- experimental stock-Go bring-up: `make image-go-std`
+- supported stock-Go lane: `make image-std` then `make boot-std`
+- supported stock-Go smoke without pytest: `make smoke-std`
 
 Representative direct runtime tests:
 - `tests/boot/test_boot_banner.py`

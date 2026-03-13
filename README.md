@@ -7,7 +7,7 @@ Default product lane:
 - TinyGo-first Go services in `services/go/`
 
 Non-default lanes:
-- experimental stock-Go bring-up in `services/go_std/`
+- supported stock-Go userspace lane in `services/go_std/`
 - historical C + gccgo baseline in `legacy/`
 
 ## Start Here
@@ -38,9 +38,12 @@ Visible proof paths:
 - `make image-kernel` then `make boot-kernel`
   Boots the kernel-only lane for boot, paging, trap, and scheduler work.
   Proof: `tests/boot/test_boot_banner.py`, `tests/boot/test_paging_enabled.py`, `tests/trap/test_idt_smoke.py`
-- `make image-go-std`
-  Boots the experimental stock-Go lane.
+- `make image-std` then `make boot-std`
+  Boots the supported stock-Go userspace lane.
   Proof: `tests/go/test_std_go_binary.py`
+- `make smoke-std`
+  Verifies the supported stock-Go lane without pytest.
+  Proof: `tools/smoke_boot.sh`, `Makefile` `smoke-std`
 - `make test-runtime-maturity`
   Exercises the runtime-facing QEMU lane for stock-Go markers, stress syscall,
   memory pressure, thread spawn, and VM map behavior.
@@ -69,7 +72,7 @@ Visible proof paths:
 Implementation tree:
 - kernel mechanisms: `arch/`, `boot/`, `kernel_rs/src/`
 - default Go userspace: `services/go/`
-- experimental stock-Go userspace: `services/go_std/`
+- supported non-default stock-Go userspace: `services/go_std/`
 
 Support tree:
 - qualification and build tooling: `tools/`
@@ -95,8 +98,10 @@ make userspace    # build the default TinyGo userspace payload
 make image-demo   # build the default demo ISO
 make boot-demo    # boot the default demo ISO in QEMU
 make smoke-demo   # boot + verify demo serial markers without Python
+make image-std    # build the supported stock-Go ISO
+make boot-std     # boot the supported stock-Go ISO in QEMU
+make smoke-std    # boot + verify stock-Go serial markers without Python
 make gate-all     # full pytest-backed acceptance suite
-make image-go-std # experimental stock-Go port image
 ```
 
 Detailed build and host prerequisites live in [docs/BUILD.md](docs/BUILD.md).
@@ -113,7 +118,7 @@ Primary scoring rule:
 - the first row is the answer to "how close is the repo to the stated product?"
 - current core closure order is `M10/M16 -> M25 -> M12/M13 -> boot-backed artifacts -> M18/M19 -> M22/M42 runtime-backed closure`
 - `G1` is the default Go-service lane
-- `G2` is experimental stock-Go qualification, not the default repo state
+- `G2` is the supported stock-Go lane, not the default repo state
 
 ## Architecture And Archive
 

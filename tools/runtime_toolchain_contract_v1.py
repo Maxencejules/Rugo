@@ -67,6 +67,10 @@ def _run_stock_go_builder(root: Path) -> None:
     script_error: str | None = None
     bash_bin = _find_tool(
         "bash",
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "C:/Progra~1/Git/bin/bash.exe",
+        "C:/Progra~1/Git/usr/bin/bash.exe",
         "/usr/bin/bash",
         "/bin/bash",
         "C:/WINDOWS/system32/bash.exe",
@@ -105,6 +109,12 @@ def _run_stock_go_builder(root: Path) -> None:
     env = os.environ.copy()
     env["GOENV"] = "off"
     env["CGO_ENABLED"] = "0"
+    cache_dir = root / "out" / "go-build-cache"
+    tmp_dir = root / "out" / "go-tmp"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    env["GOCACHE"] = str(cache_dir)
+    env["GOTMPDIR"] = str(tmp_dir)
     env.pop("CC", None)
     env.pop("CXX", None)
     proc = subprocess.run(

@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Define the G2 artifact/runtime contract used to close the milestone:
+Define the G2 artifact/runtime contract used to qualify the supported
+stock-Go lane:
 - lock the target contract (`GOOS=rugo`, `GOARCH=amd64`),
 - keep deterministic runtime marker behavior for the syscall/thread/vm bridge,
 - validate that the acceptance path is driven by a stock-Go toolchain step.
@@ -22,11 +23,16 @@ Artifact contract file:
   - `STOCK_GO_HOST_GOARCH=...`
 
 Build path:
-- `tools/build_go_std_spike.sh` runs a stock Go command:
+- `make build-go-std` runs the supported bootstrap path:
+  - `bash tools/bootstrap_go_port_v1.sh --rebuild`
+- the bootstrap path rebuilds through:
+  - `tools/build_go_std_spike.sh`
   - `go run ./tools/gostd_stock_builder/main.go`
 - `tools/gostd_stock_builder/main.go` writes:
   - `out/gostd.bin`
   - `out/gostd-contract.env`
+- `tools/runtime_toolchain_contract_v1.py` writes:
+  - `out/runtime-toolchain-contract.env`
 - `tests/go/test_std_go_binary.py` checks both serial markers and contract
   metadata to keep the stock-Go gate explicit.
 
@@ -35,6 +41,7 @@ Build path:
 - Runtime marker source lane: `services/go_std/`
 - Build script: `tools/build_go_std_spike.sh`
 - Flat binary output: `out/gostd.bin`
+- Interface source report: `out/gostd-syscall-interface.json`
 - Kernel feature: `go_std_test`
 - ISO target: `os-go-std.iso`
 - Acceptance path: `tests/go/test_std_go_binary.py` (marker set: `GOSTD: ok`,

@@ -25,12 +25,15 @@
 make help           # show the primary developer workflows
 make kernel         # compile the kernel ELF
 make userspace      # build the default TinyGo userspace payload
+make build-go-std   # build the supported stock-Go userspace artifacts
 make image-demo     # build the default demo ISO (os-go.iso)
 make boot-demo      # boot the demo ISO in QEMU
 make smoke-demo     # boot + verify serial markers without Python
+make image-std      # build the supported stock-Go ISO (os-go-std.iso)
+make boot-std       # boot the supported stock-Go ISO in QEMU
+make smoke-std      # boot + verify stock-Go serial markers without Python
 make image-kernel   # build the kernel-only ISO (os.iso)
 make boot-kernel    # boot the kernel-only ISO in QEMU
-make image-go-std   # build experimental stock-Go ISO (os-go-std.iso)
 make gate-all       # full pytest-backed acceptance suite
 make repro-check    # deterministic ISO gate (build twice + SHA256 compare)
 ```
@@ -39,10 +42,15 @@ Default runtime story:
 - `make image-demo` + `make boot-demo` is the recommended front-door demo
   It boots `goinit -> gosvcm -> gosh -> timesvc` on the TinyGo lane.
 - `make smoke-demo` is the fast non-Python serial-marker check for that lane
+- `make build-go-std` runs the supported stock-Go bootstrap path and emits:
+  `out/gostd.bin`, `out/gostd-contract.env`, and
+  `out/runtime-toolchain-contract.env`
+- `make image-std` + `make boot-std` is the supported stock-Go boot lane
+- `make smoke-std` is the fast non-Python serial-marker check for that lane
 - `make image-kernel` + `make boot-kernel` is the kernel-only lane
 - `make gate-all` preserves the historical pytest-backed acceptance suite
-- `make image-go-std` is experimental and should not be treated as the default
-  user-space path
+- the stock-Go lane is supported but non-default; `make image-demo` remains the
+  default user-space path
 
 Compatibility aliases remain available: `make build`, `make image`,
 `make run-kernel`, `make demo-go`, `make validate`, and `make test-qemu`.
@@ -147,8 +155,8 @@ Rustup manages installation automatically.
 | TinyGo | 0.40.1 | `.github/workflows/ci.yml`, `Dockerfile` |
 
 These are host toolchain installs used in CI and Docker, and also required
-locally for `make userspace`, `make image-demo`, `make image-go-std`, and the
-full `make gate-all` target. If you only run `make kernel` or
+locally for `make userspace`, `make image-demo`, `make build-go-std`,
+`make image-std`, and the full `make gate-all` target. If you only run `make kernel` or
 `make image-kernel`, Go/TinyGo are not required.
 Update the version numbers in CI and Dockerfile together when upgrading.
 

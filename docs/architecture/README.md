@@ -7,8 +7,8 @@ Rugo is a hybrid OS with a strict language split:
 - Go user space for services, policy, and the default higher-level system
   personality
 - TinyGo-first as the default early integration lane for user space
-- stock-Go support kept as an experimental porting lane until it is mature
-  enough to justify repo promotion
+- stock-Go support kept as a supported non-default lane while TinyGo-first
+  remains the default demo path
 
 ## Current Source Map
 
@@ -25,7 +25,7 @@ Current physical implementation:
 |--------|---------------|-------|
 | Core runtime | `arch/`, `boot/`, `kernel_rs/src/` | This is the actual kernel lane. |
 | Userspace runtime | `services/go/` | Canonical TinyGo bootstrap lane: Go init, service manager, shell, and syscall-backed service. |
-| Experimental runtime | `services/go_std/` | Stock-Go bring-up and ABI experiment lane. |
+| Supported non-default runtime | `services/go_std/` | Stock-Go build, boot, and ABI qualification lane. |
 | Tooling and support | `tools/`, `.github/`, `vendor/`, `Makefile`, `Dockerfile` | Important, but not the product identity. |
 | Validation | `tests/` | Mix of live QEMU proofs, contract checks, and aggregate gate wiring. |
 | Legacy and archive | `legacy/`, archived backlog docs | Useful for reference and closure history, not the active product story. |
@@ -53,7 +53,7 @@ runtime evidence from deterministic qualification scaffolding.
 2. Make the Go userspace path obvious.
 3. Keep tooling and evidence strong, but visually secondary.
 4. Keep legacy available, but clearly demoted to reference status.
-5. Keep experimental work discoverable without confusing it for the default
+5. Keep supported non-default work discoverable without confusing it for the default
    runtime.
 
 ## Related Docs

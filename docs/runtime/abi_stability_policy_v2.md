@@ -33,23 +33,27 @@ Within this window:
 ## Change-control process
 
 1. Propose the change in a design note under `docs/runtime/`.
-2. Run `tools/check_abi_diff_v3.py` and capture the diff artifact.
-3. Run `tools/check_syscall_compat_v3.py` to verify policy obligations.
-4. If breakage exists, provide:
+2. Generate source-of-truth reports from:
+   - `tools/extract_kernel_syscalls.py`
+   - `tools/extract_go_std_syscalls.py`
+3. Run `tools/check_abi_diff_v3.py` and capture the diff artifact.
+4. Run `tools/check_syscall_compat_v3.py` with the kernel and userspace
+   reports to verify policy obligations.
+5. If breakage exists, provide:
    - major ABI-line bump plan,
    - migration document under `docs/abi/`,
    - compatibility exception rationale.
-5. Land only when `make test-abi-stability-v3` is green.
+6. Land only when `make test-abi-stability-v3` is green.
 
 ## Release gate requirements
 
 - `tests/runtime/test_abi_docs_v3.py`
 - `tests/runtime/test_abi_window_v3.py`
 - `tests/runtime/test_abi_diff_gate_v3.py`
+- `tests/runtime/test_abi_source_truth_v3.py`
 - `tests/compat/test_abi_compat_matrix_v3.py`
 - `tests/runtime/test_abi_stability_gate_v3.py`
 
 Local gate: `make test-abi-stability-v3`.
 
 CI gate step: `ABI stability v3 gate`.
-

@@ -759,12 +759,9 @@ def qemu_go_c4_runtime():
 
 @pytest.fixture
 def qemu_serial_go_std():
-    """Boot the G2 standard-Go scaffold OS image."""
+    """Boot the supported stock-Go userspace image."""
     if not os.path.isfile(ISO_GO_STD_PATH):
-        pytest.skip(
-            "G2 prep: standard-Go image not built yet "
-            f"(expected {ISO_GO_STD_PATH})"
-        )
+        pytest.skip(f"Stock-Go image not built yet (expected {ISO_GO_STD_PATH})")
     return _boot_iso(ISO_GO_STD_PATH)
 
 

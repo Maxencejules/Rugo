@@ -18,9 +18,12 @@ def test_abi_stability_v3_gate_wiring_and_artifacts():
         "docs/runtime/deprecation_window_policy_v1.md",
         "tools/check_abi_diff_v3.py",
         "tools/check_syscall_compat_v3.py",
+        "tools/extract_kernel_syscalls.py",
+        "tools/extract_go_std_syscalls.py",
         "tests/runtime/test_abi_docs_v3.py",
         "tests/runtime/test_abi_window_v3.py",
         "tests/runtime/test_abi_diff_gate_v3.py",
+        "tests/runtime/test_abi_source_truth_v3.py",
         "tests/compat/test_abi_compat_matrix_v3.py",
     ]
     for rel in required:
@@ -35,10 +38,13 @@ def test_abi_stability_v3_gate_wiring_and_artifacts():
     assert "test-abi-stability-v3" in makefile
     for entry in [
         "tools/check_abi_diff_v3.py --out $(OUT)/abi-diff-v3.json",
-        "tools/check_syscall_compat_v3.py --diff-report $(OUT)/abi-diff-v3.json --out $(OUT)/syscall-compat-v3.json",
+        "tools/check_syscall_compat_v3.py --diff-report $(OUT)/abi-diff-v3.json --kernel-report $(KERNEL_SYSCALL_TABLE) --interface-report $(GO_STD_INTERFACE_REPORT) --out $(OUT)/syscall-compat-v3.json",
+        "$(KERNEL_SYSCALL_TABLE): tools/extract_kernel_syscalls.py kernel_rs/src/lib.rs | $(OUT)",
+        "$(GO_STD_INTERFACE_REPORT): tools/extract_go_std_syscalls.py services/go_std/syscalls.asm | $(OUT)",
         "tests/runtime/test_abi_docs_v3.py",
         "tests/runtime/test_abi_window_v3.py",
         "tests/runtime/test_abi_diff_gate_v3.py",
+        "tests/runtime/test_abi_source_truth_v3.py",
         "tests/compat/test_abi_compat_matrix_v3.py",
         "tests/runtime/test_abi_stability_gate_v3.py",
     ]:
@@ -51,8 +57,9 @@ def test_abi_stability_v3_gate_wiring_and_artifacts():
     assert "out/pytest-abi-stability-v3.xml" in ci
     assert "out/abi-diff-v3.json" in ci
     assert "out/syscall-compat-v3.json" in ci
+    assert "out/kernel-syscall-table.json" in ci
+    assert "out/gostd-syscall-interface.json" in ci
 
     assert "Status: done" in backlog
     assert "M21" in milestones
     assert "M21" in status
-

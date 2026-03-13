@@ -77,7 +77,7 @@ It is not the same thing as the current runtime-backed scoreboard.
 
 ### Tooling / Validation / Release Infrastructure
 
-- `T1` Experimental Go Port and ABI Qualification: `G2`, `M11`, `M21`
+- `T1` Supported Stock-Go Lane and ABI Qualification: `G2`, `M11`, `M21`
 - `T2` Observability, Performance, and Evidence Discipline: `M24`, `M29`,
   `M40`
 - `T3` Release and Recovery Infrastructure: `M14`, `M20`, `M30`, `M31`
@@ -107,7 +107,7 @@ Archive or de-emphasize:
 - repeated checkpoint strings and latest-GUI callouts
 - detailed execution backlogs and closure ledgers as the first impression
 
-Experimental but preserved:
+Supported or preserved:
 
-- stock-Go porting work
+- supported stock-Go lane work
 - extended research roadmap details in `docs/POST_G2_EXTENDED_MILESTONES.md`

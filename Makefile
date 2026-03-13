@@ -5,9 +5,11 @@
 # Use bash recipes everywhere so inline env assignments (for mkimage variants)
 # work consistently on Windows and Unix.
 ifeq ($(OS),Windows_NT)
-SHELL := C:/WINDOWS/system32/bash.exe
+BASH ?= C:/Progra~1/Git/bin/bash.exe
+SHELL := $(BASH)
 .SHELLFLAGS := -lc
 else
+BASH := bash
 SHELL := bash
 endif
 
@@ -57,7 +59,7 @@ endif
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
        test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-native-storage-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
-       help kernel kernel-only kernel-demo userspace userspace-go userspace-std image-kernel image-demo image-std boot-kernel boot-demo boot-std smoke-kernel smoke-demo gate-all \
+       help kernel kernel-only kernel-demo userspace userspace-go userspace-std image-kernel image-demo image-std boot-kernel boot-demo boot-std smoke-kernel smoke-demo smoke-std gate-all \
        run run-kernel demo demo-go validate test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -96,6 +98,10 @@ LDFLAGS   = -nostdlib -static -T boot/linker.ld
 OUT = out
 GO_USER_BIN = $(OUT)/gousr.bin
 GO_STD_BIN = $(OUT)/gostd.bin
+GO_STD_CONTRACT = $(OUT)/gostd-contract.env
+RUNTIME_TOOLCHAIN_CONTRACT = $(OUT)/runtime-toolchain-contract.env
+KERNEL_SYSCALL_TABLE = $(OUT)/kernel-syscall-table.json
+GO_STD_INTERFACE_REPORT = $(OUT)/gostd-syscall-interface.json
 FS_TEST_IMG = $(OUT)/fs-test.img
 FS_BADMAGIC_IMG = $(OUT)/fs-badmagic.img
 
@@ -115,8 +121,17 @@ $(OUT):
 $(GO_USER_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/syscalls.go services/go/linker.ld services/go/go.mod | $(OUT)
 	bash tools/build_go.sh
 
-$(GO_STD_BIN): tools/build_go_std_spike.sh tools/gostd_stock_builder/main.go services/go_std/main.go services/go_std/go.mod services/go_std/linker.ld services/go_std/start.asm services/go_std/rt0.asm services/go_std/runtime_stubs.asm services/go_std/syscalls.asm | $(OUT)
-	bash tools/build_go_std_spike.sh
+$(GO_STD_BIN) $(GO_STD_CONTRACT): tools/build_go_std_spike.sh tools/bootstrap_go_port_v1.sh tools/gostd_stock_builder/main.go tools/runtime_toolchain_contract_v1.py services/go_std/main.go services/go_std/go.mod services/go_std/linker.ld services/go_std/start.asm services/go_std/rt0.asm services/go_std/runtime_stubs.asm services/go_std/syscalls.asm docs/runtime/port_contract_v1.md docs/runtime/abi_stability_policy_v1.md docs/runtime/toolchain_bootstrap_v1.md | $(OUT)
+	$(BASH) tools/bootstrap_go_port_v1.sh --rebuild
+
+$(RUNTIME_TOOLCHAIN_CONTRACT): tools/runtime_toolchain_contract_v1.py $(GO_STD_BIN) $(GO_STD_CONTRACT) docs/runtime/port_contract_v1.md docs/runtime/abi_stability_policy_v1.md | $(OUT)
+	$(PYTHON) tools/runtime_toolchain_contract_v1.py --out $(RUNTIME_TOOLCHAIN_CONTRACT)
+
+$(KERNEL_SYSCALL_TABLE): tools/extract_kernel_syscalls.py kernel_rs/src/lib.rs | $(OUT)
+	$(PYTHON) tools/extract_kernel_syscalls.py --out $(KERNEL_SYSCALL_TABLE)
+
+$(GO_STD_INTERFACE_REPORT): tools/extract_go_std_syscalls.py services/go_std/syscalls.asm | $(OUT)
+	$(PYTHON) tools/extract_go_std_syscalls.py --out $(GO_STD_INTERFACE_REPORT)
 
 $(FS_TEST_IMG): tools/mkfs.py | $(OUT)
 	$(PYTHON) tools/mkfs.py $(FS_TEST_IMG)
@@ -509,16 +524,16 @@ build-go: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN)
 image-go: build-go
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go.elf ISO_NAME=os-go.iso bash tools/mkimage.sh
 
-# --- G2 spike: Go std-port candidate kernel -----------------------------------
+# --- G2: Supported stock-Go userspace lane ------------------------------------
 
-userspace-std: $(GO_STD_BIN)
+userspace-std: $(GO_STD_BIN) $(GO_STD_CONTRACT) $(RUNTIME_TOOLCHAIN_CONTRACT)
 
-build-go-std: $(ASM_OBJS) boot/linker.ld $(GO_STD_BIN)
+build-go-std: $(ASM_OBJS) boot/linker.ld $(GO_STD_BIN) $(GO_STD_CONTRACT) $(RUNTIME_TOOLCHAIN_CONTRACT)
 	cd kernel_rs && $(CARGO) build --release --features go_std_test
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go-std.elf $(ASM_OBJS) $(KERNEL_LIB)
 
 image-go-std: build-go-std
-	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go-std.elf ISO_NAME=os-go-std.iso bash tools/mkimage.sh
+	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go-std.elf ISO_NAME=os-go-std.iso $(BASH) tools/mkimage.sh
 
 # --- M10: Security rights test kernel -----------------------------------------
 
@@ -586,6 +601,13 @@ smoke-demo: image-demo
 		--expect "GOINIT: ready" \
 		--expect "RUGO: halt ok"
 
+smoke-std: image-go-std
+	$(BASH) tools/smoke_boot.sh --iso $(OUT)/os-go-std.iso \
+		--label std-go \
+		--expect "RUGO: boot ok" \
+		--expect "GOSTD: ok" \
+		--expect "RUGO: halt ok"
+
 gate-all: test-qemu
 
 validate: gate-all
@@ -613,10 +635,10 @@ test-security-baseline: image-sec-rights image-sec-filter image-go
 	$(PYTHON) -m pytest tests/security -v --junitxml=$(OUT)/pytest-security.xml
 
 test-runtime-maturity: image-go-std image-stress-syscall image-pressure-shm image-thread-spawn image-vm-map
-	bash tools/bootstrap_go_port_v1.sh --check
-	$(PYTHON) tools/runtime_toolchain_contract_v1.py --out $(OUT)/runtime-toolchain-contract.env
+	$(BASH) tools/bootstrap_go_port_v1.sh --check
+	$(PYTHON) tools/runtime_toolchain_contract_v1.py --out $(RUNTIME_TOOLCHAIN_CONTRACT)
 	$(PYTHON) tools/runtime_toolchain_contract_v1.py --repro --out $(OUT)/runtime-toolchain-repro.json
-	$(PYTHON) -m pytest tests/runtime tests/go/test_std_go_binary.py tests/compat/test_posix_subset.py -v
+	$(PYTHON) -m pytest tests/runtime tests/go/test_std_go_binary.py tests/go/test_stock_go_bootstrap_v1.py tests/compat/test_posix_subset.py -v --basetemp=$(OUT)/pytest-runtime-maturity-tmp
 
 test-network-stack-v1: image-net
 	$(PYTHON) tools/run_net_interop_matrix_v1.py --out $(OUT)/net-interop-v1.json
@@ -654,10 +676,10 @@ test-release-ops-v2: image
 	$(PYTHON) tools/collect_support_bundle_v2.py --artifacts $(OUT)/installer-v2.json $(OUT)/upgrade-recovery-v2.json --out $(OUT)/support-bundle-v2.json
 	$(PYTHON) -m pytest tests/build/test_installer_recovery_v2.py tests/build/test_upgrade_rollback_v2.py tests/build/test_support_bundle_v2.py tests/build/test_operability_gate_v2.py -v --junitxml=$(OUT)/pytest-release-ops-v2.xml
 
-test-abi-stability-v3:
+test-abi-stability-v3: $(KERNEL_SYSCALL_TABLE) $(GO_STD_INTERFACE_REPORT)
 	$(PYTHON) tools/check_abi_diff_v3.py --out $(OUT)/abi-diff-v3.json
-	$(PYTHON) tools/check_syscall_compat_v3.py --diff-report $(OUT)/abi-diff-v3.json --out $(OUT)/syscall-compat-v3.json
-	$(PYTHON) -m pytest tests/runtime/test_abi_docs_v3.py tests/runtime/test_abi_window_v3.py tests/runtime/test_abi_diff_gate_v3.py tests/compat/test_abi_compat_matrix_v3.py tests/runtime/test_abi_stability_gate_v3.py -v --junitxml=$(OUT)/pytest-abi-stability-v3.xml
+	$(PYTHON) tools/check_syscall_compat_v3.py --diff-report $(OUT)/abi-diff-v3.json --kernel-report $(KERNEL_SYSCALL_TABLE) --interface-report $(GO_STD_INTERFACE_REPORT) --out $(OUT)/syscall-compat-v3.json
+	$(PYTHON) -m pytest tests/runtime/test_abi_docs_v3.py tests/runtime/test_abi_window_v3.py tests/runtime/test_abi_diff_gate_v3.py tests/runtime/test_abi_source_truth_v3.py tests/compat/test_abi_compat_matrix_v3.py tests/runtime/test_abi_stability_gate_v3.py -v --basetemp=$(OUT)/pytest-abi-stability-v3-tmp --junitxml=$(OUT)/pytest-abi-stability-v3.xml
 
 test-kernel-reliability-v1:
 	$(PYTHON) tools/run_kernel_soak_v1.py --seed 20260306 --out $(OUT)/kernel-soak-v1.json
@@ -981,6 +1003,9 @@ help:
 		'  make image-demo   - build the default demo ISO (Rust kernel + Go userspace)' \
 		'  make boot-demo    - boot the default demo ISO in QEMU' \
 		'  make smoke-demo   - boot the demo ISO and verify serial markers without Python' \
+		'  make image-std    - build the supported stock-Go ISO' \
+		'  make boot-std     - boot the supported stock-Go ISO in QEMU' \
+		'  make smoke-std    - boot the stock-Go ISO and verify serial markers without Python' \
 		'  make image-kernel - build the kernel-only ISO' \
 		'  make boot-kernel  - boot the kernel-only ISO in QEMU' \
 		'  make smoke-kernel - boot the kernel-only ISO and verify serial markers without Python' \
@@ -1014,4 +1039,3 @@ docker-legacy:
 		  -o -name "*.cfg" -o -name "*.conf" -o -name "*.go" \) \
 		  -exec sed -i "s/\r$$//" {} + \
 		&& make -C legacy clean build image test-qemu'
-

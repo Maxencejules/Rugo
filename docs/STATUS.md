@@ -107,7 +107,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M7** VirtIO net + UDP | ✅ | ✅ | Rugo: `tests/net/test_udp_echo.py` (`NET: udp echo`). Legacy: `legacy/tests/net/test_udp_echo.py` |
 | **G0** Go kernel entry | ✅ | n/a | `legacy/tests/boot/test_go_entry.py` (`GO: kmain ok`). Legacy-only. Re-verified 2026-02-18 via Docker. |
 | **G1** Go services (TinyGo) | n/a | ✅ | Rugo: `tests/go/test_go_user_service.py` (`GOINIT: start`, `GOSVCM: start`, `GOSH: reply ok`, `TIMESVC: time ok`). TinyGo bare-metal x86_64. |
-| **G2** Full Go port | n/a | ✅ | Rugo-only. Done: `tests/go/test_std_go_binary.py` on `go_std_test` stock-Go artifact path (`os-go-std.iso`, `GOSTD: ok`). |
+| **G2** Full Go port | n/a | ✅ | Rugo-only. Done: `tests/go/test_std_go_binary.py` and `make smoke-std` on the supported `go_std_test` stock-Go artifact path (`os-go-std.iso`, `GOSTD: ok`). |
 | **M8** Compatibility Profile v1 | n/a | ✅ | Rugo: `tests/compat/*`, `tests/pkg/test_pkg_external_apps.py`; docs in `docs/abi/*` and `docs/M8_EXECUTION_BACKLOG.md`. |
 | **M9** Hardware enablement matrix v1 | n/a | ✅ | Rugo: `tests/hw/*`, `make test-hw-matrix`, CI `Hardware matrix v1 gate`, docs in `docs/hw/*` and `docs/M9_EXECUTION_BACKLOG.md`. |
 | **M10** Security baseline v1 | n/a | ✅ | Rugo: `tests/security/*`, `make test-security-baseline`, CI `Security baseline v1 gate`, docs in `docs/security/*` and `docs/M10_EXECUTION_BACKLOG.md`. |
@@ -121,7 +121,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M18** Storage Reliability v2 | n/a | done | Rugo: `tests/storage/*_v2` + storage gate tests, `make test-storage-reliability-v2`, CI `Storage reliability v2 gate`, docs in `docs/storage/*_v2`, and `docs/M18_EXECUTION_BACKLOG.md`. |
 | **M19** Network Stack v2 | n/a | done | Rugo: `tests/net/*_v2` + network gate tests, `make test-network-stack-v2`, CI `Network stack v2 gate`, docs in `docs/net/*_v2`, and `docs/M19_EXECUTION_BACKLOG.md`. |
 | **M20** Operability + Release UX v2 | n/a | done | Rugo: `tests/build/*_v2` + operability gate tests, `make test-release-ops-v2`, CI `Operability and release UX v2 gate`, docs in `docs/build/*_v2`, `docs/pkg/*_v2`, and `docs/M20_EXECUTION_BACKLOG.md`. |
-| **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
+| **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + source-of-truth compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 | **M22** Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs + deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 | **M23** Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs + deterministic diagnostics and firmware attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
 | **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs + deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
@@ -206,12 +206,14 @@ shell, VirtIO net, UDP echo, and TinyGo user-space services are all functional
 with passing QEMU integration tests.
 
 G2 is complete as of 2026-03-04:
-- `tools/build_go_std_spike.sh` now executes a stock-Go path
-  (`go run ./tools/gostd_stock_builder/main.go`) and writes
-  `out/gostd.bin` plus `out/gostd-contract.env`.
+- `make build-go-std` now runs the supported bootstrap path
+  (`bash tools/bootstrap_go_port_v1.sh --rebuild`) and emits
+  `out/gostd.bin`, `out/gostd-contract.env`, and
+  `out/runtime-toolchain-contract.env`.
 - `tests/go/test_std_go_binary.py` validates serial marker flow and stock-Go
   contract metadata (`GOOS=rugo`, `GOARCH=amd64`, `STOCK_GO_*` keys).
-- `make image-go-std` remains the G2 artifact gate for `os-go-std.iso`.
+- `make image-go-std`, `make boot-std`, and `make smoke-std` form the
+  supported stock-Go boot lane for `os-go-std.iso`.
 - Execution and sequencing history remains in `docs/G2_EXECUTION_BACKLOG.md`.
 
 M8 execution update (2026-03-04):

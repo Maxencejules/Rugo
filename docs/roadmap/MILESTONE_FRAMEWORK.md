@@ -72,7 +72,7 @@ They are important, but secondary to the core runtime scoreboard.
 
 | New milestone | Status | Meaning of done | Historical mapping |
 |---|---|---|---|
-| `T1` Experimental Go Port and ABI Qualification | done | The experimental stock-Go lane, runtime coverage, and ABI stability rules are explicit, reproducible, and testable without being confused for the default product lane. | `G2`, `M11`, `M21` |
+| `T1` Supported Stock-Go Lane and ABI Qualification | done | The supported stock-Go lane, runtime coverage, and ABI stability rules are explicit, reproducible, and testable without being confused for the default product lane. | `G2`, `M11`, `M21` |
 | `T2` Observability, Performance, and Evidence Discipline | done | Performance budgets, diagnostics, and runtime-backed evidence are release-gated with machine-readable artifacts and trace linkage. | `M24`, `M29`, `M40` |
 | `T3` Release and Recovery Infrastructure | done | Release engineering, upgrade/recovery workflows, operability, and lifecycle policy are versioned and release-gated. | `M14`, `M20`, `M30`, `M31` |
 | `T4` Hardening, Qualification, and Fleet Operations | done | Hardening programs, conformance, fleet rollout discipline, and maturity bundles are wired into repeatable gates and policy. | `M28`, `M32`, `M33`, `M34` |
@@ -102,7 +102,7 @@ This is the condensed remap for the current completed ledger.
 | `M10`, `M16`, `M25` | Core Hybrid OS | `C3` Contracted Service OS Runtime |
 | `M12`, `M13`, `M18`, `M19` | Core Hybrid OS | `C4` Durable and Connected Runtime |
 | `M22`, `M42` | Core Hybrid OS | `C5` Reliable and Isolated Service OS |
-| `G2`, `M11`, `M21` | Tooling / Validation / Release Infrastructure | `T1` Experimental Go Port and ABI Qualification |
+| `G2`, `M11`, `M21` | Tooling / Validation / Release Infrastructure | `T1` Supported Stock-Go Lane and ABI Qualification |
 | `M24`, `M29`, `M40` | Tooling / Validation / Release Infrastructure | `T2` Observability, Performance, and Evidence Discipline |
 | `M14`, `M20`, `M30`, `M31` | Tooling / Validation / Release Infrastructure | `T3` Release and Recovery Infrastructure |
 | `M28`, `M32`, `M33`, `M34` | Tooling / Validation / Release Infrastructure | `T4` Hardening, Qualification, and Fleet Operations |
@@ -145,7 +145,7 @@ The following labels are more accurate for the architecture-first story:
 | Current label | Recommended label | Why |
 |---|---|---|
 | `G1 Go services (TinyGo)` | `Default Go Service Bring-up (TinyGo-first)` | This is the actual default user-space path, not just a side Go experiment. |
-| `G2 Full Go port` | `Experimental Stock-Go Port Qualification` | The repo itself says the stock-Go lane is experimental; "full port" overstates visible scope. |
+| `G2 Full Go port` | `Supported Stock-Go Lane Qualification` | The repo now ships a supported stock-Go lane, but "full port" still overstates the visible scope. |
 | `M34 Maturity Qualification + LTS Declaration` | `Release Qualification Bundle + LTS Policy` | The current evidence is strong process discipline, not broad runtime maturity parity. |
 | `M39 Ecosystem Scale + Distribution Workflow v1` | `Catalog and Distribution Workflow Expansion v1` | The visible evidence is bounded catalog/install/audit workflows, not an ecosystem at real scale. |
 | `M44 Real Desktop + Ecosystem Qualification v2` | `Bounded Desktop Workflow Qualification v2` | "Real desktop" implies broader end-user parity than the stated bounded workflow profile. |
@@ -158,7 +158,7 @@ used as top-line maturity proof:
 
 | Milestone | Why it likely overclaims when foregrounded |
 |---|---|
-| `G2 Full Go port` | Evidence is a stock-Go artifact contract path on an explicitly experimental lane, not a default or feature-complete Go port. |
+| `G2 Full Go port` | Evidence is a supported stock-Go artifact lane, not a default or feature-complete Go port. |
 | `M34 Maturity Qualification + LTS Declaration` | LTS/process claims can outrun the still-bounded scope of the core runtime and supported product surface. |
 | `M39 Ecosystem Scale + Distribution Workflow v1` | Simulation, install-rate, and audit workflows do not equal a demonstrated large ecosystem. |
 | `M44 Real Desktop + Ecosystem Qualification v2` | The repo documents bounded desktop profiles and workflow claims, not broad desktop parity. |
@@ -179,8 +179,8 @@ Recommended note below the table:
 
 - Main progress signal: the first row.
 - `G1` should be described as the default Go-service lane.
-- `G2` should be described as experimental stock-Go qualification, not as the
-  repo's primary state of completion.
+- `G2` should be described as the supported stock-Go lane, not as the repo's
+  primary state of completion.
 - The flat milestone ledger remains available in [../../MILESTONES.md](../../MILESTONES.md).
 
 ## What To Foreground vs Archive

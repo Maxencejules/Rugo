@@ -82,6 +82,89 @@ def _require_tokens(
             )
 
 
+def _report_syscalls_by_id(payload: Dict[str, object]) -> Dict[int, str]:
+    entries = payload.get("syscalls_by_id")
+    if isinstance(entries, dict):
+        return {int(key): str(value) for key, value in entries.items()}
+    return {
+        int(entry["id"]): str(entry["name"])
+        for entry in payload.get("syscalls", [])
+    }
+
+
+def _compare_doc_to_source_truth(
+    *,
+    source_label: str,
+    doc_by_id: Dict[int, str],
+    source_by_id: Dict[int, str],
+    issues: List[Dict[str, object]],
+    require_doc_ids: bool,
+    undocumented_id_limit: int | None = None,
+) -> Dict[str, object]:
+    source_issues: List[Dict[str, object]] = []
+
+    missing_from_source = [
+        {"id": syscall_id, "name": doc_by_id[syscall_id]}
+        for syscall_id in sorted(doc_by_id)
+        if syscall_id not in source_by_id
+    ]
+    for item in missing_from_source:
+        source_issues.append({"kind": "missing_from_source", **item})
+        issues.append(
+            {
+                "kind": "source_truth_missing_id",
+                "source": source_label,
+                **item,
+            }
+        )
+
+    name_mismatches = [
+        {
+            "id": syscall_id,
+            "doc_name": doc_by_id[syscall_id],
+            "source_name": source_by_id[syscall_id],
+        }
+        for syscall_id in sorted(doc_by_id.keys() & source_by_id.keys())
+        if doc_by_id[syscall_id] != source_by_id[syscall_id]
+    ]
+    for item in name_mismatches:
+        source_issues.append({"kind": "name_mismatch", **item})
+        issues.append(
+            {
+                "kind": "source_truth_name_mismatch",
+                "source": source_label,
+                **item,
+            }
+        )
+
+    undocumented_in_doc: List[Dict[str, object]] = []
+    if require_doc_ids:
+        undocumented_in_doc = [
+            {"id": syscall_id, "name": source_by_id[syscall_id]}
+            for syscall_id in sorted(source_by_id)
+            if syscall_id not in doc_by_id
+            and (undocumented_id_limit is None or syscall_id <= undocumented_id_limit)
+        ]
+        for item in undocumented_in_doc:
+            source_issues.append({"kind": "undocumented_in_doc", **item})
+            issues.append(
+                {
+                    "kind": "source_truth_undocumented_id",
+                    "source": source_label,
+                    **item,
+                }
+            )
+
+    return {
+        "checked": True,
+        "issue_count": len(source_issues),
+        "issues": source_issues,
+        "doc_total": len(doc_by_id),
+        "source_total": len(source_by_id),
+        "require_doc_ids": require_doc_ids,
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="docs/abi/syscall_v2.md")
@@ -92,6 +175,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="docs/runtime/deprecation_window_policy_v1.md",
     )
     parser.add_argument("--diff-report", default="")
+    parser.add_argument("--kernel-report", default="")
+    parser.add_argument("--interface-report", default="")
     parser.add_argument(
         "--version-action",
         choices=["none", "major-abi-bump"],
@@ -118,6 +203,8 @@ def main(argv: List[str] | None = None) -> int:
     abi_policy_text = abi_policy_path.read_text(encoding="utf-8")
     deprecation_policy_text = deprecation_policy_path.read_text(encoding="utf-8")
     candidate_text = candidate_path.read_text(encoding="utf-8")
+    candidate_doc = abi_diff.parse_syscall_doc(candidate_path)
+    candidate_by_id = candidate_doc["syscalls_by_id"]
 
     issues: List[Dict[str, object]] = []
 
@@ -179,6 +266,54 @@ def main(argv: List[str] | None = None) -> int:
                 }
             )
 
+    source_truth = {
+        "kernel": {
+            "checked": False,
+            "issue_count": 0,
+            "issues": [],
+        },
+        "gostd_interface": {
+            "checked": False,
+            "issue_count": 0,
+            "issues": [],
+        },
+    }
+    if args.kernel_report:
+        kernel_payload = json.loads(
+            Path(args.kernel_report).read_text(encoding="utf-8")
+        )
+        source_truth["kernel"] = {
+            "report_path": args.kernel_report,
+            **_compare_doc_to_source_truth(
+                source_label="kernel",
+                doc_by_id=candidate_by_id,
+                source_by_id=_report_syscalls_by_id(kernel_payload),
+                issues=issues,
+                require_doc_ids=True,
+                undocumented_id_limit=max(candidate_by_id),
+            ),
+        }
+    if args.interface_report:
+        interface_payload = json.loads(
+            Path(args.interface_report).read_text(encoding="utf-8")
+        )
+        interface_by_id = _report_syscalls_by_id(interface_payload)
+        source_truth["gostd_interface"] = {
+            "report_path": args.interface_report,
+            **_compare_doc_to_source_truth(
+                source_label="gostd_interface",
+                doc_by_id={
+                    syscall_id: candidate_by_id[syscall_id]
+                    for syscall_id in interface_by_id
+                    if syscall_id in candidate_by_id
+                },
+                source_by_id=interface_by_id,
+                issues=issues,
+                require_doc_ids=True,
+                undocumented_id_limit=None,
+            ),
+        }
+
     breaking_change_count = int(diff_payload.get("breaking_change_count", 0))
     requires_explicit_migration = breaking_change_count > 0
     if requires_explicit_migration:
@@ -229,6 +364,7 @@ def main(argv: List[str] | None = None) -> int:
             "version_action": args.version_action,
             "migration_doc": args.migration_doc,
         },
+        "source_truth": source_truth,
         "policy_issues": issues,
         "gate_pass": gate_pass,
     }
@@ -244,4 +380,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
