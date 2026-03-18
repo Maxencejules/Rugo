@@ -725,10 +725,11 @@ test-app-compat-v3:
 	$(PYTHON) tools/run_app_compat_matrix_v3.py --seed 20260309 --out $(OUT)/app-compat-matrix-v3.json
 	$(PYTHON) -m pytest tests/compat/test_app_tier_docs_v1.py tests/compat/test_cli_suite_v3.py tests/compat/test_runtime_suite_v3.py tests/compat/test_service_suite_v3.py tests/compat/test_app_compat_gate_v3.py -v --junitxml=$(OUT)/pytest-app-compat-v3.xml
 
-test-security-hardening-v3:
-	$(PYTHON) tools/run_security_attack_suite_v3.py --seed 20260309 --out $(OUT)/security-attack-suite-v3.json
+test-security-hardening-v3: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_security_attack_suite_v3.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/security-attack-suite-v3.json
 	$(PYTHON) tools/run_security_fuzz_v2.py --seed 20260309 --iterations 1600 --cases 5 --out $(OUT)/security-fuzz-v2.json
-	$(PYTHON) -m pytest tests/security/test_hardening_docs_v3.py tests/security/test_attack_suite_v3.py tests/security/test_fuzz_gate_v2.py tests/security/test_policy_enforcement_v3.py tests/security/test_security_hardening_gate_v3.py -v --junitxml=$(OUT)/pytest-security-hardening-v3.xml
+	$(PYTHON) -m pytest tests/security/test_hardening_docs_v3.py tests/security/test_attack_suite_v3.py tests/security/test_runtime_hardening_evidence_v3.py tests/security/test_fuzz_gate_v2.py tests/security/test_policy_enforcement_v3.py tests/security/test_security_hardening_gate_v3.py -v --junitxml=$(OUT)/pytest-security-hardening-v3.xml
 	$(PYTHON) tools/security_advisory_lint_v1.py --out $(OUT)/security-advisory-lint-v1.json
 	$(PYTHON) tools/security_embargo_drill_v1.py --out $(OUT)/security-embargo-drill-v1.json
 	$(PYTHON) -m pytest tests/security/test_vuln_response_docs_v1.py tests/security/test_vuln_triage_sla_v1.py tests/security/test_embargo_workflow_v1.py tests/security/test_advisory_schema_v1.py tests/security/test_vuln_response_gate_v1.py -v --junitxml=$(OUT)/pytest-vuln-response-v1.xml
@@ -776,24 +777,32 @@ test-supply-chain-revalidation-v1: image-demo image-panic
 	$(PYTHON) tools/verify_release_attestations_v1.py --release-contract $(OUT)/release-contract-v1.json --out $(OUT)/release-attestation-verification-v1.json
 	$(PYTHON) -m pytest tests/build/test_supply_chain_revalidation_docs_v1.py tests/build/test_sbom_revalidation_v1.py tests/build/test_provenance_verification_v1.py tests/build/test_attestation_drift_v1.py tests/build/test_supply_chain_revalidation_gate_v1.py -v --junitxml=$(OUT)/pytest-supply-chain-revalidation-v1.xml
 
-test-conformance-v1:
-	$(PYTHON) tools/run_conformance_suite_v1.py --seed 20260309 --out $(OUT)/conformance-v1.json
-	$(PYTHON) -m pytest tests/runtime/test_profile_conformance_docs_v1.py tests/runtime/test_server_profile_v1.py tests/runtime/test_dev_profile_v1.py tests/runtime/test_conformance_gate_v1.py -v --junitxml=$(OUT)/pytest-conformance-v1.xml
+test-conformance-v1: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/verify_release_attestations_v1.py --out $(OUT)/release-attestation-verification-v1.json
+	$(PYTHON) tools/pkg_rebuild_verify_v3.py --seed 20260309 --out $(OUT)/pkg-rebuild-v3.json
+	$(PYTHON) tools/run_conformance_suite_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --release-attestation $(OUT)/release-attestation-verification-v1.json --pkg-rebuild-report $(OUT)/pkg-rebuild-v3.json --out $(OUT)/conformance-v1.json
+	$(PYTHON) -m pytest tests/runtime/test_profile_conformance_docs_v1.py tests/runtime/test_server_profile_v1.py tests/runtime/test_dev_profile_v1.py tests/runtime/test_appliance_profile_v1.py tests/runtime/test_conformance_gate_v1.py -v --junitxml=$(OUT)/pytest-conformance-v1.xml
 
-test-fleet-ops-v1:
-	$(PYTHON) tools/run_fleet_update_sim_v1.py --seed 20260309 --out $(OUT)/fleet-update-sim-v1.json
-	$(PYTHON) tools/run_fleet_health_sim_v1.py --seed 20260309 --out $(OUT)/fleet-health-sim-v1.json
+test-fleet-ops-v1: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_fleet_update_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/fleet-update-sim-v1.json
+	$(PYTHON) tools/run_fleet_health_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/fleet-health-sim-v1.json
 	$(MAKE) test-fleet-rollout-safety-v1
-	$(PYTHON) -m pytest tests/pkg/test_fleet_policy_docs_v1.py tests/pkg/test_fleet_update_sim_v1.py tests/runtime/test_fleet_health_sim_v1.py tests/runtime/test_fleet_ops_gate_v1.py -v --junitxml=$(OUT)/pytest-fleet-ops-v1.xml
+	$(PYTHON) -m pytest tests/pkg/test_fleet_policy_docs_v1.py tests/pkg/test_fleet_update_sim_v1.py tests/runtime/test_fleet_health_sim_v1.py tests/runtime/test_fleet_control_plane_v1.py tests/runtime/test_fleet_ops_gate_v1.py -v --junitxml=$(OUT)/pytest-fleet-ops-v1.xml
 
-test-fleet-rollout-safety-v1:
-	$(PYTHON) tools/run_canary_rollout_sim_v1.py --seed 20260309 --out $(OUT)/canary-rollout-sim-v1.json
-	$(PYTHON) tools/run_rollout_abort_drill_v1.py --out $(OUT)/rollout-abort-drill-v1.json
-	$(PYTHON) -m pytest tests/pkg/test_rollout_policy_docs_v1.py tests/pkg/test_canary_rollout_sim_v1.py tests/runtime/test_rollout_abort_policy_v1.py tests/runtime/test_fleet_rollout_safety_gate_v1.py -v --junitxml=$(OUT)/pytest-fleet-rollout-safety-v1.xml
+test-fleet-rollout-safety-v1: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_canary_rollout_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/canary-rollout-sim-v1.json
+	$(PYTHON) tools/run_fleet_update_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/fleet-update-sim-v1.json
+	$(PYTHON) tools/run_fleet_health_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/fleet-health-sim-v1.json
+	$(PYTHON) tools/run_rollout_abort_drill_v1.py --canary-report $(OUT)/canary-rollout-sim-v1.json --fleet-health-report $(OUT)/fleet-health-sim-v1.json --fleet-update-report $(OUT)/fleet-update-sim-v1.json --out $(OUT)/rollout-abort-drill-v1.json
+	$(PYTHON) -m pytest tests/pkg/test_rollout_policy_docs_v1.py tests/pkg/test_canary_rollout_sim_v1.py tests/runtime/test_rollout_abort_policy_v1.py tests/runtime/test_fleet_control_plane_v1.py tests/runtime/test_fleet_rollout_safety_gate_v1.py -v --junitxml=$(OUT)/pytest-fleet-rollout-safety-v1.xml
 
-test-maturity-qual-v1:
-	$(PYTHON) tools/run_maturity_qualification_v1.py --seed 20260309 --out $(OUT)/maturity-qualification-v1.json
-	$(PYTHON) -m pytest tests/build/test_maturity_docs_v1.py tests/build/test_maturity_qualification_v1.py tests/build/test_lts_policy_v1.py tests/build/test_maturity_security_response_drill_v1.py tests/build/test_maturity_supply_chain_continuity_v1.py tests/build/test_maturity_rollout_safety_v1.py tests/build/test_maturity_gate_v1.py -v --junitxml=$(OUT)/pytest-maturity-qual-v1.xml
+test-maturity-qual-v1: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_maturity_qualification_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/maturity-qualification-v1.json
+	$(PYTHON) -m pytest tests/build/test_maturity_docs_v1.py tests/build/test_maturity_qualification_v1.py tests/build/test_lts_policy_v1.py tests/build/test_lts_surface_scope_v1.py tests/build/test_maturity_security_response_drill_v1.py tests/build/test_maturity_supply_chain_continuity_v1.py tests/build/test_maturity_rollout_safety_v1.py tests/build/test_maturity_gate_v1.py -v --junitxml=$(OUT)/pytest-maturity-qual-v1.xml
 
 test-desktop-stack-v1:
 	$(PYTHON) tools/run_desktop_smoke_v1.py --out $(OUT)/desktop-smoke-v1.json

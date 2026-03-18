@@ -32,6 +32,7 @@ def test_fleet_ops_gate_v1_wiring_and_artifacts(tmp_path: Path):
         "tests/pkg/test_fleet_policy_docs_v1.py",
         "tests/pkg/test_fleet_update_sim_v1.py",
         "tests/runtime/test_fleet_health_sim_v1.py",
+        "tests/runtime/test_fleet_control_plane_v1.py",
         "tests/runtime/test_fleet_rollout_safety_gate_v1.py",
         "tests/runtime/test_fleet_ops_gate_v1.py",
     ]
@@ -51,12 +52,14 @@ def test_fleet_ops_gate_v1_wiring_and_artifacts(tmp_path: Path):
 
     assert "test-fleet-ops-v1" in makefile
     for entry in [
-        "tools/run_fleet_update_sim_v1.py --seed 20260309 --out $(OUT)/fleet-update-sim-v1.json",
-        "tools/run_fleet_health_sim_v1.py --seed 20260309 --out $(OUT)/fleet-health-sim-v1.json",
+        "tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json",
+        "tools/run_fleet_update_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/fleet-update-sim-v1.json",
+        "tools/run_fleet_health_sim_v1.py --seed 20260309 --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/fleet-health-sim-v1.json",
         "$(MAKE) test-fleet-rollout-safety-v1",
         "tests/pkg/test_fleet_policy_docs_v1.py",
         "tests/pkg/test_fleet_update_sim_v1.py",
         "tests/runtime/test_fleet_health_sim_v1.py",
+        "tests/runtime/test_fleet_control_plane_v1.py",
         "tests/runtime/test_fleet_ops_gate_v1.py",
     ]:
         assert entry in makefile
@@ -66,6 +69,7 @@ def test_fleet_ops_gate_v1_wiring_and_artifacts(tmp_path: Path):
     assert "make test-fleet-ops-v1" in ci
     assert "fleet-ops-v1-artifacts" in ci
     assert "out/pytest-fleet-ops-v1.xml" in ci
+    assert "out/booted-runtime-v1.json" in ci
     assert "out/fleet-update-sim-v1.json" in ci
     assert "out/fleet-health-sim-v1.json" in ci
 
@@ -81,19 +85,23 @@ def test_fleet_ops_gate_v1_wiring_and_artifacts(tmp_path: Path):
     update_out = tmp_path / "fleet-update-sim-v1.json"
     health_out = tmp_path / "fleet-health-sim-v1.json"
 
-    assert update_tool.main(["--seed", "20260309", "--out", str(update_out)]) == 0
-    assert health_tool.main(["--seed", "20260309", "--out", str(health_out)]) == 0
+    assert update_tool.main(["--seed", "20260309", "--fixture", "--out", str(update_out)]) == 0
+    assert health_tool.main(["--seed", "20260309", "--fixture", "--out", str(health_out)]) == 0
 
     update_data = json.loads(update_out.read_text(encoding="utf-8"))
     health_data = json.loads(health_out.read_text(encoding="utf-8"))
 
     assert update_data["schema"] == "rugo.fleet_update_sim_report.v1"
     assert update_data["policy_id"] == "rugo.fleet_update_policy.v1"
+    assert update_data["control_plane_mode"] == "runtime_lab"
+    assert update_data["runtime_capture_digest"]
     assert update_data["total_failures"] == 0
     assert update_data["gate_pass"] is True
 
     assert health_data["schema"] == "rugo.fleet_health_report.v1"
     assert health_data["policy_id"] == "rugo.fleet_health_policy.v1"
+    assert health_data["control_plane_mode"] == "runtime_lab"
+    assert health_data["runtime_capture_digest"]
     assert health_data["fleet_state"] == "healthy"
     assert health_data["total_failures"] == 0
     assert health_data["gate_pass"] is True

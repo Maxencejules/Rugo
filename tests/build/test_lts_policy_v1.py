@@ -26,7 +26,7 @@ def test_lts_policy_v1_artifacts_exist():
 
 def test_lts_policy_v1_default_bundle_declares_eligible(tmp_path: Path):
     out = tmp_path / "maturity-qualification-v1.json"
-    assert maturity.main(["--seed", "20260309", "--out", str(out)]) == 0
+    assert maturity.main(["--seed", "20260309", "--fixture", "--out", str(out)]) == 0
 
     data = json.loads(out.read_text(encoding="utf-8"))
     lts = data["lts_declaration"]
@@ -37,6 +37,8 @@ def test_lts_policy_v1_default_bundle_declares_eligible(tmp_path: Path):
     assert lts["lts_support_days"] >= lts["min_support_days"]
     assert lts["advisory_sla_breach_count"] == 0
     assert lts["supply_chain_drift_count"] == 0
+    assert lts["supported_surface"]["supported_profiles"] == ["server_v1", "appliance_v1"]
+    assert lts["supported_surface"]["non_lts_profiles"] == ["developer_v1"]
 
 
 def test_lts_policy_v1_blocks_when_release_history_is_short(tmp_path: Path):
@@ -48,6 +50,7 @@ def test_lts_policy_v1_blocks_when_release_history_is_short(tmp_path: Path):
                 "2",
                 "--min-qualified-releases",
                 "3",
+                "--fixture",
                 "--out",
                 str(out),
             ]

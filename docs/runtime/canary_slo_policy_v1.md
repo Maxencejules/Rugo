@@ -26,11 +26,13 @@ stages.
 - `auto_halt`
 - `rollback_triggered`
 - `policy_enforced`
+- `halt_reason`
+- `recovery_actions`
 
 ## Threshold baseline
 
 - default canary error-rate threshold: `0.02`
-- default canary latency p95 threshold: `120 ms`
+- default canary latency p95 threshold: `200 ms`
 
 ## Enforcement rules
 

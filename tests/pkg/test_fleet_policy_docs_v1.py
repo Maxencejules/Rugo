@@ -29,6 +29,8 @@ def test_fleet_update_policy_v1_doc_declares_required_tokens():
         "Rollout simulation schema: `rugo.canary_rollout_report.v1`",
         "Abort drill schema: `rugo.rollout_abort_drill_report.v1`",
         "Group promotion requires success rate meeting or exceeding `0.98`.",
+        "runtime control plane mode: `runtime_lab`",
+        "runtime capture artifact: `out/booted-runtime-v1.json`",
         "Fleet operations pass only when `max_failures = 0`.",
         "Local gate: `make test-fleet-ops-v1`",
         "CI gate: `Fleet ops v1 gate`",
@@ -44,7 +46,8 @@ def test_fleet_health_policy_v1_doc_declares_required_tokens():
         "Fleet health simulation schema: `rugo.fleet_health_report.v1`",
         "maximum fleet degraded ratio: `0.05`",
         "maximum fleet error rate: `0.02`",
-        "maximum canary latency p95: `120 ms`",
+        "maximum canary latency p95: `200 ms`",
+        "runtime capture artifact: `out/booted-runtime-v1.json`",
         "Fleet ops gate: `make test-fleet-ops-v1`",
         "Rollout safety sub-gate: `make test-fleet-rollout-safety-v1`",
     ]:

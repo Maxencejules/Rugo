@@ -63,6 +63,14 @@ Visible proof paths:
   default-image provenance and boot-instance linkage.
   Proof: `tests/runtime/test_evidence_integrity_gate_v1.py`,
   `tests/runtime/test_synthetic_evidence_ban_v1.py`
+- `make test-security-hardening-v3`, `make test-conformance-v1`,
+  `make test-fleet-ops-v1`, `make test-maturity-qual-v1`
+  Run the default-lane hardening, profile qualification, runtime-lab rollout,
+  and bounded LTS gates against boot-backed runtime evidence.
+  Proof: `tests/security/test_security_hardening_gate_v3.py`,
+  `tests/runtime/test_conformance_gate_v1.py`,
+  `tests/runtime/test_fleet_ops_gate_v1.py`,
+  `tests/build/test_maturity_gate_v1.py`
 - `make test-native-driver-contract-v1`
   Freezes the native-driver lifecycle, DMA, firmware, and diagnostics contract
   for post-M52 hardware expansion.

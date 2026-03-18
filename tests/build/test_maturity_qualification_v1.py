@@ -29,8 +29,8 @@ def test_maturity_qualification_v1_deterministic(tmp_path: Path):
     first = tmp_path / "maturity-qualification-a.json"
     second = tmp_path / "maturity-qualification-b.json"
 
-    assert maturity.main(["--seed", "20260309", "--out", str(first)]) == 0
-    assert maturity.main(["--seed", "20260309", "--out", str(second)]) == 0
+    assert maturity.main(["--seed", "20260309", "--fixture", "--out", str(first)]) == 0
+    assert maturity.main(["--seed", "20260309", "--fixture", "--out", str(second)]) == 0
 
     first_data = json.loads(first.read_text(encoding="utf-8"))
     second_data = json.loads(second.read_text(encoding="utf-8"))
@@ -39,7 +39,7 @@ def test_maturity_qualification_v1_deterministic(tmp_path: Path):
 
 def test_maturity_qualification_v1_schema_and_pass(tmp_path: Path):
     out = tmp_path / "maturity-qualification-v1.json"
-    rc = maturity.main(["--seed", "20260309", "--out", str(out)])
+    rc = maturity.main(["--seed", "20260309", "--fixture", "--out", str(out)])
     assert rc == 0
 
     data = json.loads(out.read_text(encoding="utf-8"))
@@ -48,6 +48,10 @@ def test_maturity_qualification_v1_schema_and_pass(tmp_path: Path):
     assert data["lts_policy_id"] == "rugo.lts_declaration_policy.v1"
     assert data["total_failures"] == 0
     assert data["qualification_pass"] is True
+    assert data["qualified_surface"]["supported_profiles"] == ["server_v1", "appliance_v1"]
+    assert data["qualified_surface"]["non_lts_profiles"] == ["developer_v1"]
+    assert data["evidence_artifacts"]["runtime_capture"].endswith("booted-runtime-v1.json")
+    assert data["evidence_artifacts"]["pkg_rebuild"].endswith("pkg-rebuild-v3.json")
     assert data["lts_declaration"]["schema"] == "rugo.lts_declaration_report.v1"
     assert data["lts_declaration"]["eligible"] is True
 
@@ -60,6 +64,7 @@ def test_maturity_qualification_v1_detects_insufficient_release_history(tmp_path
             "2",
             "--min-qualified-releases",
             "3",
+            "--fixture",
             "--out",
             str(out),
         ]

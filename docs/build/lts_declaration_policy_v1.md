@@ -22,6 +22,9 @@ qualification passes.
 - required release channels: `stable`, `lts`
 - maximum advisory SLA breach count: `0`
 - supply-chain drift tolerance: `0`
+- LTS target scope: `qemu-q35-default-lane`
+- LTS-qualified profiles: `server_v1`, `appliance_v1`
+- Non-LTS profile: `developer_v1`
 
 All declaration criteria are release-blocking for LTS publication.
 

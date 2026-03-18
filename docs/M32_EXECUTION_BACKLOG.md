@@ -15,7 +15,8 @@ M32 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 ## Current State Summary
 
 - Profile conformance requirements are explicit, versioned, and test-referenced.
-- Conformance suite outputs deterministic, machine-readable qualification artifacts.
+- Conformance suite now binds profile qualification to booted runtime capture,
+  release attestations, and package rebuild verification.
 - Profile qualification is wired as a required local and CI release gate.
 
 ## Execution Result
@@ -84,16 +85,17 @@ Implement profile qualification tooling and executable checks.
 
 ### Done criteria for PR-2
 
-- Conformance artifacts are deterministic and machine-readable.
-- Profile checks are reproducible across release lanes.
+- Conformance artifacts are machine-readable and runtime-backed.
+- Profile checks fail when the shipped lane misses declared behavior.
 
 ### PR-2 completion summary
 
-- Added deterministic conformance suite tooling:
+- Added runtime-backed conformance suite tooling:
   - `tools/run_conformance_suite_v1.py`
 - Added executable profile qualification checks:
   - `tests/runtime/test_server_profile_v1.py`
   - `tests/runtime/test_dev_profile_v1.py`
+  - `tests/runtime/test_appliance_profile_v1.py`
 
 ## PR-3: Conformance Gate + Closure
 

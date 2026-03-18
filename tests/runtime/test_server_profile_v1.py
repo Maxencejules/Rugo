@@ -29,10 +29,12 @@ def test_server_profile_v1_deterministic_report():
     first = conformance.run_suite(
         seed=20260309,
         selected_profiles=["server_v1"],
+        fixture=True,
     )
     second = conformance.run_suite(
         seed=20260309,
         selected_profiles=["server_v1"],
+        fixture=True,
     )
     assert _strip_timestamp(first) == _strip_timestamp(second)
 
@@ -43,6 +45,7 @@ def test_server_profile_v1_qualification_pass(tmp_path: Path):
         [
             "--seed",
             "20260309",
+            "--fixture",
             "--profile",
             "server_v1",
             "--out",
@@ -55,6 +58,7 @@ def test_server_profile_v1_qualification_pass(tmp_path: Path):
     assert data["schema"] == "rugo.profile_conformance_report.v1"
     assert data["policy_id"] == "rugo.profile_conformance_policy.v1"
     assert data["checked_profiles"] == ["server_v1"]
+    assert data["runtime_capture_digest"]
     assert data["gate_pass"] is True
     assert data["total_failures"] == 0
 
@@ -70,6 +74,7 @@ def test_server_profile_v1_rejects_requirement_failure(tmp_path: Path):
     out = tmp_path / "conformance-server-v1-fail.json"
     rc = conformance.main(
         [
+            "--fixture",
             "--profile",
             "server_v1",
             "--inject-failure",

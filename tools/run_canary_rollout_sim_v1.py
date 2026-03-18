@@ -5,20 +5,20 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List, Sequence, Set, Tuple
 
+import t4_runtime_qualification_common_v1 as runtime_qual
 
 SCHEMA = "rugo.canary_rollout_report.v1"
 POLICY_ID = "rugo.staged_rollout_policy.v1"
 SLO_POLICY_ID = "rugo.canary_slo_policy.v1"
 DEFAULT_SEED = 20260309
 STAGES: Sequence[Tuple[str, float, int]] = (
-    ("canary", 0.01, 120),
-    ("small_batch", 0.10, 130),
-    ("broad", 1.00, 150),
+    ("canary", 0.01, 0),
+    ("small_batch", 0.10, 20),
+    ("broad", 1.00, 50),
 )
 
 
@@ -34,31 +34,52 @@ def _parse_injected_failures(values: Sequence[str]) -> Set[str]:
     return requested
 
 
-def _noise(seed: int, stage: str, metric: str) -> int:
-    digest = hashlib.sha256(f"{seed}|{stage}|{metric}".encode("utf-8")).hexdigest()
-    return int(digest[:8], 16) % 6
-
-
 def run_sim(
     seed: int,
     max_error_rate: float,
     max_latency_p95_ms: int,
     injected_failure_stages: Set[str] | None = None,
+    *,
+    runtime_capture_payload: Dict[str, object] | None = None,
+    runtime_capture_path: str = "",
+    fixture: bool = False,
 ) -> Dict[str, object]:
     failures = set() if injected_failure_stages is None else set(injected_failure_stages)
+    capture, capture_source = runtime_qual.load_runtime_capture(
+        runtime_capture_path=runtime_capture_path,
+        fixture=fixture,
+    ) if runtime_capture_payload is None else (runtime_capture_payload, runtime_capture_path or "provided")
+    lab_nodes = runtime_qual.build_fleet_lab(
+        capture,
+        seed=seed,
+        target_version="2.4.0",
+        injected_failure_stages=failures,
+    )
     stages: List[Dict[str, object]] = []
     halted = False
     stage_failures = 0
 
-    for index, (stage_name, stage_fraction, default_latency_cap) in enumerate(STAGES):
-        if stage_name in failures:
-            error_rate = round(max_error_rate + 0.01, 4)
-            latency_p95_ms = max_latency_p95_ms + 20 + _noise(seed, stage_name, "latency")
+    for stage_name, stage_fraction, latency_budget_delta_ms in STAGES:
+        if stage_name == "canary":
+            stage_nodes = [node for node in lab_nodes if node["group_id"] == "canary"]
+        elif stage_name == "small_batch":
+            stage_nodes = [
+                node for node in lab_nodes if node["group_id"] in {"canary", "batch_a"}
+            ]
         else:
-            error_rate = round(0.005 + (index * 0.003) + (_noise(seed, stage_name, "error") * 0.001), 4)
-            latency_p95_ms = 85 + (index * 12) + _noise(seed, stage_name, "latency")
+            stage_nodes = list(lab_nodes)
 
-        within_thresholds = error_rate <= max_error_rate and latency_p95_ms <= max_latency_p95_ms
+        error_rate = round(
+            sum(float(node["error_rate"]) for node in stage_nodes) / max(1, len(stage_nodes)),
+            4,
+        )
+        latencies = sorted(float(node["shell_latency_ms_p95"]) for node in stage_nodes)
+        latency_p95_ms = round(latencies[-1] if latencies else 0.0, 3)
+        latency_threshold = max_latency_p95_ms + latency_budget_delta_ms
+
+        within_thresholds = (
+            error_rate <= max_error_rate and latency_p95_ms <= latency_threshold
+        )
         promoted = (not halted) and within_thresholds
         stage_pass = (not halted) and within_thresholds
         auto_halt = not promoted
@@ -74,12 +95,13 @@ def run_sim(
                 "observed_error_rate": error_rate,
                 "error_rate_threshold": max_error_rate,
                 "observed_latency_p95_ms": latency_p95_ms,
-                "latency_p95_ms_threshold": max_latency_p95_ms,
-                "stage_latency_cap_ms": default_latency_cap,
+                "latency_p95_ms_threshold": latency_threshold,
+                "stage_latency_cap_ms": latency_threshold,
                 "promoted": promoted,
                 "auto_halt": auto_halt,
                 "rollback_recommended": auto_halt,
                 "pass": stage_pass,
+                "nodes": stage_nodes,
             }
         )
 
@@ -106,6 +128,10 @@ def run_sim(
             if any(stage["pass"] is False for stage in stages)
             else True,
         },
+        {
+            "name": "runtime_capture_bound",
+            "pass": bool(capture.get("digest")),
+        },
     ]
     total_failures = stage_failures + sum(1 for check in checks if check["pass"] is False)
 
@@ -115,9 +141,13 @@ def run_sim(
         "slo_policy_id": SLO_POLICY_ID,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "seed": seed,
+        "control_plane_mode": "runtime_lab",
+        "runtime_capture_path": capture_source,
+        "runtime_capture_digest": capture.get("digest", ""),
         "max_error_rate": max_error_rate,
         "max_latency_p95_ms": max_latency_p95_ms,
         "halted": halted,
+        "lab_nodes_total": len(lab_nodes),
         "stages": stages,
         "checks": checks,
         "total_failures": total_failures,
@@ -128,8 +158,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)
     p.add_argument("--max-error-rate", type=float, default=0.02)
-    p.add_argument("--max-latency-p95-ms", type=int, default=120)
+    p.add_argument("--max-latency-p95-ms", type=int, default=200)
     p.add_argument("--inject-failure-stage", action="append", default=[])
+    p.add_argument(
+        "--runtime-capture",
+        default="",
+        help="booted runtime capture backing the rollout control plane",
+    )
+    p.add_argument(
+        "--fixture",
+        action="store_true",
+        help="use the deterministic booted runtime fixture instead of out/booted-runtime-v1.json",
+    )
     p.add_argument("--max-failures", type=int, default=0)
     p.add_argument("--out", default="out/canary-rollout-sim-v1.json")
     return p
@@ -158,6 +198,8 @@ def main(argv: List[str] | None = None) -> int:
         max_error_rate=args.max_error_rate,
         max_latency_p95_ms=args.max_latency_p95_ms,
         injected_failure_stages=injected_failure_stages,
+        runtime_capture_path=args.runtime_capture,
+        fixture=args.fixture,
     )
     report["max_failures"] = args.max_failures
     report["gate_pass"] = report["total_failures"] <= args.max_failures

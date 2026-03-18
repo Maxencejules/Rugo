@@ -15,7 +15,8 @@ M34 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 ## Current State Summary
 
 - Maturity qualification and LTS declaration contracts are explicit and versioned.
-- Qualification bundle assembly is deterministic and machine-readable.
+- Qualification bundle assembly now aggregates booted runtime, hardening,
+  conformance, rollout, package rebuild, and lifecycle evidence from one lane.
 - Final maturity gate is required in local and CI release lanes.
 
 ## Execution Result
@@ -93,16 +94,18 @@ Generate final qualification bundle and validate cross-domain maturity evidence.
 
 ### Done criteria for PR-2
 
-- Qualification bundle is deterministic and machine-readable.
-- Cross-cutting maturity drills are present and auditable.
+- Qualification bundle is machine-readable and runtime-backed.
+- Cross-cutting maturity drills are present, auditable, and scoped to the
+  shipped default lane.
 
 ### PR-2 completion summary
 
-- Added deterministic maturity bundle tooling:
+- Added runtime-backed maturity bundle tooling:
   - `tools/run_maturity_qualification_v1.py`
 - Added executable qualification and LTS checks:
   - `tests/build/test_maturity_qualification_v1.py`
   - `tests/build/test_lts_policy_v1.py`
+  - `tests/build/test_lts_surface_scope_v1.py`
 - Retained and wired cross-domain maturity drill evidence tests:
   - `tests/build/test_maturity_security_response_drill_v1.py`
   - `tests/build/test_maturity_supply_chain_continuity_v1.py`

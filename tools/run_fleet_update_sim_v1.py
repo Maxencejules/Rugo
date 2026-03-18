@@ -5,20 +5,16 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List, Sequence, Set, Tuple
 
+import t4_runtime_qualification_common_v1 as runtime_qual
 
 SCHEMA = "rugo.fleet_update_sim_report.v1"
 POLICY_ID = "rugo.fleet_update_policy.v1"
 DEFAULT_SEED = 20260309
-GROUPS: Sequence[Tuple[str, int, str]] = (
-    ("canary", 24, "2.3.0"),
-    ("batch_a", 180, "2.3.1"),
-    ("batch_b", 796, "2.3.2"),
-)
+GROUPS: Sequence[Tuple[str, int, str]] = runtime_qual.fleet_lab_layout()
 
 
 def _known_groups() -> Set[str]:
@@ -33,33 +29,40 @@ def _parse_injected_failures(values: Sequence[str]) -> Set[str]:
     return requested
 
 
-def _noise(seed: int, group: str) -> int:
-    digest = hashlib.sha256(f"{seed}|{group}".encode("utf-8")).hexdigest()
-    return int(digest[:8], 16) % 5
-
-
 def run_sim(
     seed: int,
     target_version: str,
     min_success_rate: float,
     injected_failure_groups: Set[str] | None = None,
+    *,
+    runtime_capture_payload: Dict[str, object] | None = None,
+    runtime_capture_path: str = "",
+    fixture: bool = False,
 ) -> Dict[str, object]:
     failures = set() if injected_failure_groups is None else set(injected_failure_groups)
+    capture, capture_source = runtime_qual.load_runtime_capture(
+        runtime_capture_path=runtime_capture_path,
+        fixture=fixture,
+    ) if runtime_capture_payload is None else (runtime_capture_payload, runtime_capture_path or "provided")
+    lab_nodes = runtime_qual.build_fleet_lab(
+        capture,
+        seed=seed,
+        target_version=target_version,
+        injected_failure_groups=failures,
+    )
     groups: List[Dict[str, object]] = []
     stage_blocked = False
     group_failures = 0
 
-    for index, (group_id, nodes_total, current_version) in enumerate(GROUPS):
-        base_success = 0.992 - (0.002 * index) - (_noise(seed, group_id) * 0.0005)
-        if group_id in failures:
-            success_rate = round(max(0.0, min_success_rate - 0.03), 4)
-        else:
-            success_rate = round(min(1.0, max(base_success, min_success_rate)), 4)
-
+    for group_id, _nodes_total, current_version in GROUPS:
+        group_nodes = [node for node in lab_nodes if node["group_id"] == group_id]
+        nodes_total = len(group_nodes)
+        healthy_nodes = [node for node in group_nodes if node["healthy"] is True]
+        success_rate = round((len(healthy_nodes) / max(1, nodes_total)), 4)
         passes = success_rate >= min_success_rate
         promoted = (not stage_blocked) and passes
         rollback_triggered = (not passes) or stage_blocked
-        nodes_updated = int(round(nodes_total * success_rate))
+        nodes_updated = len(healthy_nodes) if promoted else 0
 
         if not passes:
             group_failures += 1
@@ -79,6 +82,7 @@ def run_sim(
                 "promoted": promoted,
                 "rollback_triggered": rollback_triggered,
                 "pass": passes and not stage_blocked,
+                "nodes": group_nodes,
             }
         )
 
@@ -99,6 +103,10 @@ def run_sim(
                 if idx > 0
             ),
         },
+        {
+            "name": "runtime_capture_bound",
+            "pass": bool(capture.get("digest")),
+        },
     ]
 
     total_failures = group_failures + sum(1 for check in checks if check["pass"] is False)
@@ -107,7 +115,13 @@ def run_sim(
         "policy_id": POLICY_ID,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "seed": seed,
+        "control_plane_mode": "runtime_lab",
+        "runtime_capture_path": capture_source,
+        "runtime_capture_digest": capture.get("digest", ""),
+        "release_image_path": capture.get("image_path", ""),
+        "release_image_digest": capture.get("image_digest", ""),
         "target_version": target_version,
+        "lab_nodes_total": len(lab_nodes),
         "groups": groups,
         "checks": checks,
         "total_failures": total_failures,
@@ -120,6 +134,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-version", default="2.4.0")
     parser.add_argument("--min-success-rate", type=float, default=0.98)
     parser.add_argument("--inject-failure-group", action="append", default=[])
+    parser.add_argument(
+        "--runtime-capture",
+        default="",
+        help="booted runtime capture backing the fleet control-plane lab",
+    )
+    parser.add_argument(
+        "--fixture",
+        action="store_true",
+        help="use the deterministic booted runtime fixture instead of out/booted-runtime-v1.json",
+    )
     parser.add_argument("--max-failures", type=int, default=0)
     parser.add_argument("--out", default="out/fleet-update-sim-v1.json")
     return parser
@@ -145,6 +169,8 @@ def main(argv: List[str] | None = None) -> int:
         target_version=args.target_version,
         min_success_rate=args.min_success_rate,
         injected_failure_groups=injected_failure_groups,
+        runtime_capture_path=args.runtime_capture,
+        fixture=args.fixture,
     )
     report["max_failures"] = args.max_failures
     report["gate_pass"] = report["total_failures"] <= args.max_failures

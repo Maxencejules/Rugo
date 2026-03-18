@@ -10,20 +10,26 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+import check_perf_regression_v1 as perf_regression
+import collect_booted_runtime_v1 as runtime_capture_tool
 import collect_crash_dump_v1 as crash_dump
 import collect_measured_boot_report_v1 as measured_boot
 import generate_provenance_v1 as provenance
 import generate_sbom_v1 as sbom
+import pkg_rebuild_verify_v3 as pkg_rebuild
 import release_branch_audit_v2 as branch_audit
 import run_canary_rollout_sim_v1 as canary_rollout
 import run_conformance_suite_v1 as conformance
 import run_fleet_health_sim_v1 as fleet_health
 import run_fleet_update_sim_v1 as fleet_update
+import run_perf_baseline_v1 as perf_baseline
 import run_rollout_abort_drill_v1 as rollout_abort
+import run_security_attack_suite_v3 as attack_suite
 import security_advisory_lint_v1 as advisory_lint
 import security_embargo_drill_v1 as embargo_drill
 import support_window_audit_v1 as support_audit
 import symbolize_crash_dump_v1 as crash_symbolize
+import t4_runtime_qualification_common_v1 as runtime_qual
 import verify_release_attestations_v1 as attest_verify
 import verify_sbom_provenance_v2 as supply_chain_verify
 
@@ -69,6 +75,9 @@ def _lts_summary(
     embargo: Dict[str, Any],
     attestation: Dict[str, Any],
     support: Dict[str, Any],
+    capture: Dict[str, Any],
+    perf: Dict[str, Any],
+    conformance_report: Dict[str, Any],
 ) -> Dict[str, Any]:
     windows = support.get("windows", [])
     lts_window = None
@@ -85,6 +94,18 @@ def _lts_summary(
     advisory_breaches = 0 if advisory.get("valid") is True else 1
     embargo_breaches = 0 if embargo.get("meets_sla") is True else 1
     drift_count = int(attestation.get("drift_count", 0))
+    lts_surface = runtime_qual.default_lts_surface(capture)
+    conformance_profiles = {
+        entry.get("profile_id", ""): entry
+        for entry in conformance_report.get("profiles", [])
+        if isinstance(entry, dict)
+    }
+    lts_profiles_ok = all(
+        isinstance(conformance_profiles.get(profile_id), dict)
+        and conformance_profiles[profile_id].get("qualification_pass") is True
+        for profile_id in lts_surface["supported_profiles"]
+    )
+    perf_pass = perf.get("gate_pass") is True
 
     criteria = [
         _check(
@@ -99,6 +120,9 @@ def _lts_summary(
         _check("advisory_lint_valid", advisory.get("valid") is True),
         _check("embargo_drill_meets_sla", embargo.get("meets_sla") is True),
         _check("attestation_drift_within_tolerance", drift_count == 0),
+        _check("default_lane_target_scoped", lts_surface["execution_lane"] == "qemu"),
+        _check("lts_profiles_qualified", lts_profiles_ok),
+        _check("performance_budget_pass", perf_pass),
     ]
 
     eligible = all(criterion["pass"] for criterion in criteria)
@@ -112,6 +136,24 @@ def _lts_summary(
         "min_support_days": lts_min_support_days,
         "advisory_sla_breach_count": advisory_breaches + embargo_breaches,
         "supply_chain_drift_count": drift_count,
+        "supported_surface": lts_surface,
+        "release_cadence": {
+            "stable_channel": "manual promotion",
+            "lts_channel": "selected stable promotions",
+        },
+        "security_response_obligations": {
+            "max_security_sla_days": support.get("max_security_sla_days", 14),
+            "min_backport_window_days": support.get("min_backport_window_days", 21),
+        },
+        "regression_budgets": {
+            "gate_pass": perf_pass,
+            "total_violations": perf.get("total_violations", 0),
+            "workloads": [
+                result.get("workload", "")
+                for result in perf.get("workload_results", [])
+                if isinstance(result, dict)
+            ],
+        },
         "criteria": criteria,
         "eligible": eligible,
     }
@@ -124,17 +166,24 @@ def run_qualification(
     qualified_release_count: int,
     min_qualified_releases: int,
     lts_min_support_days: int,
+    runtime_capture_path: str = "",
+    fixture: bool = False,
 ) -> Dict[str, Any]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     runs: List[Dict[str, Any]] = []
 
     paths = {
+        "runtime_capture": artifact_dir / "booted-runtime-v1.json",
         "security_advisory": artifact_dir / "security-advisory-lint-v1.json",
         "security_embargo": artifact_dir / "security-embargo-drill-v1.json",
+        "security_attack": artifact_dir / "security-attack-suite-v3.json",
         "sbom": artifact_dir / "sbom-v1.spdx.json",
         "provenance": artifact_dir / "provenance-v1.json",
         "supply_chain": artifact_dir / "supply-chain-revalidation-v1.json",
         "attestation": artifact_dir / "release-attestation-verification-v1.json",
+        "pkg_rebuild": artifact_dir / "pkg-rebuild-v3.json",
+        "perf_baseline": artifact_dir / "perf-baseline-v1.json",
+        "perf_regression": artifact_dir / "perf-regression-v1.json",
         "canary": artifact_dir / "canary-rollout-sim-v1.json",
         "rollout_abort": artifact_dir / "rollout-abort-drill-v1.json",
         "fleet_update": artifact_dir / "fleet-update-sim-v1.json",
@@ -147,6 +196,18 @@ def run_qualification(
         "crash_symbolized": artifact_dir / "crash-dump-symbolized-v1.json",
     }
 
+    capture, _capture_source = runtime_qual.load_runtime_capture(
+        runtime_capture_path=runtime_capture_path,
+        fixture=fixture,
+    )
+    if runtime_capture_path and Path(runtime_capture_path).is_file():
+        paths["runtime_capture"].write_text(
+            Path(runtime_capture_path).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    else:
+        runtime_capture_tool.runtime_capture.write_json(paths["runtime_capture"], capture)
+
     _invoke(
         "security_advisory_lint_v1",
         advisory_lint.main,
@@ -157,6 +218,19 @@ def run_qualification(
         "security_embargo_drill_v1",
         embargo_drill.main,
         ["--out", str(paths["security_embargo"])],
+        runs,
+    )
+    _invoke(
+        "run_security_attack_suite_v3",
+        attack_suite.main,
+        [
+            "--seed",
+            str(seed),
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--out",
+            str(paths["security_attack"]),
+        ],
         runs,
     )
     _invoke("generate_sbom_v1", sbom.main, ["--out", str(paths["sbom"])], runs)
@@ -186,33 +260,104 @@ def run_qualification(
         runs,
     )
     _invoke(
-        "run_canary_rollout_sim_v1",
-        canary_rollout.main,
-        ["--seed", str(seed), "--out", str(paths["canary"])],
+        "pkg_rebuild_verify_v3",
+        pkg_rebuild.main,
+        ["--seed", str(seed), "--out", str(paths["pkg_rebuild"])],
         runs,
     )
     _invoke(
-        "run_rollout_abort_drill_v1",
-        rollout_abort.main,
-        ["--out", str(paths["rollout_abort"])],
+        "run_perf_baseline_v1",
+        perf_baseline.main,
+        [
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--out",
+            str(paths["perf_baseline"]),
+        ],
+        runs,
+    )
+    _invoke(
+        "check_perf_regression_v1",
+        perf_regression.main,
+        [
+            "--baseline",
+            str(paths["perf_baseline"]),
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--out",
+            str(paths["perf_regression"]),
+        ],
+        runs,
+    )
+    _invoke(
+        "run_canary_rollout_sim_v1",
+        canary_rollout.main,
+        [
+            "--seed",
+            str(seed),
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--out",
+            str(paths["canary"]),
+        ],
         runs,
     )
     _invoke(
         "run_fleet_update_sim_v1",
         fleet_update.main,
-        ["--seed", str(seed), "--out", str(paths["fleet_update"])],
+        [
+            "--seed",
+            str(seed),
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--out",
+            str(paths["fleet_update"]),
+        ],
         runs,
     )
     _invoke(
         "run_fleet_health_sim_v1",
         fleet_health.main,
-        ["--seed", str(seed), "--out", str(paths["fleet_health"])],
+        [
+            "--seed",
+            str(seed),
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--out",
+            str(paths["fleet_health"]),
+        ],
+        runs,
+    )
+    _invoke(
+        "run_rollout_abort_drill_v1",
+        rollout_abort.main,
+        [
+            "--canary-report",
+            str(paths["canary"]),
+            "--fleet-health-report",
+            str(paths["fleet_health"]),
+            "--fleet-update-report",
+            str(paths["fleet_update"]),
+            "--out",
+            str(paths["rollout_abort"]),
+        ],
         runs,
     )
     _invoke(
         "run_conformance_suite_v1",
         conformance.main,
-        ["--seed", str(seed), "--out", str(paths["conformance"])],
+        [
+            "--seed",
+            str(seed),
+            "--runtime-capture",
+            str(paths["runtime_capture"]),
+            "--release-attestation",
+            str(paths["attestation"]),
+            "--pkg-rebuild-report",
+            str(paths["pkg_rebuild"]),
+            "--out",
+            str(paths["conformance"]),
+        ],
         runs,
     )
     _invoke(
@@ -253,8 +398,10 @@ def run_qualification(
 
     advisory = _read_json(paths["security_advisory"])
     embargo = _read_json(paths["security_embargo"])
+    attack = _read_json(paths["security_attack"])
     supply_chain = _read_json(paths["supply_chain"])
     attestation = _read_json(paths["attestation"])
+    perf_report = _read_json(paths["perf_regression"])
     canary = _read_json(paths["canary"])
     rollout_abort_report = _read_json(paths["rollout_abort"])
     fleet_update_report = _read_json(paths["fleet_update"])
@@ -264,13 +411,17 @@ def run_qualification(
     support_report = _read_json(paths["support_window"])
     measured_report = _read_json(paths["measured_boot"])
     crash_symbolized_report = _read_json(paths["crash_symbolized"])
+    capture = _read_json(paths["runtime_capture"])
 
     checks = [
         _check("all_tools_exit_zero", all(run["rc"] == 0 for run in runs)),
+        _check("runtime_capture_present", capture.get("schema") == "rugo.booted_runtime_capture.v1"),
         _check("security_advisory_valid", advisory.get("valid") is True),
         _check("security_embargo_meets_sla", embargo.get("meets_sla") is True),
+        _check("security_hardening_pass", attack.get("gate_pass") is True),
         _check("supply_chain_revalidation_pass", supply_chain.get("total_failures", 1) == 0),
         _check("release_attestation_pass", attestation.get("meets_target") is True),
+        _check("performance_regression_pass", perf_report.get("gate_pass") is True),
         _check("rollout_simulation_pass", canary.get("gate_pass") is True),
         _check(
             "rollout_abort_policy_enforced",
@@ -298,6 +449,9 @@ def run_qualification(
         embargo=embargo,
         attestation=attestation,
         support=support_report,
+        capture=capture,
+        perf=perf_report,
+        conformance_report=conformance_report,
     )
     checks.append(_check("lts_declaration_eligible", lts_declaration["eligible"] is True))
 
@@ -307,10 +461,15 @@ def run_qualification(
         "security": {
             "advisory_valid": advisory.get("valid"),
             "embargo_meets_sla": embargo.get("meets_sla"),
+            "hardening_gate_pass": attack.get("gate_pass"),
         },
         "supply_chain": {
             "total_failures": supply_chain.get("total_failures"),
             "attestation_meets_target": attestation.get("meets_target"),
+        },
+        "performance": {
+            "gate_pass": perf_report.get("gate_pass"),
+            "total_violations": perf_report.get("total_violations"),
         },
         "rollout": {
             "canary_gate_pass": canary.get("gate_pass"),
@@ -341,6 +500,7 @@ def run_qualification(
         "qualified_release_count": qualified_release_count,
         "min_qualified_releases": min_qualified_releases,
         "lts_min_support_days": lts_min_support_days,
+        "runtime_capture_digest": capture.get("digest", ""),
         "checks": checks,
         "tool_rc": [{"tool": run["tool"], "rc": run["rc"]} for run in runs],
         "lts_criteria": lts_declaration["criteria"],
@@ -360,6 +520,7 @@ def run_qualification(
         "qualified_release_count": qualified_release_count,
         "min_qualified_releases": min_qualified_releases,
         "lts_min_support_days": lts_min_support_days,
+        "qualified_surface": runtime_qual.default_lts_surface(capture),
         "evidence_artifacts": {
             name: path.as_posix() for name, path in paths.items()
         },
@@ -378,6 +539,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qualified-release-count", type=int, default=3)
     parser.add_argument("--min-qualified-releases", type=int, default=3)
     parser.add_argument("--lts-min-support-days", type=int, default=730)
+    parser.add_argument("--runtime-capture", default="")
+    parser.add_argument(
+        "--fixture",
+        action="store_true",
+        help="use the deterministic booted runtime fixture instead of out/booted-runtime-v1.json",
+    )
     parser.add_argument("--artifact-dir", default="")
     parser.add_argument("--max-failures", type=int, default=0)
     parser.add_argument("--out", default="out/maturity-qualification-v1.json")
@@ -408,6 +575,8 @@ def main(argv: List[str] | None = None) -> int:
         qualified_release_count=args.qualified_release_count,
         min_qualified_releases=args.min_qualified_releases,
         lts_min_support_days=args.lts_min_support_days,
+        runtime_capture_path=args.runtime_capture,
+        fixture=args.fixture,
     )
     report["max_failures"] = args.max_failures
     report["qualification_pass"] = (

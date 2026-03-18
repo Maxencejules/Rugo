@@ -49,6 +49,8 @@ deterministic enforcement artifacts.
 
 - Attack suite tool: `tools/run_security_attack_suite_v3.py`
 - Fuzz tool: `tools/run_security_fuzz_v2.py`
+- Runtime evidence artifact: `out/booted-runtime-v1.json`
+- Runtime deny markers: `GOSH: recv deny`, `GOSH: reg deny`, `GOSH: spawn deny`
 - Local gate: `make test-security-hardening-v3`
 - Sub-gate: `make test-vuln-response-v1`
 - CI steps:

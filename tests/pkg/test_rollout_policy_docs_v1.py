@@ -35,7 +35,9 @@ def test_staged_rollout_policy_v1_doc_declares_required_tokens():
         "blast-radius budget: `10%`",
         "Stage: `broad`",
         "maximum canary error rate: `0.02`",
-        "maximum canary latency p95: `120 ms`",
+        "maximum canary latency p95: `200 ms`",
+        "runtime control plane mode: `runtime_lab`",
+        "runtime capture artifact: `out/booted-runtime-v1.json`",
         "Local sub-gate: `make test-fleet-rollout-safety-v1`",
         "Parent gate: `make test-fleet-ops-v1`",
     ]:
@@ -53,6 +55,8 @@ def test_canary_slo_policy_v1_doc_declares_required_tokens():
         "`observed_latency_p95_ms`",
         "`auto_halt`",
         "`rollback_triggered`",
+        "`halt_reason`",
+        "`recovery_actions`",
         "Any SLO breach is gate-blocking.",
         "Local sub-gate: `make test-fleet-rollout-safety-v1`",
     ]:

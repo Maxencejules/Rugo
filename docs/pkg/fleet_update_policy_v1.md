@@ -20,6 +20,8 @@ rules for staged package rollouts.
 
 - Fleet update simulation must evaluate at least three node groups:
   `canary`, `batch_a`, `batch_b`.
+- runtime control plane mode: `runtime_lab`
+- runtime capture artifact: `out/booted-runtime-v1.json`
 - Each node group includes:
   - `target_version`
   - `current_version`

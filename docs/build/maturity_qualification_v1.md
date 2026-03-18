@@ -21,6 +21,8 @@ aggregate cross-domain release evidence into one final gate.
 - minimum qualified release count: `3`
 - minimum support window for LTS baseline: `730 days`
 - all cross-domain evidence checks must pass with `max_failures = 0`
+- runtime capture evidence artifact: `out/booted-runtime-v1.json`
+- package rebuild evidence artifact: `out/pkg-rebuild-v3.json`
 
 ## Required evidence domains
 
@@ -39,11 +41,18 @@ The qualification bundle must include all of the following evidence:
   - fleet update simulation: `rugo.fleet_update_sim_report.v1`
   - fleet health simulation: `rugo.fleet_health_report.v1`
   - profile conformance: `rugo.profile_conformance_report.v1`
+  - package rebuild verification: `rugo.pkg_rebuild_report.v3`
 - Lifecycle and reliability evidence:
   - release branch audit: `rugo.release_branch_audit.v2`
   - support window audit: `rugo.support_window_audit.v1`
   - measured boot report: `rugo.measured_boot_report.v1`
   - crash dump symbolization: `rugo.crash_dump_symbolized.v1`
+
+## LTS scope
+
+- `server_v1` and `appliance_v1` are the only LTS-qualified profiles.
+- `developer_v1` remains outside the LTS declaration surface.
+- LTS scope is bound to the `qemu-q35-default-lane` support matrix entry.
 
 ## Required upstream gate anchors
 

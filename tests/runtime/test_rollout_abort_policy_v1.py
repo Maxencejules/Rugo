@@ -21,6 +21,8 @@ def test_rollout_abort_policy_v1_enforces_halt(tmp_path: Path):
     assert data["auto_halt"] is True
     assert data["rollback_triggered"] is True
     assert data["policy_enforced"] is True
+    assert data["halt_reason"] == "slo_breach_detected"
+    assert data["recovery_actions"]
     assert data["meets_target"] is True
     assert data["total_failures"] == 0
 
@@ -43,5 +45,6 @@ def test_rollout_abort_policy_v1_detects_missing_halt(tmp_path: Path):
     assert data["auto_halt"] is False
     assert data["rollback_triggered"] is False
     assert data["policy_enforced"] is False
+    assert data["halt_reason"] == "no_breach_detected"
     assert data["meets_target"] is False
     assert data["total_failures"] >= 1

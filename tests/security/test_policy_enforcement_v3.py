@@ -22,7 +22,7 @@ def test_policy_identifiers_align_across_reports(tmp_path: Path):
     advisory_out = tmp_path / "security-advisory-lint-v1.json"
     embargo_out = tmp_path / "security-embargo-drill-v1.json"
 
-    assert attack_suite.main(["--seed", "20260309", "--out", str(attack_out)]) == 0
+    assert attack_suite.main(["--seed", "20260309", "--fixture", "--out", str(attack_out)]) == 0
     assert (
         fuzz_tool.main(
             [
@@ -48,6 +48,7 @@ def test_policy_identifiers_align_across_reports(tmp_path: Path):
 
     assert attack_data["profile_id"] == "rugo.security_hardening_profile.v3"
     assert attack_data["threat_model_id"] == "rugo.security_threat_model.v2"
+    assert attack_data["runtime_capture_digest"]
     assert fuzz_data["profile_id"] == "rugo.security_hardening_profile.v3"
     assert advisory_data["policy_id"] == "rugo.security_advisory_policy.v1"
     assert embargo_data["policy_id"] == "rugo.vulnerability_response_policy.v1"

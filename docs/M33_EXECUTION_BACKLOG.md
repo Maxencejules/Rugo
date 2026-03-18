@@ -15,7 +15,8 @@ M33 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 ## Current State Summary
 
 - Fleet update and health policy contracts are explicit and versioned.
-- Fleet and rollout simulations emit deterministic, machine-readable artifacts.
+- Fleet and rollout tools now operate on a runtime-backed lab model derived from
+  the booted default-lane capture.
 - Fleet ops and rollout-safety checks are required local and CI release gates.
 
 ## Execution Result
@@ -105,12 +106,12 @@ Operationalize multi-node simulation and SLO-triggered rollback behavior.
 
 ### Done criteria for PR-2
 
-- Fleet/rollout simulations are deterministic and machine-readable.
-- SLO-triggered abort and rollback behavior is auditable.
+- Fleet/rollout simulations are runtime-backed and machine-readable.
+- Report-driven abort and rollback behavior is auditable.
 
 ### PR-2 completion summary
 
-- Added deterministic simulation tooling:
+- Added runtime-backed fleet and rollout tooling:
   - `tools/run_fleet_update_sim_v1.py`
   - `tools/run_fleet_health_sim_v1.py`
   - `tools/run_canary_rollout_sim_v1.py`
@@ -120,6 +121,7 @@ Operationalize multi-node simulation and SLO-triggered rollback behavior.
   - `tests/runtime/test_fleet_health_sim_v1.py`
   - `tests/pkg/test_canary_rollout_sim_v1.py`
   - `tests/runtime/test_rollout_abort_policy_v1.py`
+  - `tests/runtime/test_fleet_control_plane_v1.py`
 
 ## PR-3: Fleet Ops Gate + Rollout Safety Sub-gate
 
@@ -156,7 +158,7 @@ Make fleet operations and rollout-safety checks release-blocking.
 ### Done criteria for PR-3
 
 - Fleet ops and rollout-safety gates are required in local and CI lanes.
-- M33 can be marked done with deterministic simulation evidence.
+- M33 can be marked done with runtime-backed rollout and rollback evidence.
 
 ### PR-3 completion summary
 
@@ -183,5 +185,5 @@ Make fleet operations and rollout-safety checks release-blocking.
 
 ## Non-goals for M33 backlog
 
-- Full production fleet control-plane implementation.
-- Global rollout automation outside scoped simulation contracts.
+- Broad production fleet deployment outside the scoped runtime-backed lab model.
+- Global rollout automation beyond the declared default-lane support surface.

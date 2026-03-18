@@ -25,6 +25,7 @@ def test_developer_profile_v1_qualification_pass(tmp_path: Path):
         [
             "--seed",
             "20260309",
+            "--fixture",
             "--profile",
             "developer_v1",
             "--out",
@@ -36,16 +37,20 @@ def test_developer_profile_v1_qualification_pass(tmp_path: Path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["schema"] == "rugo.profile_conformance_report.v1"
     assert data["checked_profiles"] == ["developer_v1"]
+    assert data["runtime_capture_digest"]
     assert data["gate_pass"] is True
     profile = _dev_profile(data)
     assert profile["qualification_pass"] is True
     assert profile["total_failures"] == 0
+    requirements = {req["requirement_id"]: req for req in profile["requirements"]}
+    assert requirements["interactive_shell_latency_ms_p95"]["observed"] <= 200
 
 
 def test_developer_profile_v1_rejects_build_success_regression(tmp_path: Path):
     out = tmp_path / "conformance-developer-v1-fail.json"
     rc = conformance.main(
         [
+            "--fixture",
             "--profile",
             "developer_v1",
             "--inject-failure",

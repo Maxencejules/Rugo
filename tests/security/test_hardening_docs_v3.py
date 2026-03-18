@@ -35,6 +35,10 @@ def test_hardening_docs_declare_required_contract_tokens():
         "Fuzz report schema: `rugo.security_fuzz_report.v2`",
         "Control ID: `SEC-HARD-V3-A1`",
         "Control ID: `SEC-HARD-V3-B2`",
+        "Runtime evidence artifact: `out/booted-runtime-v1.json`",
+        "`GOSH: recv deny`",
+        "`GOSH: reg deny`",
+        "`GOSH: spawn deny`",
         "Local gate: `make test-security-hardening-v3`",
         "Sub-gate: `make test-vuln-response-v1`",
     ]:

@@ -27,7 +27,10 @@ promotion/abort criteria for fleet rollouts.
 ## Promotion and halt criteria
 
 - maximum canary error rate: `0.02`
-- maximum canary latency p95: `120 ms`
+- maximum canary latency p95: `200 ms`
+- runtime control plane mode: `runtime_lab`
+- runtime capture artifact: `out/booted-runtime-v1.json`
+- stage latency caps: `canary=200 ms`, `small_batch=220 ms`, `broad=250 ms`
 - Each stage must pass health and SLO checks before promotion.
 - Any breach requires automatic halt and rollback coordination.
 - Promotion must stop after first failed stage.

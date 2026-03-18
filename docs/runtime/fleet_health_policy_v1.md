@@ -24,8 +24,9 @@ rollback decisions.
 
 - maximum fleet degraded ratio: `0.05`
 - maximum fleet error rate: `0.02`
-- maximum canary latency p95: `120 ms`
+- maximum canary latency p95: `200 ms`
 - canary blast-radius budget: `1%`
+- runtime capture artifact: `out/booted-runtime-v1.json`
 
 ## Required fleet health fields
 

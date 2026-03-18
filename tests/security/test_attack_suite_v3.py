@@ -20,9 +20,10 @@ def _strip_timestamp(payload: dict) -> dict:
 
 
 def test_attack_suite_v3_is_seed_deterministic():
-    first = attack_suite.run_suite(seed=20260309)
-    second = attack_suite.run_suite(seed=20260309)
+    first = attack_suite.run_suite(seed=20260309, fixture=True)
+    second = attack_suite.run_suite(seed=20260309, fixture=True)
     assert _strip_timestamp(first) == _strip_timestamp(second)
+    assert first["runtime_capture_digest"]
 
 
 def test_attack_suite_v3_report_schema_and_pass(tmp_path: Path):
@@ -31,6 +32,7 @@ def test_attack_suite_v3_report_schema_and_pass(tmp_path: Path):
         [
             "--seed",
             "20260309",
+            "--fixture",
             "--max-failures",
             "0",
             "--out",
@@ -44,6 +46,8 @@ def test_attack_suite_v3_report_schema_and_pass(tmp_path: Path):
     assert data["suite_id"] == "rugo.security_attack_suite.v3"
     assert data["profile_id"] == "rugo.security_hardening_profile.v3"
     assert data["threat_model_id"] == "rugo.security_threat_model.v2"
+    assert data["runtime_capture_digest"]
+    assert data["hardening_defaults"]["defaults_enforced"] is True
     assert data["total_cases"] >= 5
     assert data["total_failures"] == 0
     assert data["gate_pass"] is True
@@ -55,6 +59,7 @@ def test_attack_suite_v3_detects_injected_failure(tmp_path: Path):
         [
             "--seed",
             "20260309",
+            "--fixture",
             "--inject-failure",
             "syscall_filter_bypass",
             "--max-failures",

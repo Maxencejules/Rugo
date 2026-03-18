@@ -15,7 +15,8 @@ M28 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 ## Current State Summary
 
 - Hardening profile v3 and threat model v2 are now explicit and versioned.
-- Deterministic attack-suite and fuzz artifacts are implemented for M28.
+- Attack-suite evidence now binds to booted runtime capture from the shipped lane.
+- Fuzz, advisory, and embargo artifacts remain deterministic and release-auditable.
 - Sub-gate `test-vuln-response-v1` is release-blocking in local and CI lanes.
 
 ## Execution Result
@@ -110,14 +111,17 @@ Operationalize hardening controls and vulnerability-response workflows.
 
 ### Done criteria for PR-2
 
-- Hardening/fuzz outcomes and advisory workflow drills are deterministic.
+- Hardening outcomes are bound to booted runtime evidence from the shipped image.
+- Fuzz outcomes and advisory workflow drills are deterministic.
 - Triage/embargo/advisory artifacts are machine-readable and auditable.
 
 ### PR-2 completion summary
 
-- Added deterministic hardening enforcement tooling:
+- Added runtime-backed hardening enforcement tooling:
   - `tools/run_security_attack_suite_v3.py`
-  - `tools/run_security_fuzz_v2.py`
+- Added boot capture dependency for hardening evidence:
+  - `tools/collect_booted_runtime_v1.py`
+- `tools/run_security_fuzz_v2.py`
 - Hardened vuln-response tooling contracts:
   - `tools/security_advisory_lint_v1.py`
   - `tools/security_embargo_drill_v1.py`

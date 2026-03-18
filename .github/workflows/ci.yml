@@ -420,6 +420,7 @@ jobs:
         with:
           name: security-hardening-v3-artifacts
           path: |
+            out/booted-runtime-v1.json
             out/pytest-security-hardening-v3.xml
             out/security-attack-suite-v3.json
             out/security-fuzz-v2.json
@@ -535,6 +536,9 @@ jobs:
         with:
           name: conformance-v1-artifacts
           path: |
+            out/booted-runtime-v1.json
+            out/release-attestation-verification-v1.json
+            out/pkg-rebuild-v3.json
             out/pytest-conformance-v1.xml
             out/conformance-v1.json
 
@@ -548,6 +552,7 @@ jobs:
         with:
           name: fleet-ops-v1-artifacts
           path: |
+            out/booted-runtime-v1.json
             out/pytest-fleet-ops-v1.xml
             out/fleet-update-sim-v1.json
             out/fleet-health-sim-v1.json
@@ -562,8 +567,11 @@ jobs:
         with:
           name: fleet-rollout-safety-v1-artifacts
           path: |
+            out/booted-runtime-v1.json
             out/pytest-fleet-rollout-safety-v1.xml
             out/canary-rollout-sim-v1.json
+            out/fleet-update-sim-v1.json
+            out/fleet-health-sim-v1.json
             out/rollout-abort-drill-v1.json
 
       - name: Maturity qualification v1 gate
@@ -576,7 +584,17 @@ jobs:
         with:
           name: maturity-qualification-v1-artifacts
           path: |
+            out/booted-runtime-v1.json
             out/pytest-maturity-qual-v1.xml
+            out/security-attack-suite-v3.json
+            out/release-attestation-verification-v1.json
+            out/pkg-rebuild-v3.json
+            out/perf-baseline-v1.json
+            out/perf-regression-v1.json
+            out/canary-rollout-sim-v1.json
+            out/fleet-update-sim-v1.json
+            out/fleet-health-sim-v1.json
+            out/conformance-v1.json
             out/maturity-qualification-v1.json
 
       - name: Desktop stack v1 gate

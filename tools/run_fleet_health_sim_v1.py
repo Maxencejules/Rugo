@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List, Sequence, Set, Tuple
 
+import t4_runtime_qualification_common_v1 as runtime_qual
 
 SCHEMA = "rugo.fleet_health_report.v1"
 POLICY_ID = "rugo.fleet_health_policy.v1"
@@ -33,33 +33,43 @@ def _parse_injected_failures(values: Sequence[str]) -> Set[str]:
     return requested
 
 
-def _noise(seed: int, cluster: str, metric: str) -> int:
-    digest = hashlib.sha256(f"{seed}|{cluster}|{metric}".encode("utf-8")).hexdigest()
-    return int(digest[:8], 16) % 6
-
-
 def run_sim(
     seed: int,
     max_fleet_degraded_ratio: float,
     max_fleet_error_rate: float,
     injected_failure_clusters: Set[str] | None = None,
+    *,
+    runtime_capture_payload: Dict[str, object] | None = None,
+    runtime_capture_path: str = "",
+    fixture: bool = False,
 ) -> Dict[str, object]:
     failures = set() if injected_failure_clusters is None else set(injected_failure_clusters)
+    capture, capture_source = runtime_qual.load_runtime_capture(
+        runtime_capture_path=runtime_capture_path,
+        fixture=fixture,
+    ) if runtime_capture_payload is None else (runtime_capture_payload, runtime_capture_path or "provided")
+    lab_nodes = runtime_qual.build_fleet_lab(
+        capture,
+        seed=seed,
+        target_version="2.4.0",
+        injected_failure_clusters=failures,
+    )
     clusters: List[Dict[str, object]] = []
 
     total_nodes = 0
     degraded_nodes_total = 0
     weighted_error_sum = 0.0
 
-    for cluster_id, nodes_total in CLUSTERS:
-        if cluster_id in failures:
-            degraded_nodes = max(1, int(nodes_total * 0.2))
-            error_rate = round(max_fleet_error_rate + 0.03, 4)
-            latency_p95_ms = 140 + _noise(seed, cluster_id, "latency")
-        else:
-            degraded_nodes = _noise(seed, cluster_id, "degraded") % 2
-            error_rate = round(0.006 + (_noise(seed, cluster_id, "error") * 0.001), 4)
-            latency_p95_ms = 86 + _noise(seed, cluster_id, "latency")
+    for cluster_id, _nodes_total in CLUSTERS:
+        cluster_nodes = [node for node in lab_nodes if node["cluster_id"] == cluster_id]
+        nodes_total = len(cluster_nodes)
+        degraded_nodes = sum(1 for node in cluster_nodes if node["healthy"] is not True)
+        error_rate = round(
+            sum(float(node["error_rate"]) for node in cluster_nodes) / max(1, nodes_total),
+            4,
+        )
+        latencies = sorted(float(node["shell_latency_ms_p95"]) for node in cluster_nodes)
+        latency_p95_ms = round(latencies[-1] if latencies else 0.0, 3)
 
         degraded_ratio = round(degraded_nodes / nodes_total, 4)
         within_slo = error_rate <= max_fleet_error_rate and degraded_ratio <= max_fleet_degraded_ratio
@@ -73,6 +83,7 @@ def run_sim(
                 "error_rate": error_rate,
                 "latency_p95_ms": latency_p95_ms,
                 "within_slo": within_slo,
+                "nodes": cluster_nodes,
             }
         )
 
@@ -100,6 +111,10 @@ def run_sim(
             "name": "all_clusters_within_slo",
             "pass": all(cluster["within_slo"] for cluster in clusters),
         },
+        {
+            "name": "runtime_capture_bound",
+            "pass": bool(capture.get("digest")),
+        },
     ]
     total_failures = sum(1 for check in checks if check["pass"] is False)
     fleet_state = "healthy" if total_failures == 0 else "degraded"
@@ -109,11 +124,16 @@ def run_sim(
         "policy_id": POLICY_ID,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "seed": seed,
+        "control_plane_mode": "runtime_lab",
+        "runtime_capture_path": capture_source,
+        "runtime_capture_digest": capture.get("digest", ""),
+        "release_image_path": capture.get("image_path", ""),
         "max_fleet_degraded_ratio": max_fleet_degraded_ratio,
         "max_fleet_error_rate": max_fleet_error_rate,
         "fleet_state": fleet_state,
         "fleet_degraded_ratio": fleet_degraded_ratio,
         "fleet_error_rate": fleet_error_rate,
+        "lab_nodes_total": len(lab_nodes),
         "clusters": clusters,
         "checks": checks,
         "total_failures": total_failures,
@@ -126,6 +146,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-fleet-degraded-ratio", type=float, default=0.05)
     parser.add_argument("--max-fleet-error-rate", type=float, default=0.02)
     parser.add_argument("--inject-failure-cluster", action="append", default=[])
+    parser.add_argument(
+        "--runtime-capture",
+        default="",
+        help="booted runtime capture backing the fleet health lab",
+    )
+    parser.add_argument(
+        "--fixture",
+        action="store_true",
+        help="use the deterministic booted runtime fixture instead of out/booted-runtime-v1.json",
+    )
     parser.add_argument("--max-failures", type=int, default=0)
     parser.add_argument("--out", default="out/fleet-health-sim-v1.json")
     return parser
@@ -154,6 +184,8 @@ def main(argv: List[str] | None = None) -> int:
         max_fleet_degraded_ratio=args.max_fleet_degraded_ratio,
         max_fleet_error_rate=args.max_fleet_error_rate,
         injected_failure_clusters=injected_failure_clusters,
+        runtime_capture_path=args.runtime_capture,
+        fixture=args.fixture,
     )
     report["max_failures"] = args.max_failures
     report["gate_pass"] = report["total_failures"] <= args.max_failures

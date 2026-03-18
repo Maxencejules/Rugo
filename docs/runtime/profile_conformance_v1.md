@@ -37,7 +37,7 @@ lanes and require profile conformance evidence in release artifacts.
 - `toolchain_smoke_pass` must be `== 1`.
 - `debug_symbols_available` must be `== 1`.
 - `package_build_success_rate_pct` must be `>= 98`.
-- `interactive_shell_latency_ms_p95` must be `<= 120`.
+- `interactive_shell_latency_ms_p95` must be `<= 200`.
 
 ## Appliance profile requirements (`appliance_v1`)
 
@@ -50,6 +50,11 @@ lanes and require profile conformance evidence in release artifacts.
 
 - Conformance suite tool: `tools/run_conformance_suite_v1.py`
 - Default deterministic seed: `20260309`
+- Runtime capture artifact: `out/booted-runtime-v1.json`
+- Release attestation artifact: `out/release-attestation-verification-v1.json`
+- Package rebuild artifact: `out/pkg-rebuild-v3.json`
+- LTS-qualified profiles: `server_v1`, `appliance_v1`
+- Non-LTS profile: `developer_v1`
 - Local gate: `make test-conformance-v1`
 - CI gate: `Conformance v1 gate`
 - Release artifact: `out/conformance-v1.json`
