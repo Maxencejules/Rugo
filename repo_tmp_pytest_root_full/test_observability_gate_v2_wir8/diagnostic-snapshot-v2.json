@@ -1,0 +1,55 @@
+{
+  "schema": "rugo.diagnostic_snapshot.v2",
+  "contract_id": "rugo.observability_contract.v2",
+  "created_utc": "2026-03-18T20:33:17Z",
+  "runtime_capture_schema": "rugo.booted_runtime_capture.v1",
+  "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+  "release_image_path": "out/os-go.iso",
+  "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+  "build_id": "rugo-default-87c7b9ebc8ad",
+  "health_checks": [
+    {
+      "name": "service_manager",
+      "status": "ok",
+      "details": "boot-backed runtime capture is within expected bounds"
+    },
+    {
+      "name": "memory_pressure",
+      "status": "ok",
+      "details": "boot-backed runtime capture is within expected bounds"
+    },
+    {
+      "name": "filesystem_recovery",
+      "status": "ok",
+      "details": "boot-backed runtime capture is within expected bounds"
+    },
+    {
+      "name": "network_stack",
+      "status": "ok",
+      "details": "boot-backed runtime capture is within expected bounds"
+    },
+    {
+      "name": "isolation_observer",
+      "status": "ok",
+      "details": "boot-backed runtime capture is within expected bounds"
+    }
+  ],
+  "resource_snapshot": {
+    "cpu_run_total": 132,
+    "memory_pressure_score": 18,
+    "io_block_ops": 10,
+    "socket_ops": 6
+  },
+  "trace_reference": {
+    "attached": true,
+    "schema": "rugo.trace_bundle.v2",
+    "contract_id": "rugo.observability_contract.v2",
+    "gate_pass": true,
+    "trace_id": "trace-qemu-7ee6f6f8a963",
+    "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091"
+  },
+  "unhealthy_checks": 0,
+  "digest": "d975c58a9824bea7ffe6db0fe035dfe7bf20e002dadc37580bc00d3fa10cd8b3",
+  "max_unhealthy_checks": 0,
+  "gate_pass": true
+}

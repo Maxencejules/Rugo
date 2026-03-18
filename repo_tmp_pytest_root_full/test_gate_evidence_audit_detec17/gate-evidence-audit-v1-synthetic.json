@@ -1,0 +1,170 @@
+{
+  "schema": "rugo.gate_evidence_audit_report.v1",
+  "created_utc": "2026-03-18T20:33:18Z",
+  "audit_policy_id": "rugo.gate_provenance_policy.v1",
+  "evidence_integrity_policy_id": "rugo.evidence_integrity_policy.v1",
+  "runtime_evidence_schema_id": "rugo.runtime_evidence_schema.v1",
+  "required_evidence_schema": "rugo.runtime_evidence_report.v1",
+  "gate": "test-synthetic-evidence-ban-v1",
+  "input_evidence_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_gate_evidence_audit_detec17\\runtime-evidence-v1-synthetic.json",
+  "input_evidence_digest": "a246fe261fd25432517311f500e1dbd3baa6643b1efe848fe03c640e693b9225",
+  "evidence_gate_pass": false,
+  "checks": [
+    {
+      "check_id": "evidence_file_present",
+      "domain": "identity",
+      "pass": true,
+      "detail": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_gate_evidence_audit_detec17\\runtime-evidence-v1-synthetic.json"
+    },
+    {
+      "check_id": "evidence_schema_valid",
+      "domain": "identity",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "evidence_policy_id_match",
+      "domain": "identity",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "runtime_schema_id_match",
+      "domain": "identity",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "gate_provenance_policy_match",
+      "domain": "identity",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "runtime_capture_ratio",
+      "domain": "execution",
+      "pass": false,
+      "detail": ""
+    },
+    {
+      "check_id": "qemu_trace_presence_ratio",
+      "domain": "execution",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "panic_trace_presence_ratio",
+      "domain": "execution",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "trace_linkage_ratio",
+      "domain": "execution",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "default_image_binding_ratio",
+      "domain": "provenance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "boot_instance_binding_ratio",
+      "domain": "provenance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "provenance_fields_ratio",
+      "domain": "provenance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "synthetic_evidence_ratio",
+      "domain": "synthetic",
+      "pass": false,
+      "detail": ""
+    },
+    {
+      "check_id": "synthetic_only_artifacts",
+      "domain": "synthetic",
+      "pass": false,
+      "detail": ""
+    },
+    {
+      "check_id": "detached_trace_count",
+      "domain": "synthetic",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "unsigned_artifact_count",
+      "domain": "provenance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "runtime_lane_coverage",
+      "domain": "provenance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check_id": "release_image_binding",
+      "domain": "wiring",
+      "pass": true,
+      "detail": "out/os-go.iso"
+    },
+    {
+      "check_id": "release_gate_binding",
+      "domain": "wiring",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "summary": {
+    "identity": {
+      "checks": 5,
+      "failures": 0,
+      "pass": true
+    },
+    "execution": {
+      "checks": 4,
+      "failures": 1,
+      "pass": false
+    },
+    "provenance": {
+      "checks": 5,
+      "failures": 0,
+      "pass": true
+    },
+    "synthetic": {
+      "checks": 3,
+      "failures": 2,
+      "pass": false
+    },
+    "wiring": {
+      "checks": 2,
+      "failures": 0,
+      "pass": true
+    }
+  },
+  "total_failures": 3,
+  "failures": [
+    "runtime_capture_ratio",
+    "synthetic_evidence_ratio",
+    "synthetic_only_artifacts"
+  ],
+  "artifact_refs": {
+    "runtime_evidence_report": "out/runtime-evidence-v1.json",
+    "gate_evidence_audit_report": "out/gate-evidence-audit-v1.json",
+    "junit": "out/pytest-synthetic-evidence-ban-v1.xml",
+    "ci_artifact": "synthetic-evidence-ban-v1-artifacts"
+  },
+  "digest": "d00687ab4bb3f36a51790ca6c90d9c5a5300b28db4a9b29dfb658d50c43c5cae",
+  "max_failures": 0,
+  "gate_pass": false
+}

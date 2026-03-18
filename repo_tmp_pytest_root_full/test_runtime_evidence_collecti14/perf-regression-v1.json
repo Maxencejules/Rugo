@@ -1,0 +1,148 @@
+{
+  "schema": "rugo.perf_regression_report.v1",
+  "created_utc": "2026-03-18T20:33:18Z",
+  "baseline_schema": "rugo.perf_baseline.v1",
+  "budget_id": "rugo.performance_budget.v1",
+  "benchmark_policy_id": "rugo.benchmark_policy.v1",
+  "baseline_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_runtime_evidence_collecti14\\perf-baseline-v1.json",
+  "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_runtime_evidence_collecti14\\booted-runtime-v1.json",
+  "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+  "release_image_path": "out/os-go.iso",
+  "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+  "trace_id": "trace-qemu-7ee6f6f8a963",
+  "workload_count": 6,
+  "workload_results": [
+    {
+      "workload": "cpu_service_cycle",
+      "baseline_metrics": {
+        "throughput_ops_per_sec": 39.699,
+        "latency_p95_us": 1687000.0
+      },
+      "current_metrics": {
+        "throughput_ops_per_sec": 39.699,
+        "latency_p95_us": 1687000.0
+      },
+      "regressions_pct": {
+        "throughput_ops_per_sec": 0.0,
+        "latency_p95_us": 0.0
+      },
+      "budgets_pct": {
+        "throughput": 5.0,
+        "latency": 7.0
+      },
+      "violations": [],
+      "gate_pass": true
+    },
+    {
+      "workload": "memory_diag_snapshot",
+      "baseline_metrics": {
+        "throughput_ops_per_sec": 1.203,
+        "latency_p95_us": 132000.0
+      },
+      "current_metrics": {
+        "throughput_ops_per_sec": 1.203,
+        "latency_p95_us": 132000.0
+      },
+      "regressions_pct": {
+        "throughput_ops_per_sec": 0.0,
+        "latency_p95_us": 0.0
+      },
+      "budgets_pct": {
+        "throughput": 5.0,
+        "latency": 7.0
+      },
+      "violations": [],
+      "gate_pass": true
+    },
+    {
+      "workload": "block_recovery_cycle",
+      "baseline_metrics": {
+        "throughput_ops_per_sec": 3.008,
+        "latency_p95_us": 965000.0
+      },
+      "current_metrics": {
+        "throughput_ops_per_sec": 3.008,
+        "latency_p95_us": 965000.0
+      },
+      "regressions_pct": {
+        "throughput_ops_per_sec": 0.0,
+        "latency_p95_us": 0.0
+      },
+      "budgets_pct": {
+        "throughput": 6.0,
+        "latency": 8.0
+      },
+      "violations": [],
+      "gate_pass": true
+    },
+    {
+      "workload": "network_roundtrip_cycle",
+      "baseline_metrics": {
+        "throughput_ops_per_sec": 4.812,
+        "latency_p95_us": 118000.0
+      },
+      "current_metrics": {
+        "throughput_ops_per_sec": 4.812,
+        "latency_p95_us": 118000.0
+      },
+      "regressions_pct": {
+        "throughput_ops_per_sec": 0.0,
+        "latency_p95_us": 0.0
+      },
+      "budgets_pct": {
+        "throughput": 6.0,
+        "latency": 8.0
+      },
+      "violations": [],
+      "gate_pass": true
+    },
+    {
+      "workload": "service_restart_cycle",
+      "baseline_metrics": {
+        "throughput_ops_per_sec": 4.211,
+        "latency_p95_us": 91000.0
+      },
+      "current_metrics": {
+        "throughput_ops_per_sec": 4.211,
+        "latency_p95_us": 91000.0
+      },
+      "regressions_pct": {
+        "throughput_ops_per_sec": 0.0,
+        "latency_p95_us": 0.0
+      },
+      "budgets_pct": {
+        "throughput": 7.0,
+        "latency": 10.0
+      },
+      "violations": [],
+      "gate_pass": true
+    },
+    {
+      "workload": "mixed_runtime_cycle",
+      "baseline_metrics": {
+        "throughput_ops_per_sec": 37.594,
+        "latency_p95_us": 35000.0
+      },
+      "current_metrics": {
+        "throughput_ops_per_sec": 37.594,
+        "latency_p95_us": 35000.0
+      },
+      "regressions_pct": {
+        "throughput_ops_per_sec": 0.0,
+        "latency_p95_us": 0.0
+      },
+      "budgets_pct": {
+        "throughput": 7.0,
+        "latency": 10.0
+      },
+      "violations": [],
+      "gate_pass": true
+    }
+  ],
+  "violations": [],
+  "total_violations": 0,
+  "max_violations": 0,
+  "requires_action": false,
+  "gate_pass": true,
+  "digest": "cc584184c41f66cd5508e1213d8cf052784535777b4836801064b247f4d8bbbd"
+}

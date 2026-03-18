@@ -1,0 +1,953 @@
+{
+  "schema": "rugo.booted_runtime_capture.v1",
+  "capture_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c",
+  "build_id": "rugo-default-87c7b9ebc8ad",
+  "execution_lane": "qemu",
+  "capture_mode": "fixture",
+  "image_path": "out/os-go.iso",
+  "image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+  "kernel_path": "out/kernel-go.elf",
+  "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+  "panic_image_path": "out/os-panic.iso",
+  "panic_image_digest": "062dc96651ced30ad047970c10b962d8c308de9af08831310770f5f5a2650e88",
+  "trace_id": "trace-qemu-7ee6f6f8a963",
+  "boots": [
+    {
+      "boot_id": "1bab25d2d7893946",
+      "boot_index": 1,
+      "boot_profile": "cold_boot",
+      "exit_code": 0,
+      "duration_ms": 1715.0,
+      "serial_line_count": 61,
+      "serial_digest": "75c013dc5a3bbc108e44d91ca8b81e8dbec8660721ba3200a5a8fffb330f3e81",
+      "serial_lines": [
+        {
+          "ts_ms": 0,
+          "line": "RUGO: boot ok"
+        },
+        {
+          "ts_ms": 24,
+          "line": "STORC4: block ready"
+        },
+        {
+          "ts_ms": 43,
+          "line": "NETC4: nic ready"
+        },
+        {
+          "ts_ms": 70,
+          "line": "GOINIT: start"
+        },
+        {
+          "ts_ms": 102,
+          "line": "GOSVCM: start"
+        },
+        {
+          "ts_ms": 135,
+          "line": "SVC: timesvc declared"
+        },
+        {
+          "ts_ms": 162,
+          "line": "SVC: timesvc starting"
+        },
+        {
+          "ts_ms": 188,
+          "line": "GOSVCM: class timesvc critical"
+        },
+        {
+          "ts_ms": 219,
+          "line": "TIMESVC: start"
+        },
+        {
+          "ts_ms": 251,
+          "line": "SVC: timesvc running"
+        },
+        {
+          "ts_ms": 284,
+          "line": "TIMESVC: ready"
+        },
+        {
+          "ts_ms": 319,
+          "line": "SVC: diagsvc declared"
+        },
+        {
+          "ts_ms": 346,
+          "line": "SVC: diagsvc starting"
+        },
+        {
+          "ts_ms": 373,
+          "line": "GOSVCM: class diagsvc best-effort"
+        },
+        {
+          "ts_ms": 409,
+          "line": "DIAGSVC: start"
+        },
+        {
+          "ts_ms": 438,
+          "line": "SVC: diagsvc running"
+        },
+        {
+          "ts_ms": 472,
+          "line": "DIAGSVC: ready"
+        },
+        {
+          "ts_ms": 506,
+          "line": "SVC: shell declared"
+        },
+        {
+          "ts_ms": 531,
+          "line": "SVC: shell starting"
+        },
+        {
+          "ts_ms": 562,
+          "line": "GOSVCM: class shell best-effort"
+        },
+        {
+          "ts_ms": 596,
+          "line": "GOSH: start"
+        },
+        {
+          "ts_ms": 622,
+          "line": "SVC: shell running"
+        },
+        {
+          "ts_ms": 659,
+          "line": "GOSH: lookup ok"
+        },
+        {
+          "ts_ms": 702,
+          "line": "TIMESVC: req ok"
+        },
+        {
+          "ts_ms": 730,
+          "line": "TIMESVC: time ok"
+        },
+        {
+          "ts_ms": 761,
+          "line": "GOSH: reply ok"
+        },
+        {
+          "ts_ms": 798,
+          "line": "DIAGSVC: snapshot"
+        },
+        {
+          "ts_ms": 822,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=41"
+        },
+        {
+          "ts_ms": 837,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=42"
+        },
+        {
+          "ts_ms": 853,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=43"
+        },
+        {
+          "ts_ms": 882,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=16 y=0 blk=2 tx=6 rx=3 ep=1 dom=1 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 904,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=11 y=1 blk=1 tx=3 rx=5 ep=1 dom=2 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 930,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=18 y=4 blk=3 tx=4 rx=4 ep=1 dom=3 cap=3 fd=1 sock=3"
+        },
+        {
+          "ts_ms": 955,
+          "line": "GOSH: diag ok"
+        },
+        {
+          "ts_ms": 989,
+          "line": "STORC4: journal staged"
+        },
+        {
+          "ts_ms": 1018,
+          "line": "NETC4: ifcfg ok"
+        },
+        {
+          "ts_ms": 1046,
+          "line": "NETC4: route ok"
+        },
+        {
+          "ts_ms": 1077,
+          "line": "NETC4: listen ok"
+        },
+        {
+          "ts_ms": 1108,
+          "line": "NETC4: connect ok"
+        },
+        {
+          "ts_ms": 1136,
+          "line": "NETC4: accept ok"
+        },
+        {
+          "ts_ms": 1167,
+          "line": "NETC4: recv ok"
+        },
+        {
+          "ts_ms": 1195,
+          "line": "NETC4: reply ok"
+        },
+        {
+          "ts_ms": 1226,
+          "line": "ISOC5: domain ok"
+        },
+        {
+          "ts_ms": 1254,
+          "line": "ISOC5: quota ok"
+        },
+        {
+          "ts_ms": 1288,
+          "line": "DIAGSVC: snapshot"
+        },
+        {
+          "ts_ms": 1312,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=44"
+        },
+        {
+          "ts_ms": 1327,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=45"
+        },
+        {
+          "ts_ms": 1343,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=46"
+        },
+        {
+          "ts_ms": 1372,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=20 y=0 blk=2 tx=8 rx=4 ep=1 dom=1 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 1394,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=14 y=1 blk=1 tx=4 rx=7 ep=1 dom=2 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 1420,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=22 y=6 blk=4 tx=5 rx=5 ep=1 dom=3 cap=3 fd=1 sock=3"
+        },
+        {
+          "ts_ms": 1448,
+          "line": "ISOC5: observe ok"
+        },
+        {
+          "ts_ms": 1483,
+          "line": "SOAKC5: mixed ok"
+        },
+        {
+          "ts_ms": 1515,
+          "line": "GOSVCM: stop diagsvc"
+        },
+        {
+          "ts_ms": 1542,
+          "line": "SVC: diagsvc stopping"
+        },
+        {
+          "ts_ms": 1568,
+          "line": "DIAGSVC: stop"
+        },
+        {
+          "ts_ms": 1597,
+          "line": "SVC: diagsvc stopped"
+        },
+        {
+          "ts_ms": 1628,
+          "line": "GOSVCM: reap diagsvc"
+        },
+        {
+          "ts_ms": 1660,
+          "line": "ISOC5: cleanup ok"
+        },
+        {
+          "ts_ms": 1687,
+          "line": "GOINIT: ready"
+        },
+        {
+          "ts_ms": 1715,
+          "line": "RUGO: halt ok"
+        }
+      ],
+      "process_snapshots": [
+        {
+          "ts_ms": 822.0,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=41",
+          "service": "timesvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 41
+          }
+        },
+        {
+          "ts_ms": 837.0,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=42",
+          "service": "diagsvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 42
+          }
+        },
+        {
+          "ts_ms": 853.0,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=43",
+          "service": "shell",
+          "metrics": {
+            "s": 3,
+            "r": 2,
+            "f": 2,
+            "x": 2,
+            "tick": 43
+          }
+        },
+        {
+          "ts_ms": 1312.0,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=44",
+          "service": "timesvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 44
+          }
+        },
+        {
+          "ts_ms": 1327.0,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=45",
+          "service": "diagsvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 45
+          }
+        },
+        {
+          "ts_ms": 1343.0,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=46",
+          "service": "shell",
+          "metrics": {
+            "s": 3,
+            "r": 2,
+            "f": 2,
+            "x": 2,
+            "tick": 46
+          }
+        }
+      ],
+      "task_snapshots": [
+        {
+          "ts_ms": 882.0,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=16 y=0 blk=2 tx=6 rx=3 ep=1 dom=1 cap=0 fd=0 sock=0",
+          "service": "timesvc",
+          "metrics": {
+            "tid": 1,
+            "parent": 0,
+            "cls": "critical",
+            "st": "blocked",
+            "run": 16,
+            "y": 0,
+            "blk": 2,
+            "tx": 6,
+            "rx": 3,
+            "ep": 1,
+            "dom": 1,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 904.0,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=11 y=1 blk=1 tx=3 rx=5 ep=1 dom=2 cap=0 fd=0 sock=0",
+          "service": "diagsvc",
+          "metrics": {
+            "tid": 2,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "running",
+            "run": 11,
+            "y": 1,
+            "blk": 1,
+            "tx": 3,
+            "rx": 5,
+            "ep": 1,
+            "dom": 2,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 930.0,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=18 y=4 blk=3 tx=4 rx=4 ep=1 dom=3 cap=3 fd=1 sock=3",
+          "service": "shell",
+          "metrics": {
+            "tid": 3,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "blocked",
+            "run": 18,
+            "y": 4,
+            "blk": 3,
+            "tx": 4,
+            "rx": 4,
+            "ep": 1,
+            "dom": 3,
+            "cap": 3,
+            "fd": 1,
+            "sock": 3
+          }
+        },
+        {
+          "ts_ms": 1372.0,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=20 y=0 blk=2 tx=8 rx=4 ep=1 dom=1 cap=0 fd=0 sock=0",
+          "service": "timesvc",
+          "metrics": {
+            "tid": 1,
+            "parent": 0,
+            "cls": "critical",
+            "st": "blocked",
+            "run": 20,
+            "y": 0,
+            "blk": 2,
+            "tx": 8,
+            "rx": 4,
+            "ep": 1,
+            "dom": 1,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 1394.0,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=14 y=1 blk=1 tx=4 rx=7 ep=1 dom=2 cap=0 fd=0 sock=0",
+          "service": "diagsvc",
+          "metrics": {
+            "tid": 2,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "running",
+            "run": 14,
+            "y": 1,
+            "blk": 1,
+            "tx": 4,
+            "rx": 7,
+            "ep": 1,
+            "dom": 2,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 1420.0,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=22 y=6 blk=4 tx=5 rx=5 ep=1 dom=3 cap=3 fd=1 sock=3",
+          "service": "shell",
+          "metrics": {
+            "tid": 3,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "blocked",
+            "run": 22,
+            "y": 6,
+            "blk": 4,
+            "tx": 5,
+            "rx": 5,
+            "ep": 1,
+            "dom": 3,
+            "cap": 3,
+            "fd": 1,
+            "sock": 3
+          }
+        }
+      ],
+      "panic_code": 57005
+    },
+    {
+      "boot_id": "3ec80d1e803a17b6",
+      "boot_index": 2,
+      "boot_profile": "replay_boot",
+      "exit_code": 0,
+      "duration_ms": 1610.0,
+      "serial_line_count": 64,
+      "serial_digest": "6e9ee85c9ec3b962058df79cffaa4db3eacf0d678b1e40111714529208e36c4d",
+      "serial_lines": [
+        {
+          "ts_ms": 0,
+          "line": "RUGO: boot ok"
+        },
+        {
+          "ts_ms": 18,
+          "line": "STORC4: block ready"
+        },
+        {
+          "ts_ms": 35,
+          "line": "RECOV: replay ok"
+        },
+        {
+          "ts_ms": 57,
+          "line": "NETC4: nic ready"
+        },
+        {
+          "ts_ms": 83,
+          "line": "GOINIT: start"
+        },
+        {
+          "ts_ms": 109,
+          "line": "GOSVCM: start"
+        },
+        {
+          "ts_ms": 139,
+          "line": "SVC: timesvc declared"
+        },
+        {
+          "ts_ms": 162,
+          "line": "SVC: timesvc starting"
+        },
+        {
+          "ts_ms": 186,
+          "line": "GOSVCM: class timesvc critical"
+        },
+        {
+          "ts_ms": 214,
+          "line": "TIMESVC: start"
+        },
+        {
+          "ts_ms": 241,
+          "line": "SVC: timesvc running"
+        },
+        {
+          "ts_ms": 267,
+          "line": "TIMESVC: ready"
+        },
+        {
+          "ts_ms": 294,
+          "line": "SVC: diagsvc declared"
+        },
+        {
+          "ts_ms": 317,
+          "line": "SVC: diagsvc starting"
+        },
+        {
+          "ts_ms": 340,
+          "line": "GOSVCM: class diagsvc best-effort"
+        },
+        {
+          "ts_ms": 367,
+          "line": "DIAGSVC: start"
+        },
+        {
+          "ts_ms": 394,
+          "line": "SVC: diagsvc running"
+        },
+        {
+          "ts_ms": 423,
+          "line": "DIAGSVC: ready"
+        },
+        {
+          "ts_ms": 447,
+          "line": "SVC: shell declared"
+        },
+        {
+          "ts_ms": 473,
+          "line": "SVC: shell starting"
+        },
+        {
+          "ts_ms": 499,
+          "line": "GOSVCM: class shell best-effort"
+        },
+        {
+          "ts_ms": 525,
+          "line": "GOSH: start"
+        },
+        {
+          "ts_ms": 553,
+          "line": "SVC: shell running"
+        },
+        {
+          "ts_ms": 587,
+          "line": "GOSH: lookup ok"
+        },
+        {
+          "ts_ms": 616,
+          "line": "STORC4: state ok"
+        },
+        {
+          "ts_ms": 648,
+          "line": "BLK: flush ordered"
+        },
+        {
+          "ts_ms": 678,
+          "line": "STORC4: fsync ok"
+        },
+        {
+          "ts_ms": 706,
+          "line": "TIMESVC: req ok"
+        },
+        {
+          "ts_ms": 734,
+          "line": "TIMESVC: time ok"
+        },
+        {
+          "ts_ms": 761,
+          "line": "GOSH: reply ok"
+        },
+        {
+          "ts_ms": 792,
+          "line": "DIAGSVC: snapshot"
+        },
+        {
+          "ts_ms": 814,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=47"
+        },
+        {
+          "ts_ms": 828,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=48"
+        },
+        {
+          "ts_ms": 843,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=49"
+        },
+        {
+          "ts_ms": 870,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=23 y=0 blk=2 tx=10 rx=5 ep=1 dom=1 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 891,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=16 y=1 blk=1 tx=5 rx=9 ep=1 dom=2 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 916,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=26 y=8 blk=5 tx=6 rx=6 ep=1 dom=3 cap=3 fd=1 sock=3"
+        },
+        {
+          "ts_ms": 944,
+          "line": "GOSH: diag ok"
+        },
+        {
+          "ts_ms": 973,
+          "line": "NETC4: ifcfg ok"
+        },
+        {
+          "ts_ms": 1000,
+          "line": "NETC4: route ok"
+        },
+        {
+          "ts_ms": 1026,
+          "line": "NETC4: listen ok"
+        },
+        {
+          "ts_ms": 1055,
+          "line": "NETC4: connect ok"
+        },
+        {
+          "ts_ms": 1082,
+          "line": "NETC4: accept ok"
+        },
+        {
+          "ts_ms": 1111,
+          "line": "NETC4: recv ok"
+        },
+        {
+          "ts_ms": 1138,
+          "line": "NETC4: reply ok"
+        },
+        {
+          "ts_ms": 1166,
+          "line": "ISOC5: domain ok"
+        },
+        {
+          "ts_ms": 1191,
+          "line": "ISOC5: quota ok"
+        },
+        {
+          "ts_ms": 1221,
+          "line": "DIAGSVC: snapshot"
+        },
+        {
+          "ts_ms": 1244,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=50"
+        },
+        {
+          "ts_ms": 1258,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=51"
+        },
+        {
+          "ts_ms": 1272,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=52"
+        },
+        {
+          "ts_ms": 1299,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=27 y=0 blk=2 tx=12 rx=6 ep=1 dom=1 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 1320,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=19 y=1 blk=1 tx=6 rx=11 ep=1 dom=2 cap=0 fd=0 sock=0"
+        },
+        {
+          "ts_ms": 1346,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=30 y=10 blk=6 tx=7 rx=7 ep=1 dom=3 cap=3 fd=1 sock=3"
+        },
+        {
+          "ts_ms": 1376,
+          "line": "ISOC5: observe ok"
+        },
+        {
+          "ts_ms": 1406,
+          "line": "SOAKC5: mixed ok"
+        },
+        {
+          "ts_ms": 1432,
+          "line": "GOSVCM: stop diagsvc"
+        },
+        {
+          "ts_ms": 1457,
+          "line": "SVC: diagsvc stopping"
+        },
+        {
+          "ts_ms": 1481,
+          "line": "DIAGSVC: stop"
+        },
+        {
+          "ts_ms": 1507,
+          "line": "SVC: diagsvc stopped"
+        },
+        {
+          "ts_ms": 1536,
+          "line": "GOSVCM: reap diagsvc"
+        },
+        {
+          "ts_ms": 1562,
+          "line": "ISOC5: cleanup ok"
+        },
+        {
+          "ts_ms": 1586,
+          "line": "GOINIT: ready"
+        },
+        {
+          "ts_ms": 1610,
+          "line": "RUGO: halt ok"
+        }
+      ],
+      "process_snapshots": [
+        {
+          "ts_ms": 814.0,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=47",
+          "service": "timesvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 47
+          }
+        },
+        {
+          "ts_ms": 828.0,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=48",
+          "service": "diagsvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 48
+          }
+        },
+        {
+          "ts_ms": 843.0,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=49",
+          "service": "shell",
+          "metrics": {
+            "s": 3,
+            "r": 2,
+            "f": 2,
+            "x": 2,
+            "tick": 49
+          }
+        },
+        {
+          "ts_ms": 1244.0,
+          "line": "PROC: timesvc s=1 r=0 f=0 x=0 tick=50",
+          "service": "timesvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 50
+          }
+        },
+        {
+          "ts_ms": 1258.0,
+          "line": "PROC: diagsvc s=1 r=0 f=0 x=0 tick=51",
+          "service": "diagsvc",
+          "metrics": {
+            "s": 1,
+            "r": 0,
+            "f": 0,
+            "x": 0,
+            "tick": 51
+          }
+        },
+        {
+          "ts_ms": 1272.0,
+          "line": "PROC: shell s=3 r=2 f=2 x=2 tick=52",
+          "service": "shell",
+          "metrics": {
+            "s": 3,
+            "r": 2,
+            "f": 2,
+            "x": 2,
+            "tick": 52
+          }
+        }
+      ],
+      "task_snapshots": [
+        {
+          "ts_ms": 870.0,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=23 y=0 blk=2 tx=10 rx=5 ep=1 dom=1 cap=0 fd=0 sock=0",
+          "service": "timesvc",
+          "metrics": {
+            "tid": 1,
+            "parent": 0,
+            "cls": "critical",
+            "st": "blocked",
+            "run": 23,
+            "y": 0,
+            "blk": 2,
+            "tx": 10,
+            "rx": 5,
+            "ep": 1,
+            "dom": 1,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 891.0,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=16 y=1 blk=1 tx=5 rx=9 ep=1 dom=2 cap=0 fd=0 sock=0",
+          "service": "diagsvc",
+          "metrics": {
+            "tid": 2,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "running",
+            "run": 16,
+            "y": 1,
+            "blk": 1,
+            "tx": 5,
+            "rx": 9,
+            "ep": 1,
+            "dom": 2,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 916.0,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=26 y=8 blk=5 tx=6 rx=6 ep=1 dom=3 cap=3 fd=1 sock=3",
+          "service": "shell",
+          "metrics": {
+            "tid": 3,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "blocked",
+            "run": 26,
+            "y": 8,
+            "blk": 5,
+            "tx": 6,
+            "rx": 6,
+            "ep": 1,
+            "dom": 3,
+            "cap": 3,
+            "fd": 1,
+            "sock": 3
+          }
+        },
+        {
+          "ts_ms": 1299.0,
+          "line": "TASK: timesvc tid=1 parent=0 cls=critical st=blocked run=27 y=0 blk=2 tx=12 rx=6 ep=1 dom=1 cap=0 fd=0 sock=0",
+          "service": "timesvc",
+          "metrics": {
+            "tid": 1,
+            "parent": 0,
+            "cls": "critical",
+            "st": "blocked",
+            "run": 27,
+            "y": 0,
+            "blk": 2,
+            "tx": 12,
+            "rx": 6,
+            "ep": 1,
+            "dom": 1,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 1320.0,
+          "line": "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running run=19 y=1 blk=1 tx=6 rx=11 ep=1 dom=2 cap=0 fd=0 sock=0",
+          "service": "diagsvc",
+          "metrics": {
+            "tid": 2,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "running",
+            "run": 19,
+            "y": 1,
+            "blk": 1,
+            "tx": 6,
+            "rx": 11,
+            "ep": 1,
+            "dom": 2,
+            "cap": 0,
+            "fd": 0,
+            "sock": 0
+          }
+        },
+        {
+          "ts_ms": 1346.0,
+          "line": "TASK: shell tid=3 parent=0 cls=best-effort st=blocked run=30 y=10 blk=6 tx=7 rx=7 ep=1 dom=3 cap=3 fd=1 sock=3",
+          "service": "shell",
+          "metrics": {
+            "tid": 3,
+            "parent": 0,
+            "cls": "best-effort",
+            "st": "blocked",
+            "run": 30,
+            "y": 10,
+            "blk": 6,
+            "tx": 7,
+            "rx": 7,
+            "ep": 1,
+            "dom": 3,
+            "cap": 3,
+            "fd": 1,
+            "sock": 3
+          }
+        }
+      ],
+      "panic_code": 57005
+    }
+  ],
+  "digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+  "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+  "fixture_seed": 20260318,
+  "created_utc": "2026-03-18T00:00:00Z",
+  "boot_profiles": [
+    "cold_boot",
+    "replay_boot"
+  ],
+  "panic_boot_id": "panic-7ee6f6f8a963"
+}

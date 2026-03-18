@@ -1,0 +1,418 @@
+{
+  "schema": "rugo.runtime_evidence_report.v1",
+  "created_utc": "2026-03-18T20:33:18Z",
+  "evidence_integrity_policy_id": "rugo.evidence_integrity_policy.v1",
+  "runtime_evidence_schema_id": "rugo.runtime_evidence_schema.v1",
+  "gate_provenance_policy_id": "rugo.gate_provenance_policy.v1",
+  "gate": "test-evidence-integrity-v1",
+  "release_image_path": "out/os-go.iso",
+  "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+  "traces": [
+    {
+      "trace_id": "trace-qemu-7ee6f6f8a963",
+      "execution_lane": "qemu",
+      "capture_kind": "serial+structured-log",
+      "trace_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+      "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+      "release_image_path": "out/os-go.iso",
+      "boot_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c"
+    },
+    {
+      "trace_id": "trace-panic-a0502ba044df",
+      "execution_lane": "panic",
+      "capture_kind": "serial+panic-marker",
+      "trace_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-v1.json",
+      "trace_digest": "50afc3a3046deab4bf9b31909eb434d0faba5074ba27d0a202148561ee58921a",
+      "release_image_path": "out/os-go.iso",
+      "boot_id": "panic-a0502ba044df"
+    }
+  ],
+  "evidence_items": [
+    {
+      "artifact_id": "runtime.capture.v1",
+      "execution_lane": "qemu",
+      "runtime_source": {
+        "kind": "booted_runtime_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-qemu-7ee6f6f8a963",
+      "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+      "artifact_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+        "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+        "boot_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c",
+        "trace_id": "trace-qemu-7ee6f6f8a963",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1"
+      }
+    },
+    {
+      "artifact_id": "perf.baseline.v1",
+      "execution_lane": "qemu",
+      "runtime_source": {
+        "kind": "booted_runtime_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-qemu-7ee6f6f8a963",
+      "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+      "artifact_digest": "8595c51a7c78928577e11fe42f3e4bdf600ad55270d41500fcf2f7243fea848d",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+        "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+        "boot_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c",
+        "trace_id": "trace-qemu-7ee6f6f8a963",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\perf-baseline-v1.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "8595c51a7c78928577e11fe42f3e4bdf600ad55270d41500fcf2f7243fea848d"
+      }
+    },
+    {
+      "artifact_id": "perf.regression.v1",
+      "execution_lane": "qemu",
+      "runtime_source": {
+        "kind": "booted_runtime_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-qemu-7ee6f6f8a963",
+      "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+      "artifact_digest": "3034146dc691fb6e5ffcac85cc5b9662b224813c49b428ac62f8bf46e282511d",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+        "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+        "boot_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c",
+        "trace_id": "trace-qemu-7ee6f6f8a963",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\perf-regression-v1.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "3034146dc691fb6e5ffcac85cc5b9662b224813c49b428ac62f8bf46e282511d"
+      }
+    },
+    {
+      "artifact_id": "trace.bundle.v2",
+      "execution_lane": "qemu",
+      "runtime_source": {
+        "kind": "booted_runtime_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-qemu-7ee6f6f8a963",
+      "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+      "artifact_digest": "c2f9ce8ae92b507cf089099f7c6976db6e18c1d99b275ba456b7ddfe891ee9aa",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+        "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+        "boot_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c",
+        "trace_id": "trace-qemu-7ee6f6f8a963",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\trace-bundle-v2.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "c2f9ce8ae92b507cf089099f7c6976db6e18c1d99b275ba456b7ddfe891ee9aa"
+      }
+    },
+    {
+      "artifact_id": "diagnostic.snapshot.v2",
+      "execution_lane": "qemu",
+      "runtime_source": {
+        "kind": "booted_runtime_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-qemu-7ee6f6f8a963",
+      "trace_digest": "2857ec421597060b8da32a9b52b6e6f7a41cb72a0f1197e2a94ccecfef2c8091",
+      "artifact_digest": "d975c58a9824bea7ffe6db0fe035dfe7bf20e002dadc37580bc00d3fa10cd8b3",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --runtime-capture out/booted-runtime-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+        "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+        "boot_id": "7ee6f6f8a9636e0aa5df46d9c56c37c5f91393ef102b3cead71a3ae340950e9c",
+        "trace_id": "trace-qemu-7ee6f6f8a963",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\diagnostic-snapshot-v2.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "d975c58a9824bea7ffe6db0fe035dfe7bf20e002dadc37580bc00d3fa10cd8b3"
+      }
+    },
+    {
+      "artifact_id": "crash.dump.v1",
+      "execution_lane": "panic",
+      "runtime_source": {
+        "kind": "booted_panic_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --crash-dump out/crash-dump-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-panic-a0502ba044df",
+      "trace_digest": "50afc3a3046deab4bf9b31909eb434d0faba5074ba27d0a202148561ee58921a",
+      "artifact_digest": "ff88126fa0da09ab732e8e369204f011dfb2bc23fba9c949afd63441cb955a14",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --crash-dump out/crash-dump-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-v1.json",
+        "runtime_capture_digest": "ff88126fa0da09ab732e8e369204f011dfb2bc23fba9c949afd63441cb955a14",
+        "boot_id": "panic-a0502ba044df",
+        "trace_id": "trace-panic-a0502ba044df",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-v1.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "ff88126fa0da09ab732e8e369204f011dfb2bc23fba9c949afd63441cb955a14"
+      }
+    },
+    {
+      "artifact_id": "crash.dump.symbolized.v1",
+      "execution_lane": "panic",
+      "runtime_source": {
+        "kind": "booted_panic_capture",
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --crash-dump out/crash-dump-v1.json"
+      },
+      "synthetic": false,
+      "trace_id": "trace-panic-a0502ba044df",
+      "trace_digest": "50afc3a3046deab4bf9b31909eb434d0faba5074ba27d0a202148561ee58921a",
+      "artifact_digest": "76381b0eddd45dc78c2372a86b1ca7c06d6f25da67c1381afd98b61a94e33147",
+      "provenance": {
+        "collector": "tools/collect_runtime_evidence_v1.py",
+        "command": "python tools/collect_runtime_evidence_v1.py --crash-dump out/crash-dump-v1.json",
+        "capture_mode": "fixture",
+        "release_image_path": "out/os-go.iso",
+        "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+        "kernel_path": "out/kernel-go.elf",
+        "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+        "build_id": "rugo-default-87c7b9ebc8ad",
+        "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-v1.json",
+        "runtime_capture_digest": "ff88126fa0da09ab732e8e369204f011dfb2bc23fba9c949afd63441cb955a14",
+        "boot_id": "panic-a0502ba044df",
+        "trace_id": "trace-panic-a0502ba044df",
+        "artifact_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-symbolized-v1.json"
+      },
+      "signature": {
+        "algorithm": "sha256",
+        "valid": true,
+        "digest": "76381b0eddd45dc78c2372a86b1ca7c06d6f25da67c1381afd98b61a94e33147"
+      }
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "runtime_item_count",
+      "domain": "execution",
+      "metric_key": "runtime_item_count",
+      "operator": "min",
+      "threshold": 7.0,
+      "observed": 7.0,
+      "pass": true
+    },
+    {
+      "check_id": "runtime_capture_ratio",
+      "domain": "execution",
+      "metric_key": "runtime_capture_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "qemu_trace_presence_ratio",
+      "domain": "execution",
+      "metric_key": "qemu_trace_presence_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "panic_trace_presence_ratio",
+      "domain": "execution",
+      "metric_key": "panic_trace_presence_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "trace_linkage_ratio",
+      "domain": "execution",
+      "metric_key": "trace_linkage_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "default_image_binding_ratio",
+      "domain": "provenance",
+      "metric_key": "default_image_binding_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "boot_instance_binding_ratio",
+      "domain": "provenance",
+      "metric_key": "boot_instance_binding_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "provenance_fields_ratio",
+      "domain": "provenance",
+      "metric_key": "provenance_fields_ratio",
+      "operator": "min",
+      "threshold": 1.0,
+      "observed": 1.0,
+      "pass": true
+    },
+    {
+      "check_id": "unsigned_artifact_count",
+      "domain": "provenance",
+      "metric_key": "unsigned_artifact_count",
+      "operator": "max",
+      "threshold": 0.0,
+      "observed": 0.0,
+      "pass": true
+    },
+    {
+      "check_id": "synthetic_evidence_ratio",
+      "domain": "synthetic",
+      "metric_key": "synthetic_evidence_ratio",
+      "operator": "max",
+      "threshold": 0.0,
+      "observed": 0.0,
+      "pass": true
+    },
+    {
+      "check_id": "synthetic_only_artifacts",
+      "domain": "synthetic",
+      "metric_key": "synthetic_only_artifacts",
+      "operator": "max",
+      "threshold": 0.0,
+      "observed": 0.0,
+      "pass": true
+    },
+    {
+      "check_id": "detached_trace_count",
+      "domain": "synthetic",
+      "metric_key": "detached_trace_count",
+      "operator": "max",
+      "threshold": 0.0,
+      "observed": 0.0,
+      "pass": true
+    }
+  ],
+  "summary": {
+    "execution": {
+      "checks": 5,
+      "failures": 0,
+      "pass": true
+    },
+    "provenance": {
+      "checks": 4,
+      "failures": 0,
+      "pass": true
+    },
+    "synthetic": {
+      "checks": 3,
+      "failures": 0,
+      "pass": true
+    }
+  },
+  "totals": {
+    "evidence_items": 7,
+    "runtime_items": 7,
+    "synthetic_items": 0,
+    "linked_trace_items": 7,
+    "detached_trace_count": 0
+  },
+  "artifact_refs": {
+    "runtime_capture": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\booted-runtime-v1.json",
+    "perf_baseline": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\perf-baseline-v1.json",
+    "perf_regression": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\perf-regression-v1.json",
+    "trace_bundle": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\trace-bundle-v2.json",
+    "diagnostic_snapshot": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\diagnostic-snapshot-v2.json",
+    "crash_dump": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-v1.json",
+    "crash_dump_symbolized": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_evidence_integrity_gate_v21\\crash-dump-symbolized-v1.json",
+    "runtime_evidence_report": "out/runtime-evidence-v1.json",
+    "gate_evidence_audit_report": "out/gate-evidence-audit-v1.json",
+    "junit": "out/pytest-evidence-integrity-v1.xml",
+    "synthetic_ban_junit": "out/pytest-synthetic-evidence-ban-v1.xml",
+    "ci_artifact": "evidence-integrity-v1-artifacts",
+    "synthetic_ban_ci_artifact": "synthetic-evidence-ban-v1-artifacts"
+  },
+  "injected_failures": [],
+  "total_failures": 0,
+  "failures": [],
+  "digest": "48a6aa8b1ed44a0c611131f990e50b23bbe148ec0d279ba50c7508a3758de718",
+  "max_failures": 0,
+  "gate_pass": true
+}

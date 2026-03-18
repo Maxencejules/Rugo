@@ -1,0 +1,50 @@
+{
+  "schema": "rugo.crash_dump_symbolized.v1",
+  "created_utc": "2026-03-18T20:33:17Z",
+  "source_schema": "rugo.crash_dump.v1",
+  "contract_id": "rugo.crash_dump_contract.v1",
+  "symbol_map_id": "rugo.kernel_symbol_map.v1",
+  "triage_playbook_id": "rugo.postmortem_triage_playbook.v1",
+  "panic_code": 57005,
+  "panic_reason": "kernel_panic",
+  "dump_id": "dump-2a66512f4735",
+  "source_digest": "ff88126fa0da09ab732e8e369204f011dfb2bc23fba9c949afd63441cb955a14",
+  "runtime_provenance": {
+    "capture_mode": "fixture",
+    "release_image_path": "out/os-go.iso",
+    "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+    "panic_image_path": "out/os-panic.iso",
+    "panic_image_digest": "062dc96651ced30ad047970c10b962d8c308de9af08831310770f5f5a2650e88",
+    "panic_boot_id": "panic-a0502ba044df",
+    "panic_trace_id": "trace-panic-a0502ba044df",
+    "panic_trace_digest": "50afc3a3046deab4bf9b31909eb434d0faba5074ba27d0a202148561ee58921a",
+    "serial_digest": "a0502ba044df7d19b72b026975a8ae46723ec21ffbfb92e184123f78eeb4c795",
+    "serial_excerpt": [
+      "RUGO: boot ok",
+      "RUGO: panic code=0xDEAD"
+    ]
+  },
+  "frames": [
+    {
+      "ip": "0xffffffff80001000",
+      "symbol": "kernel::panic_entry",
+      "offset": 0
+    },
+    {
+      "ip": "0xffffffff80002000",
+      "symbol": "kernel::scheduler::tick",
+      "offset": 24
+    },
+    {
+      "ip": "0xffffffff80003000",
+      "symbol": "kernel::syscall::dispatch",
+      "offset": 56
+    }
+  ],
+  "resolved_frames": 3,
+  "unresolved_frames": 0,
+  "digest": "76381b0eddd45dc78c2372a86b1ca7c06d6f25da67c1381afd98b61a94e33147",
+  "max_unresolved": 0,
+  "all_frames_symbolized": true,
+  "gate_pass": true
+}

@@ -1,0 +1,111 @@
+{
+  "schema": "rugo.perf_baseline.v1",
+  "created_utc": "2026-03-18T20:33:17Z",
+  "budget_id": "rugo.performance_budget.v1",
+  "benchmark_policy_id": "rugo.benchmark_policy.v1",
+  "runtime_capture_schema": "rugo.booted_runtime_capture.v1",
+  "runtime_capture_path": "C:\\Users\\USER\\Desktop\\hybrid-go-os\\repo_tmp_pytest_root_full\\test_perf_regression_v1_detect2\\booted-runtime-v1.json",
+  "runtime_capture_digest": "6c213083e1823e1cd0760e1f67f6726668f26d984de24921fbce480d22f66eb1",
+  "release_image_path": "out/os-go.iso",
+  "release_image_digest": "87c7b9ebc8ade8cf1cb78dd8137db5c4433c121a76a1e9d90797ef688204c886",
+  "kernel_path": "out/kernel-go.elf",
+  "kernel_digest": "2bdc1544c6da4c5ec73527be48b02d9806a92a6b6abed05e67b286da7cd261a2",
+  "build_id": "rugo-default-87c7b9ebc8ad",
+  "execution_lane": "qemu",
+  "trace_id": "trace-qemu-7ee6f6f8a963",
+  "workload_count": 6,
+  "boot_count": 2,
+  "workloads": [
+    {
+      "workload": "cpu_service_cycle",
+      "metrics": {
+        "throughput_ops_per_sec": 39.699,
+        "latency_p95_us": 1687000.0
+      },
+      "budgets": {
+        "max_throughput_regression_pct": 5.0,
+        "max_latency_regression_pct": 7.0
+      },
+      "source_boot_profiles": [
+        "cold_boot",
+        "replay_boot"
+      ]
+    },
+    {
+      "workload": "memory_diag_snapshot",
+      "metrics": {
+        "throughput_ops_per_sec": 1.203,
+        "latency_p95_us": 132000.0
+      },
+      "budgets": {
+        "max_throughput_regression_pct": 5.0,
+        "max_latency_regression_pct": 7.0
+      },
+      "source_boot_profiles": [
+        "cold_boot",
+        "replay_boot"
+      ]
+    },
+    {
+      "workload": "block_recovery_cycle",
+      "metrics": {
+        "throughput_ops_per_sec": 3.008,
+        "latency_p95_us": 965000.0
+      },
+      "budgets": {
+        "max_throughput_regression_pct": 6.0,
+        "max_latency_regression_pct": 8.0
+      },
+      "source_boot_profiles": [
+        "cold_boot",
+        "replay_boot"
+      ]
+    },
+    {
+      "workload": "network_roundtrip_cycle",
+      "metrics": {
+        "throughput_ops_per_sec": 4.812,
+        "latency_p95_us": 118000.0
+      },
+      "budgets": {
+        "max_throughput_regression_pct": 6.0,
+        "max_latency_regression_pct": 8.0
+      },
+      "source_boot_profiles": [
+        "cold_boot",
+        "replay_boot"
+      ]
+    },
+    {
+      "workload": "service_restart_cycle",
+      "metrics": {
+        "throughput_ops_per_sec": 4.211,
+        "latency_p95_us": 91000.0
+      },
+      "budgets": {
+        "max_throughput_regression_pct": 7.0,
+        "max_latency_regression_pct": 10.0
+      },
+      "source_boot_profiles": [
+        "cold_boot",
+        "replay_boot"
+      ]
+    },
+    {
+      "workload": "mixed_runtime_cycle",
+      "metrics": {
+        "throughput_ops_per_sec": 37.594,
+        "latency_p95_us": 35000.0
+      },
+      "budgets": {
+        "max_throughput_regression_pct": 7.0,
+        "max_latency_regression_pct": 10.0
+      },
+      "source_boot_profiles": [
+        "cold_boot",
+        "replay_boot"
+      ]
+    }
+  ],
+  "digest": "8595c51a7c78928577e11fe42f3e4bdf600ad55270d41500fcf2f7243fea848d"
+}
