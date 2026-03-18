@@ -1,6 +1,6 @@
 # Gate Provenance Policy v1
 
-Date: 2026-03-10  
+Date: 2026-03-18  
 Milestone: M40 Runtime-Backed Evidence Integrity v1  
 Status: active release gate
 
@@ -22,6 +22,7 @@ and ban synthetic-only artifact sets.
 - Input evidence schema: `rugo.runtime_evidence_report.v1`.
 - Gate pass requires `total_failures = 0`.
 - Synthetic-only evidence is release-blocking.
+- Runtime lane coverage expects `qemu` and `panic`.
 
 ## Required audit checks
 
@@ -31,13 +32,18 @@ and ban synthetic-only artifact sets.
 - `runtime_schema_id_match`
 - `gate_provenance_policy_match`
 - `runtime_capture_ratio`
+- `qemu_trace_presence_ratio`
+- `panic_trace_presence_ratio`
 - `trace_linkage_ratio`
+- `default_image_binding_ratio`
+- `boot_instance_binding_ratio`
 - `provenance_fields_ratio`
 - `synthetic_evidence_ratio`
 - `synthetic_only_artifacts`
 - `detached_trace_count`
 - `unsigned_artifact_count`
 - `runtime_lane_coverage`
+- `release_image_binding`
 - `release_gate_binding`
 
 ## Gate wiring

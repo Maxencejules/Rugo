@@ -16,9 +16,10 @@ M29 source of truth remains `docs/M21_M34_MATURITY_PARITY_ROADMAP.md`,
 
 - Observability contract v2 and crash/postmortem contracts are explicit and
   versioned.
-- Deterministic trace bundle, diagnostic snapshot, and crash symbolization
-  artifacts are implemented.
-- Observability v2 and crash-dump v1 are wired as required local and CI gates.
+- Boot-backed trace bundle, diagnostic snapshot, crash dump, and crash
+  symbolization artifacts are implemented.
+- Observability v2 and crash-dump v1 are wired as required local and CI gates
+  from the shipped image path.
 
 ## Execution Result
 
@@ -72,16 +73,19 @@ Freeze observability and crash-dump contract semantics.
 
 ### Objective
 
-Generate deterministic observability and crash postmortem artifacts.
+Generate boot-backed observability and crash postmortem artifacts.
 
 ### Scope
 
 - Add tooling:
+  - `tools/collect_booted_runtime_v1.py`
+  - `tools/runtime_capture_common_v1.py`
   - `tools/collect_trace_bundle_v2.py`
   - `tools/collect_diagnostic_snapshot_v2.py`
   - `tools/collect_crash_dump_v1.py`
   - `tools/symbolize_crash_dump_v1.py`
 - Add tests:
+  - `tests/runtime/test_booted_runtime_capture_v1.py`
   - `tests/runtime/test_trace_bundle_v2.py`
   - `tests/runtime/test_diag_snapshot_v2.py`
   - `tests/runtime/test_crash_dump_capture_v1.py`
@@ -89,10 +93,13 @@ Generate deterministic observability and crash postmortem artifacts.
 
 ### Primary files
 
+- `tools/collect_booted_runtime_v1.py`
+- `tools/runtime_capture_common_v1.py`
 - `tools/collect_trace_bundle_v2.py`
 - `tools/collect_diagnostic_snapshot_v2.py`
 - `tools/collect_crash_dump_v1.py`
 - `tools/symbolize_crash_dump_v1.py`
+- `tests/runtime/test_booted_runtime_capture_v1.py`
 - `tests/runtime/test_trace_bundle_v2.py`
 - `tests/runtime/test_diag_snapshot_v2.py`
 - `tests/runtime/test_crash_dump_capture_v1.py`
@@ -100,22 +107,30 @@ Generate deterministic observability and crash postmortem artifacts.
 
 ### Acceptance checks
 
-- `python -m pytest tests/runtime/test_trace_bundle_v2.py tests/runtime/test_diag_snapshot_v2.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py -v`
+- `python tools/collect_booted_runtime_v1.py --image out/os-go.iso --kernel out/kernel-go.elf --panic-image out/os-panic.iso --out out/booted-runtime-v1.json`
+- `python tools/collect_trace_bundle_v2.py --runtime-capture out/booted-runtime-v1.json --window-seconds 300 --out out/trace-bundle-v2.json`
+- `python tools/collect_diagnostic_snapshot_v2.py --runtime-capture out/booted-runtime-v1.json --trace-bundle out/trace-bundle-v2.json --out out/diagnostic-snapshot-v2.json`
+- `python tools/collect_crash_dump_v1.py --release-image out/os-go.iso --kernel out/kernel-go.elf --panic-image out/os-panic.iso --out out/crash-dump-v1.json`
+- `python tools/symbolize_crash_dump_v1.py --dump out/crash-dump-v1.json --out out/crash-dump-symbolized-v1.json`
+- `python -m pytest tests/runtime/test_booted_runtime_capture_v1.py tests/runtime/test_trace_bundle_v2.py tests/runtime/test_diag_snapshot_v2.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py -v`
 
 ### Done criteria for PR-2
 
-- Observability and crash artifacts are machine-readable and deterministic.
+- Observability and crash artifacts are machine-readable and boot-backed.
 - Symbolized postmortem pipeline is reproducible.
 
 ### PR-2 completion summary
 
-- Added deterministic observability tooling:
+- Added boot-backed runtime capture and observability tooling:
+  - `tools/collect_booted_runtime_v1.py`
+  - `tools/runtime_capture_common_v1.py`
   - `tools/collect_trace_bundle_v2.py`
   - `tools/collect_diagnostic_snapshot_v2.py`
-- Upgraded deterministic crash postmortem tooling:
+- Upgraded boot-backed crash postmortem tooling:
   - `tools/collect_crash_dump_v1.py`
   - `tools/symbolize_crash_dump_v1.py`
 - Added executable PR-2 artifact checks:
+  - `tests/runtime/test_booted_runtime_capture_v1.py`
   - `tests/runtime/test_trace_bundle_v2.py`
   - `tests/runtime/test_diag_snapshot_v2.py`
   - `tests/runtime/test_crash_dump_capture_v1.py`
@@ -156,7 +171,8 @@ Make observability and crash-dump checks release-blocking.
 ### Done criteria for PR-3
 
 - Observability and crash-dump gates are required in local and CI lanes.
-- M29 can be marked done with trace/diagnostic/postmortem evidence.
+- M29 can be marked done with trace/diagnostic/postmortem evidence tied to the
+  shipped default image and panic lane.
 
 ### PR-3 completion summary
 
@@ -166,6 +182,7 @@ Make observability and crash-dump checks release-blocking.
 - Added local gates:
   - `make test-observability-v2`
   - `make test-crash-dump-v1`
+  - runtime capture artifact: `out/booted-runtime-v1.json`
   - JUnit outputs:
     - `out/pytest-observability-v2.xml`
     - `out/pytest-crash-dump-v1.xml`

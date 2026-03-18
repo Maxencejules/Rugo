@@ -42,7 +42,7 @@ def test_crash_dump_gate_v1_wiring_and_artifacts(tmp_path: Path):
 
     assert "test-crash-dump-v1" in makefile
     for entry in [
-        "tools/collect_crash_dump_v1.py --out $(OUT)/crash-dump-v1.json",
+        "tools/collect_crash_dump_v1.py --release-image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/crash-dump-v1.json",
         "tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json",
         "tests/runtime/test_crash_dump_docs_v1.py",
         "tests/runtime/test_crash_dump_capture_v1.py",
@@ -65,7 +65,7 @@ def test_crash_dump_gate_v1_wiring_and_artifacts(tmp_path: Path):
 
     dump = tmp_path / "crash-dump-v1.json"
     sym = tmp_path / "crash-dump-symbolized-v1.json"
-    assert collector.main(["--out", str(dump)]) == 0
+    assert collector.main(["--fixture", "--out", str(dump)]) == 0
     assert symbolizer.main(["--dump", str(dump), "--out", str(sym)]) == 0
     data = json.loads(sym.read_text(encoding="utf-8"))
     assert data["schema"] == "rugo.crash_dump_symbolized.v1"

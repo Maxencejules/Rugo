@@ -10,6 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / "tools"))
 
+import collect_booted_runtime_v1 as capture_tool  # noqa: E402
 import collect_trace_bundle_v2 as trace_tool  # noqa: E402
 
 
@@ -20,17 +21,20 @@ def _strip_timestamp(payload: dict) -> dict:
 
 
 def test_trace_bundle_v2_is_seed_deterministic():
-    first = trace_tool.collect_trace_bundle(seed=20260309, window_seconds=300)
-    second = trace_tool.collect_trace_bundle(seed=20260309, window_seconds=300)
+    capture = capture_tool.runtime_capture.build_fixture_capture()
+    first = trace_tool.collect_trace_bundle(capture, window_seconds=300)
+    second = trace_tool.collect_trace_bundle(capture, window_seconds=300)
     assert _strip_timestamp(first) == _strip_timestamp(second)
 
 
 def test_trace_bundle_v2_schema_and_gate_pass(tmp_path: Path):
+    capture_out = tmp_path / "booted-runtime-v1.json"
     out = tmp_path / "trace-bundle-v2.json"
+    assert capture_tool.main(["--fixture", "--out", str(capture_out)]) == 0
     rc = trace_tool.main(
         [
-            "--seed",
-            "20260309",
+            "--runtime-capture",
+            str(capture_out),
             "--window-seconds",
             "300",
             "--out",
@@ -41,20 +45,23 @@ def test_trace_bundle_v2_schema_and_gate_pass(tmp_path: Path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["schema"] == "rugo.trace_bundle.v2"
     assert data["contract_id"] == "rugo.observability_contract.v2"
-    assert data["totals"]["total_services"] >= 4
+    assert data["release_image_path"] == "out/os-go.iso"
+    assert data["totals"]["total_components"] >= 6
     assert data["totals"]["total_errors"] == 0
     assert data["totals"]["total_dropped_spans"] == 0
     assert data["gate_pass"] is True
 
 
 def test_trace_bundle_v2_detects_injected_error(tmp_path: Path):
+    capture_out = tmp_path / "booted-runtime-v1.json"
     out = tmp_path / "trace-bundle-v2.json"
+    assert capture_tool.main(["--fixture", "--out", str(capture_out)]) == 0
     rc = trace_tool.main(
         [
-            "--seed",
-            "20260309",
+            "--runtime-capture",
+            str(capture_out),
             "--inject-error",
-            "svcman",
+            "network",
             "--max-errors",
             "0",
             "--out",

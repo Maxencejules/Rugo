@@ -124,12 +124,12 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M21** ABI + API Stability Program v3 | n/a | done | Rugo: ABI/API stability docs + source-of-truth compatibility enforcement tests, `make test-abi-stability-v3`, CI `ABI stability v3 gate`, docs in `docs/abi/syscall_v3.md`, `docs/runtime/*`, and `docs/M21_EXECUTION_BACKLOG.md`. |
 | **M22** Kernel Reliability + Soak v1 | n/a | done | Rugo: reliability model docs + deterministic soak/fault artifacts, `make test-kernel-reliability-v1`, CI `Kernel reliability v1 gate`, docs in `docs/runtime/kernel_reliability_model_v1.md`, and `docs/M22_EXECUTION_BACKLOG.md`. |
 | **M23** Hardware Enablement Matrix v3 | n/a | done | Rugo: matrix v3 docs + deterministic diagnostics and firmware attestation artifacts, `make test-hw-matrix-v3`, `make test-firmware-attestation-v1`, CI `Hardware matrix v3 gate` + `Firmware attestation v1 gate`, docs in `docs/hw/*_v3`, `docs/security/measured_boot_attestation_v1.md`, and `docs/M23_EXECUTION_BACKLOG.md`. |
-| **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs + deterministic baseline/regression artifacts, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
+| **M24** Performance Baseline + Regression Budgets v1 | n/a | done | Rugo: performance budget/policy docs plus boot-backed runtime capture, baseline, and regression artifacts from `out/os-go.iso`, `make test-perf-regression-v1`, CI `Performance regression v1 gate`, docs in `docs/runtime/performance_budget_v1.md`, `docs/runtime/benchmark_policy_v1.md`, and `docs/M24_EXECUTION_BACKLOG.md`. |
 | **M25** Userspace Service Model + Init v2 | n/a | done | Rugo: service/init v2 contract docs + deterministic lifecycle/dependency/restart checks, `make test-userspace-model-v2`, CI `Userspace model v2 gate`, docs in `docs/runtime/service_model_v2.md`, `docs/runtime/init_contract_v2.md`, and `docs/M25_EXECUTION_BACKLOG.md`. |
 | **M26** Package/Repo Ecosystem v3 | n/a | done | Rugo: package/repo v3 contracts + deterministic policy/rebuild/update-trust artifacts, `make test-pkg-ecosystem-v3`, `make test-update-trust-v1`, CI `Package ecosystem v3 gate` + `Update trust v1 gate`, docs in `docs/pkg/*_v3`, `docs/pkg/update_trust_model_v1.md`, and `docs/M26_EXECUTION_BACKLOG.md`. |
 | **M27** External App Compatibility Program v3 | n/a | done | Rugo: compatibility profile/tier contracts + deterministic class matrix artifacts, `make test-app-compat-v3`, CI `App compatibility v3 gate`, docs in `docs/abi/compat_profile_v3.md`, `docs/abi/app_compat_tiers_v1.md`, and `docs/M27_EXECUTION_BACKLOG.md`. |
 | **M28** Security Hardening Program v3 | n/a | done | Rugo: hardening profile/threat model contracts + deterministic attack/fuzz and vulnerability-response artifacts, `make test-security-hardening-v3`, `make test-vuln-response-v1`, CI `Security hardening v3 gate` + `Vulnerability response v1 gate`, docs in `docs/security/hardening_profile_v3.md`, `docs/security/threat_model_v2.md`, and `docs/M28_EXECUTION_BACKLOG.md`. |
-| **M29** Observability + Diagnostics v2 | n/a | done | Rugo: observability/crash contracts + deterministic trace/diagnostic/crash artifacts, `make test-observability-v2`, `make test-crash-dump-v1`, CI `Observability v2 gate` + `Crash dump v1 gate`, docs in `docs/runtime/observability_contract_v2.md`, `docs/runtime/crash_dump_contract_v1.md`, and `docs/M29_EXECUTION_BACKLOG.md`. |
+| **M29** Observability + Diagnostics v2 | n/a | done | Rugo: observability/crash contracts plus boot-backed trace, diagnostic, and crash artifacts from the default image and panic lane, `make test-observability-v2`, `make test-crash-dump-v1`, CI `Observability v2 gate` + `Crash dump v1 gate`, docs in `docs/runtime/observability_contract_v2.md`, `docs/runtime/crash_dump_contract_v1.md`, and `docs/M29_EXECUTION_BACKLOG.md`. |
 | **M30** Installer/Upgrade/Recovery UX v3 | n/a | done | Rugo: installer/recovery v3 contracts + deterministic upgrade/recovery rollback-safety artifacts, `make test-ops-ux-v3`, CI `Ops UX v3 gate`, docs in `docs/build/installer_ux_v3.md`, `docs/build/recovery_workflow_v3.md`, and `docs/M30_EXECUTION_BACKLOG.md`. |
 | **M31** Release Engineering + Support Lifecycle v2 | n/a | done | Rugo: release/support/revalidation policy contracts + deterministic branch/support/supply-chain audits, `make test-release-lifecycle-v2`, `make test-supply-chain-revalidation-v1`, CI `Release lifecycle v2 gate` + `Supply-chain revalidation v1 gate`, docs in `docs/build/release_policy_v2.md`, `docs/build/support_lifecycle_policy_v1.md`, and `docs/M31_EXECUTION_BACKLOG.md`. |
 | **M32** Conformance + Profile Qualification v1 | n/a | done | Rugo: profile conformance contract + deterministic profile qualification suite artifacts, `make test-conformance-v1`, CI `Conformance v1 gate`, docs in `docs/runtime/profile_conformance_v1.md`, and `docs/M32_EXECUTION_BACKLOG.md`. |
@@ -140,7 +140,7 @@ make docker-legacy       # Legacy only (requires gccgo in Docker image)
 | **M37** Hardware Breadth + Driver Matrix v4 | n/a | done | Rugo: matrix v4/driver-lifecycle/promotion contracts + deterministic hardware/promotion artifacts, `make test-hw-matrix-v4`, `make test-hw-baremetal-promotion-v1`, CI `Hardware matrix v4 gate` + `Hardware bare-metal promotion v1 gate`, docs in `docs/hw/support_matrix_v4.md`, `docs/hw/driver_lifecycle_contract_v4.md`, and `docs/M37_EXECUTION_BACKLOG.md`. |
 | **M38** Storage + Platform Feature Expansion v1 | n/a | done | Rugo: storage/platform feature contracts + deterministic snapshot/resize/fs-ops and platform-conformance artifacts, `make test-storage-platform-v1`, `make test-storage-feature-contract-v1`, CI `Storage platform v1 gate` + `Storage feature contract v1 gate`, docs in `docs/storage/fs_feature_contract_v1.md`, `docs/runtime/platform_feature_profile_v1.md`, and `docs/M38_EXECUTION_BACKLOG.md`. |
 | **M39** Ecosystem Scale + Distribution Workflow v1 | n/a | done | Rugo: ecosystem-scale/distribution contracts + deterministic catalog-scale/install/audit artifacts, `make test-ecosystem-scale-v1`, `make test-app-catalog-health-v1`, CI `Ecosystem scale v1 gate` + `App catalog health v1 gate`, docs in `docs/pkg/ecosystem_scale_policy_v1.md`, `docs/pkg/distribution_workflow_v1.md`, and `docs/M39_EXECUTION_BACKLOG.md`. |
-| **M40** Runtime-Backed Evidence Integrity v1 | n/a | done | Rugo: evidence-integrity/provenance contracts + deterministic runtime-evidence/audit artifacts, `make test-evidence-integrity-v1`, `make test-synthetic-evidence-ban-v1`, CI `Evidence integrity v1 gate` + `Synthetic evidence ban v1 gate`, docs in `docs/runtime/evidence_integrity_policy_v1.md`, `docs/runtime/gate_provenance_policy_v1.md`, and `docs/M40_EXECUTION_BACKLOG.md`. |
+| **M40** Runtime-Backed Evidence Integrity v1 | n/a | done | Rugo: evidence-integrity/provenance contracts plus boot-backed runtime-evidence and audit artifacts linked to the shipped image and panic lane, `make test-evidence-integrity-v1`, `make test-synthetic-evidence-ban-v1`, CI `Evidence integrity v1 gate` + `Synthetic evidence ban v1 gate`, docs in `docs/runtime/evidence_integrity_policy_v1.md`, `docs/runtime/gate_provenance_policy_v1.md`, and `docs/M40_EXECUTION_BACKLOG.md`. |
 | **M41** Process + Readiness Compatibility Closure v1 | n/a | done | Rugo: compatibility/process/readiness contracts + deterministic compatibility/POSIX artifacts, `make test-process-readiness-parity-v1`, `make test-posix-gap-closure-v2`, CI `Process readiness parity v1 gate` + `POSIX gap closure v2 gate`, docs in `docs/abi/compat_profile_v5.md`, `docs/runtime/syscall_coverage_matrix_v4.md`, and `docs/M41_EXECUTION_BACKLOG.md`. |
 | **M42** Isolation + Namespace Baseline v1 | n/a | done | Rugo: isolation/namespace/resource-control contracts + deterministic containment artifacts, `make test-isolation-baseline-v1`, `make test-namespace-cgroup-v1`, CI `Isolation baseline v1 gate` + `Namespace cgroup v1 gate`, docs in `docs/abi/namespace_cgroup_contract_v1.md`, `docs/runtime/resource_control_policy_v1.md`, and `docs/M42_EXECUTION_BACKLOG.md`. |
 | **M43** Hardware/Firmware Breadth + SMP v1 | n/a | done | Rugo: matrix-v5/driver-lifecycle-v5/firmware-hardening-v3 + SMP interrupt model contracts with deterministic hardware/firmware/SMP artifacts, `make test-hw-firmware-smp-v1`, `make test-native-driver-matrix-v1`, CI `Hardware firmware smp v1 gate` + `Native driver matrix v1 gate`, docs in `docs/hw/support_matrix_v5.md`, `docs/hw/driver_lifecycle_contract_v5.md`, `docs/hw/acpi_uefi_hardening_v3.md`, `docs/runtime/smp_interrupt_model_v1.md`, and `docs/M43_EXECUTION_BACKLOG.md`. |
@@ -545,19 +545,23 @@ M23 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Hardware matrix v3 gate`, `Firmware attestation v1 gate`
 - M23 is done.
 
-M24 execution update (2026-03-09):
+M24 execution update (2026-03-18):
 - PR-1 complete (budget and benchmark policy contracts):
   - `docs/runtime/performance_budget_v1.md`
   - `docs/runtime/benchmark_policy_v1.md`
   - `tests/runtime/test_perf_budget_docs_v1.py`
-- PR-2 complete (deterministic baseline + regression tooling):
+- PR-2 complete (boot-backed runtime capture + baseline/regression tooling):
+  - `tools/collect_booted_runtime_v1.py`
+  - `tools/runtime_capture_common_v1.py`
   - `tools/run_perf_baseline_v1.py`
   - `tools/check_perf_regression_v1.py`
+  - `tests/runtime/test_booted_runtime_capture_v1.py`
   - `tests/runtime/test_perf_regression_v1.py`
 - PR-3 complete (performance regression v1 gate + closure wiring):
   - `tests/runtime/test_perf_gate_v1.py`
   - `Makefile` target `test-perf-regression-v1`
   - `.github/workflows/ci.yml` step `Performance regression v1 gate`
+  - boot-backed artifact: `out/booted-runtime-v1.json`
 - M24 is done.
 
 M25 execution update (2026-03-09):
@@ -643,18 +647,21 @@ M28 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Security hardening v3 gate`, `Vulnerability response v1 gate`
 - M28 is done.
 
-M29 execution update (2026-03-09):
+M29 execution update (2026-03-18):
 - PR-1 complete (observability + crash/postmortem contracts):
   - `docs/runtime/observability_contract_v2.md`
   - `docs/runtime/crash_dump_contract_v1.md`
   - `docs/runtime/postmortem_triage_playbook_v1.md`
   - `tests/runtime/test_observability_docs_v2.py`
   - `tests/runtime/test_crash_dump_docs_v1.py`
-- PR-2 complete (deterministic trace/diagnostic + crash tooling):
+- PR-2 complete (boot-backed trace/diagnostic + crash tooling):
+  - `tools/collect_booted_runtime_v1.py`
+  - `tools/runtime_capture_common_v1.py`
   - `tools/collect_trace_bundle_v2.py`
   - `tools/collect_diagnostic_snapshot_v2.py`
   - `tools/collect_crash_dump_v1.py`
   - `tools/symbolize_crash_dump_v1.py`
+  - `tests/runtime/test_booted_runtime_capture_v1.py`
   - `tests/runtime/test_trace_bundle_v2.py`
   - `tests/runtime/test_diag_snapshot_v2.py`
   - `tests/runtime/test_crash_dump_capture_v1.py`
@@ -664,6 +671,7 @@ M29 execution update (2026-03-09):
   - `tests/runtime/test_crash_dump_gate_v1.py`
   - `Makefile` targets `test-observability-v2`, `test-crash-dump-v1`
   - `.github/workflows/ci.yml` steps `Observability v2 gate`, `Crash dump v1 gate`
+  - boot-backed artifact: `out/booted-runtime-v1.json`
 - M29 is done.
 
 M30 execution update (2026-03-09):
@@ -867,15 +875,18 @@ M39 execution update (2026-03-09):
   - `.github/workflows/ci.yml` steps `Ecosystem scale v1 gate`, `App catalog health v1 gate`
 - M39 is done.
 
-M40 execution update (2026-03-10):
+M40 execution update (2026-03-18):
 - PR-1 complete (evidence-integrity contract freeze):
   - `docs/runtime/evidence_integrity_policy_v1.md`
   - `docs/runtime/runtime_evidence_schema_v1.md`
   - `docs/runtime/gate_provenance_policy_v1.md`
   - `tests/runtime/test_evidence_integrity_docs_v1.py`
-- PR-2 complete (deterministic runtime evidence tooling + checks):
+- PR-2 complete (boot-backed runtime evidence tooling + checks):
+  - `tools/collect_booted_runtime_v1.py`
+  - `tools/runtime_capture_common_v1.py`
   - `tools/collect_runtime_evidence_v1.py`
   - `tools/audit_gate_evidence_v1.py`
+  - `tests/runtime/test_booted_runtime_capture_v1.py`
   - `tests/runtime/test_runtime_evidence_collection_v1.py`
   - `tests/runtime/test_gate_evidence_audit_v1.py`
   - `tests/runtime/test_evidence_trace_linkage_v1.py`
@@ -884,6 +895,7 @@ M40 execution update (2026-03-10):
   - `tests/runtime/test_synthetic_evidence_ban_v1.py`
   - `Makefile` targets `test-evidence-integrity-v1`, `test-synthetic-evidence-ban-v1`
   - `.github/workflows/ci.yml` steps `Evidence integrity v1 gate`, `Synthetic evidence ban v1 gate`
+  - boot-backed artifact: `out/booted-runtime-v1.json`
 - M40 is done.
 
 M41 execution update (2026-03-10):

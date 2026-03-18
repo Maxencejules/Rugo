@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Dict, List
+
+import runtime_capture_common_v1 as runtime_capture
 
 
 SCHEMA = "rugo.crash_dump_symbolized.v1"
@@ -27,6 +29,8 @@ def symbolize(dump: Dict[str, object]) -> Dict[str, object]:
     unresolved = 0
 
     for frame in dump.get("stack_frames", []):
+        if not isinstance(frame, dict):
+            continue
         ip = str(frame.get("ip"))
         symbol = SYMBOLS.get(ip, "unknown")
         if symbol == "unknown":
@@ -41,6 +45,14 @@ def symbolize(dump: Dict[str, object]) -> Dict[str, object]:
             }
         )
 
+    stable_payload = {
+        "schema": SCHEMA,
+        "dump_id": dump.get("dump_id", ""),
+        "source_digest": dump.get("digest", ""),
+        "frames": frames,
+    }
+    digest = runtime_capture.stable_digest(stable_payload)
+
     return {
         "schema": SCHEMA,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -51,9 +63,12 @@ def symbolize(dump: Dict[str, object]) -> Dict[str, object]:
         "panic_code": dump.get("panic_code", -1),
         "panic_reason": dump.get("panic_reason", ""),
         "dump_id": dump.get("dump_id", ""),
+        "source_digest": dump.get("digest", ""),
+        "runtime_provenance": dump.get("runtime_provenance", {}),
         "frames": frames,
         "resolved_frames": resolved,
         "unresolved_frames": unresolved,
+        "digest": digest,
     }
 
 
@@ -78,6 +93,8 @@ def _default_dump() -> Dict[str, object]:
             {"ip": "0xffffffff80002000", "offset": 24},
             {"ip": "0xffffffff80003000", "offset": 56},
         ],
+        "runtime_provenance": {},
+        "digest": runtime_capture.stable_digest({"default_dump": True}),
     }
 
 
@@ -93,8 +110,7 @@ def main(argv: List[str] | None = None) -> int:
     report["gate_pass"] = report["unresolved_frames"] <= args.max_unresolved
 
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    runtime_capture.write_json(out_path, report)
     print(f"crash-dump-symbolized: {out_path}")
     print(f"frames: {len(report['frames'])}")
     print(f"unresolved_frames: {report['unresolved_frames']}")

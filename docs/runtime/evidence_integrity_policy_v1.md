@@ -1,13 +1,13 @@
 # Evidence Integrity Policy v1
 
-Date: 2026-03-10  
+Date: 2026-03-18  
 Milestone: M40 Runtime-Backed Evidence Integrity v1  
 Status: active release gate
 
 ## Purpose
 
-Define deterministic runtime-evidence requirements for release-bound artifacts
-and make synthetic-only evidence release-blocking.
+Define runtime-evidence requirements for release-bound artifacts and make
+synthetic-only evidence release-blocking.
 
 ## Contract identifiers
 
@@ -19,8 +19,13 @@ and make synthetic-only evidence release-blocking.
 
 ## Required runtime provenance thresholds
 
+- Runtime item count: `>= 7.0`.
 - Runtime capture ratio: `>= 1.0`.
+- QEMU trace presence ratio: `>= 1.0`.
+- Panic trace presence ratio: `>= 1.0`.
 - Trace linkage ratio: `>= 1.0`.
+- Default image binding ratio: `>= 1.0`.
+- Boot instance binding ratio: `>= 1.0`.
 - Provenance fields ratio: `>= 1.0`.
 - Synthetic evidence ratio: `<= 0.0`.
 - Synthetic-only artifact flag: `0`.
@@ -30,12 +35,14 @@ and make synthetic-only evidence release-blocking.
 ## Required execution lanes
 
 - `qemu`
-- `baremetal`
+- `panic`
 
-Both lanes must emit runtime-captured traces linked to release evidence.
+Both lanes must emit runtime-captured traces linked to release evidence from
+the default shipped image flow.
 
 ## Tooling and gate wiring
 
+- Booted runtime capture tool: `tools/collect_booted_runtime_v1.py`.
 - Runtime evidence collector: `tools/collect_runtime_evidence_v1.py`.
 - Gate evidence audit tool: `tools/audit_gate_evidence_v1.py`.
 - Local gate: `make test-evidence-integrity-v1`.
@@ -45,6 +52,7 @@ Both lanes must emit runtime-captured traces linked to release evidence.
 
 ## Required executable checks
 
+- `tests/runtime/test_booted_runtime_capture_v1.py`
 - `tests/runtime/test_evidence_integrity_docs_v1.py`
 - `tests/runtime/test_runtime_evidence_collection_v1.py`
 - `tests/runtime/test_gate_evidence_audit_v1.py`

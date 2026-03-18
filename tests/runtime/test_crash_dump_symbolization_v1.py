@@ -21,7 +21,11 @@ def _strip_timestamp(payload: dict) -> dict:
 
 
 def test_crash_dump_symbolization_is_deterministic_except_timestamp():
-    dump = collector.build_dump(panic_code=13)
+    dump = collector.build_dump(
+        panic_code=13,
+        release_image_digest="digest",
+        panic_trace_digest="trace",
+    )
     first = symbolizer.symbolize(dump)
     second = symbolizer.symbolize(dump)
     assert _strip_timestamp(first) == _strip_timestamp(second)
@@ -30,7 +34,7 @@ def test_crash_dump_symbolization_is_deterministic_except_timestamp():
 def test_crash_dump_symbolization_v1_schema(tmp_path: Path):
     dump = tmp_path / "crash-dump-v1.json"
     sym = tmp_path / "crash-dump-symbolized-v1.json"
-    assert collector.main(["--out", str(dump)]) == 0
+    assert collector.main(["--fixture", "--out", str(dump)]) == 0
     assert symbolizer.main(["--dump", str(dump), "--out", str(sym)]) == 0
     data = json.loads(sym.read_text(encoding="utf-8"))
     assert data["schema"] == "rugo.crash_dump_symbolized.v1"
@@ -38,6 +42,7 @@ def test_crash_dump_symbolization_v1_schema(tmp_path: Path):
     assert data["contract_id"] == "rugo.crash_dump_contract.v1"
     assert data["symbol_map_id"] == "rugo.kernel_symbol_map.v1"
     assert data["triage_playbook_id"] == "rugo.postmortem_triage_playbook.v1"
+    assert data["runtime_provenance"]["release_image_path"] == "out/os-go.iso"
     assert data["resolved_frames"] >= 1
     assert data["unresolved_frames"] == 0
     assert data["all_frames_symbolized"] is True
@@ -49,7 +54,7 @@ def test_crash_dump_symbolization_v1_schema(tmp_path: Path):
 def test_crash_dump_symbolization_detects_unresolved_frame(tmp_path: Path):
     dump = tmp_path / "crash-dump-v1.json"
     sym = tmp_path / "crash-dump-symbolized-v1.json"
-    assert collector.main(["--out", str(dump)]) == 0
+    assert collector.main(["--fixture", "--out", str(dump)]) == 0
 
     dump_data = json.loads(dump.read_text(encoding="utf-8"))
     dump_data["stack_frames"].append({"ip": "0xffffffff8badf00d", "offset": 12})

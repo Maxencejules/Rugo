@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Evaluate M24 performance regressions against a v1 baseline artifact."""
+"""Evaluate M24 performance regressions against a boot-backed v1 baseline."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import random
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import run_perf_baseline_v1 as baseline_tool
+import runtime_capture_common_v1 as runtime_capture
 
-THROUGHPUT_METRIC = "throughput_ops_per_sec"
-LATENCY_METRIC = "latency_p95_us"
+
+THROUGHPUT_METRIC = baseline_tool.THROUGHPUT_METRIC
+LATENCY_METRIC = baseline_tool.LATENCY_METRIC
 SUPPORTED_METRICS = {THROUGHPUT_METRIC, LATENCY_METRIC}
 
 
@@ -54,69 +56,61 @@ def _collect_injections(specs: List[str]) -> Dict[Tuple[str, str], float]:
     return injections
 
 
-def _simulate_current_metrics(
-    rng: random.Random,
-    baseline_metrics: Dict[str, float],
+def _apply_injections(
+    workload: str,
+    metrics: Dict[str, float],
+    injections: Dict[Tuple[str, str], float],
 ) -> Dict[str, float]:
-    throughput = round(
-        baseline_metrics[THROUGHPUT_METRIC] * (1.0 + rng.uniform(-0.03, 0.03)),
-        3,
-    )
-    latency = round(
-        baseline_metrics[LATENCY_METRIC] * (1.0 + rng.uniform(-0.03, 0.03)),
-        3,
-    )
-    return {
-        THROUGHPUT_METRIC: max(0.001, throughput),
-        LATENCY_METRIC: max(0.001, latency),
-    }
+    adjusted = dict(metrics)
+    for metric in SUPPORTED_METRICS:
+        injected_pct = injections.get((workload, metric))
+        if injected_pct is None:
+            continue
+        if metric == THROUGHPUT_METRIC:
+            adjusted[metric] = round(max(0.001, adjusted[metric] * (1.0 - injected_pct / 100.0)), 3)
+        else:
+            adjusted[metric] = round(adjusted[metric] * (1.0 + injected_pct / 100.0), 3)
+    return adjusted
 
 
 def _evaluate_regression(
+    *,
     baseline_payload: Dict[str, object],
-    seed: int,
+    current_baseline: Dict[str, object],
     injections: Dict[Tuple[str, str], float],
 ) -> Dict[str, object]:
-    rng = random.Random(seed)
+    current_metrics_by_workload = {
+        str(entry["workload"]): entry["metrics"]
+        for entry in current_baseline.get("workloads", [])
+        if isinstance(entry, dict)
+    }
     workload_results: List[Dict[str, object]] = []
     violations: List[Dict[str, object]] = []
 
     for workload_entry in baseline_payload["workloads"]:
-        workload = workload_entry["workload"]
+        workload = str(workload_entry["workload"])
         baseline_metrics = workload_entry["metrics"]
         budgets = workload_entry["budgets"]
-        current_metrics = _simulate_current_metrics(rng, baseline_metrics)
-
-        for metric in SUPPORTED_METRICS:
-            injected_pct = injections.get((workload, metric))
-            if injected_pct is None:
-                continue
-            if metric == THROUGHPUT_METRIC:
-                current_metrics[metric] = round(
-                    current_metrics[metric] * (1.0 - injected_pct / 100.0), 3
-                )
-                current_metrics[metric] = max(0.001, current_metrics[metric])
-            else:
-                current_metrics[metric] = round(
-                    current_metrics[metric] * (1.0 + injected_pct / 100.0), 3
-                )
+        current_metrics = current_metrics_by_workload.get(workload, dict(baseline_metrics))
+        current_metrics = _apply_injections(workload, current_metrics, injections)
 
         throughput_reg = round(
             _throughput_regression_pct(
-                baseline_metrics[THROUGHPUT_METRIC], current_metrics[THROUGHPUT_METRIC]
+                float(baseline_metrics[THROUGHPUT_METRIC]),
+                float(current_metrics[THROUGHPUT_METRIC]),
             ),
             3,
         )
         latency_reg = round(
             _latency_regression_pct(
-                baseline_metrics[LATENCY_METRIC], current_metrics[LATENCY_METRIC]
+                float(baseline_metrics[LATENCY_METRIC]),
+                float(current_metrics[LATENCY_METRIC]),
             ),
             3,
         )
 
         throughput_budget = float(budgets["max_throughput_regression_pct"])
         latency_budget = float(budgets["max_latency_regression_pct"])
-
         metric_violations: List[Dict[str, object]] = []
         if throughput_reg > throughput_budget:
             metric_violations.append(
@@ -127,7 +121,7 @@ def _evaluate_regression(
                     "current": current_metrics[THROUGHPUT_METRIC],
                     "regression_pct": throughput_reg,
                     "threshold_pct": throughput_budget,
-                    "action": "inspect throughput regression and rebaseline only with approval",
+                    "action": "inspect boot-backed throughput regression and rebaseline only with approval",
                 }
             )
         if latency_reg > latency_budget:
@@ -139,7 +133,7 @@ def _evaluate_regression(
                     "current": current_metrics[LATENCY_METRIC],
                     "regression_pct": latency_reg,
                     "threshold_pct": latency_budget,
-                    "action": "inspect latency regression and rebaseline only with approval",
+                    "action": "inspect boot-backed latency regression and rebaseline only with approval",
                 }
             )
 
@@ -171,7 +165,7 @@ def _evaluate_regression(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True)
-    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--runtime-capture", required=True)
     parser.add_argument("--max-violations", type=int, default=0)
     parser.add_argument(
         "--inject-regression",
@@ -188,12 +182,17 @@ def main(argv: List[str] | None = None) -> int:
 
     baseline_path = Path(args.baseline)
     baseline_payload = json.loads(baseline_path.read_text(encoding="utf-8"))
-    seed = args.seed if args.seed is not None else int(baseline_payload.get("seed", 20260309))
+    runtime_capture_path = Path(args.runtime_capture)
+    current_capture = runtime_capture.read_json(runtime_capture_path)
+    current_baseline = baseline_tool.run_baseline(
+        current_capture,
+        runtime_capture_path=str(runtime_capture_path),
+    )
     injections = _collect_injections(args.inject_regression)
 
     evaluation = _evaluate_regression(
         baseline_payload=baseline_payload,
-        seed=seed,
+        current_baseline=current_baseline,
         injections=injections,
     )
 
@@ -206,7 +205,11 @@ def main(argv: List[str] | None = None) -> int:
         "budget_id": baseline_payload.get("budget_id", "unknown"),
         "benchmark_policy_id": baseline_payload.get("benchmark_policy_id", "unknown"),
         "baseline_path": str(baseline_path),
-        "seed": seed,
+        "runtime_capture_path": str(runtime_capture_path),
+        "runtime_capture_digest": current_capture.get("digest", ""),
+        "release_image_path": current_capture.get("image_path", ""),
+        "release_image_digest": current_capture.get("image_digest", ""),
+        "trace_id": current_capture.get("trace_id", ""),
         "workload_count": int(baseline_payload.get("workload_count", 0)),
         "workload_results": evaluation["workload_results"],
         "violations": evaluation["violations"],
@@ -215,13 +218,29 @@ def main(argv: List[str] | None = None) -> int:
         "requires_action": total_violations > 0,
         "gate_pass": gate_pass,
     }
+    report["digest"] = runtime_capture.stable_digest(
+        {
+            "schema": report["schema"],
+            "baseline_path": report["baseline_path"],
+            "runtime_capture_digest": report["runtime_capture_digest"],
+            "violations": [
+                {
+                    "workload": violation["workload"],
+                    "metric": violation["metric"],
+                    "regression_pct": violation["regression_pct"],
+                }
+                for violation in report["violations"]
+            ],
+            "gate_pass": gate_pass,
+        }
+    )
 
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    runtime_capture.write_json(out_path, report)
 
     print(f"perf-regression-report: {out_path}")
     print(f"total_violations: {total_violations}")
+    print(f"release_image_path: {report['release_image_path']}")
     return 0 if gate_pass else 1
 
 

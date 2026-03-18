@@ -48,6 +48,21 @@ Visible proof paths:
   Exercises the runtime-facing QEMU lane for stock-Go markers, stress syscall,
   memory pressure, thread spawn, and VM map behavior.
   Proof: `tests/runtime/test_runtime_stress_v1.py`
+- `make test-perf-regression-v1`
+  Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
+  performance regression budgets on the shipped default image.
+  Proof: `tests/runtime/test_booted_runtime_capture_v1.py`,
+  `tests/runtime/test_perf_gate_v1.py`
+- `make test-observability-v2`
+  Captures structured runtime logs, trace bundles, diagnostic snapshots, and
+  panic-linked crash artifacts from the booted default image flow.
+  Proof: `tests/runtime/test_observability_gate_v2.py`,
+  `tests/runtime/test_crash_dump_gate_v1.py`
+- `make test-evidence-integrity-v1`
+  Audits runtime-backed performance, diagnostics, and crash evidence for
+  default-image provenance and boot-instance linkage.
+  Proof: `tests/runtime/test_evidence_integrity_gate_v1.py`,
+  `tests/runtime/test_synthetic_evidence_ban_v1.py`
 - `make test-native-driver-contract-v1`
   Freezes the native-driver lifecycle, DMA, firmware, and diagnostics contract
   for post-M52 hardware expansion.

@@ -690,10 +690,11 @@ test-firmware-attestation-v1:
 	$(PYTHON) tools/collect_measured_boot_report_v1.py --out $(OUT)/measured-boot-v1.json
 	$(PYTHON) -m pytest tests/hw/test_firmware_resiliency_docs_v1.py tests/hw/test_measured_boot_attestation_v1.py tests/hw/test_tpm_eventlog_schema_v1.py tests/hw/test_firmware_attestation_gate_v1.py -v --junitxml=$(OUT)/pytest-firmware-attestation-v1.xml
 
-test-perf-regression-v1:
-	$(PYTHON) tools/run_perf_baseline_v1.py --seed 20260309 --out $(OUT)/perf-baseline-v1.json
-	$(PYTHON) tools/check_perf_regression_v1.py --baseline $(OUT)/perf-baseline-v1.json --seed 20260309 --out $(OUT)/perf-regression-v1.json
-	$(PYTHON) -m pytest tests/runtime/test_perf_budget_docs_v1.py tests/runtime/test_perf_regression_v1.py tests/runtime/test_perf_gate_v1.py -v --junitxml=$(OUT)/pytest-perf-regression-v1.xml
+test-perf-regression-v1: image-demo
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_perf_baseline_v1.py --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/perf-baseline-v1.json
+	$(PYTHON) tools/check_perf_regression_v1.py --baseline $(OUT)/perf-baseline-v1.json --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/perf-regression-v1.json
+	$(PYTHON) -m pytest tests/runtime/test_perf_budget_docs_v1.py tests/runtime/test_booted_runtime_capture_v1.py tests/runtime/test_perf_regression_v1.py tests/runtime/test_perf_gate_v1.py -v --junitxml=$(OUT)/pytest-perf-regression-v1.xml
 
 test-userspace-model-v2: image-go
 	$(PYTHON) -m pytest tests/runtime/test_service_model_docs_v2.py tests/runtime/test_service_lifecycle_v2.py tests/runtime/test_service_boot_runtime_v2.py tests/runtime/test_service_dependency_order_v2.py tests/runtime/test_restart_policy_v2.py tests/runtime/test_service_control_runtime_v1.py tests/runtime/test_userspace_model_gate_v2.py -v --junitxml=$(OUT)/pytest-userspace-model-v2.xml
@@ -734,15 +735,16 @@ test-vuln-response-v1:
 	$(PYTHON) tools/security_embargo_drill_v1.py --out $(OUT)/security-embargo-drill-v1.json
 	$(PYTHON) -m pytest tests/security/test_vuln_response_docs_v1.py tests/security/test_vuln_triage_sla_v1.py tests/security/test_embargo_workflow_v1.py tests/security/test_advisory_schema_v1.py tests/security/test_vuln_response_gate_v1.py -v --junitxml=$(OUT)/pytest-vuln-response-v1.xml
 
-test-observability-v2:
-	$(PYTHON) tools/collect_trace_bundle_v2.py --seed 20260309 --window-seconds 300 --out $(OUT)/trace-bundle-v2.json
-	$(PYTHON) tools/collect_diagnostic_snapshot_v2.py --seed 20260309 --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json
-	$(PYTHON) tools/collect_crash_dump_v1.py --out $(OUT)/crash-dump-v1.json
+test-observability-v2: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/collect_trace_bundle_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --window-seconds 300 --out $(OUT)/trace-bundle-v2.json
+	$(PYTHON) tools/collect_diagnostic_snapshot_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json
+	$(PYTHON) tools/collect_crash_dump_v1.py --release-image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/crash-dump-v1.json
 	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
-	$(PYTHON) -m pytest tests/runtime/test_observability_docs_v2.py tests/runtime/test_trace_bundle_v2.py tests/runtime/test_diag_snapshot_v2.py tests/runtime/test_observability_gate_v2.py tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v --junitxml=$(OUT)/pytest-observability-v2.xml
+	$(PYTHON) -m pytest tests/runtime/test_observability_docs_v2.py tests/runtime/test_booted_runtime_capture_v1.py tests/runtime/test_trace_bundle_v2.py tests/runtime/test_diag_snapshot_v2.py tests/runtime/test_observability_gate_v2.py tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v --junitxml=$(OUT)/pytest-observability-v2.xml
 
-test-crash-dump-v1:
-	$(PYTHON) tools/collect_crash_dump_v1.py --out $(OUT)/crash-dump-v1.json
+test-crash-dump-v1: image-demo image-panic
+	$(PYTHON) tools/collect_crash_dump_v1.py --release-image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/crash-dump-v1.json
 	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
 	$(PYTHON) -m pytest tests/runtime/test_crash_dump_docs_v1.py tests/runtime/test_crash_dump_capture_v1.py tests/runtime/test_crash_dump_symbolization_v1.py tests/runtime/test_crash_dump_gate_v1.py -v --junitxml=$(OUT)/pytest-crash-dump-v1.xml
 
@@ -829,15 +831,29 @@ test-app-catalog-health-v1:
 	$(PYTHON) tools/run_reproducible_catalog_audit_v1.py --out $(OUT)/catalog-audit-v1.json
 	$(PYTHON) -m pytest tests/pkg/test_ecosystem_scale_docs_v1.py tests/pkg/test_pkg_install_success_rate_v1.py tests/pkg/test_catalog_reproducibility_v1.py tests/pkg/test_distribution_workflow_v1.py tests/pkg/test_app_catalog_health_gate_v1.py -v --junitxml=$(OUT)/pytest-app-catalog-health-v1.xml
 
-test-evidence-integrity-v1:
-	$(PYTHON) tools/collect_runtime_evidence_v1.py --out $(OUT)/runtime-evidence-v1.json
+test-evidence-integrity-v1: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_perf_baseline_v1.py --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/perf-baseline-v1.json
+	$(PYTHON) tools/check_perf_regression_v1.py --baseline $(OUT)/perf-baseline-v1.json --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/perf-regression-v1.json
+	$(PYTHON) tools/collect_trace_bundle_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --window-seconds 300 --out $(OUT)/trace-bundle-v2.json
+	$(PYTHON) tools/collect_diagnostic_snapshot_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json
+	$(PYTHON) tools/collect_crash_dump_v1.py --release-image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/crash-dump-v1.json
+	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
+	$(PYTHON) tools/collect_runtime_evidence_v1.py --runtime-capture $(OUT)/booted-runtime-v1.json --trace-bundle $(OUT)/trace-bundle-v2.json --diagnostic-snapshot $(OUT)/diagnostic-snapshot-v2.json --crash-dump $(OUT)/crash-dump-v1.json --crash-symbolized $(OUT)/crash-dump-symbolized-v1.json --perf-baseline $(OUT)/perf-baseline-v1.json --perf-regression $(OUT)/perf-regression-v1.json --out $(OUT)/runtime-evidence-v1.json
 	$(PYTHON) tools/audit_gate_evidence_v1.py --evidence $(OUT)/runtime-evidence-v1.json --out $(OUT)/gate-evidence-audit-v1.json
-	$(PYTHON) -m pytest tests/runtime/test_evidence_integrity_docs_v1.py tests/runtime/test_runtime_evidence_collection_v1.py tests/runtime/test_gate_evidence_audit_v1.py tests/runtime/test_evidence_trace_linkage_v1.py tests/runtime/test_synthetic_evidence_ban_v1.py tests/runtime/test_evidence_integrity_gate_v1.py -v --junitxml=$(OUT)/pytest-evidence-integrity-v1.xml
+	$(PYTHON) -m pytest tests/runtime/test_evidence_integrity_docs_v1.py tests/runtime/test_booted_runtime_capture_v1.py tests/runtime/test_runtime_evidence_collection_v1.py tests/runtime/test_gate_evidence_audit_v1.py tests/runtime/test_evidence_trace_linkage_v1.py tests/runtime/test_synthetic_evidence_ban_v1.py tests/runtime/test_evidence_integrity_gate_v1.py -v --junitxml=$(OUT)/pytest-evidence-integrity-v1.xml
 
-test-synthetic-evidence-ban-v1:
-	$(PYTHON) tools/collect_runtime_evidence_v1.py --out $(OUT)/runtime-evidence-v1.json
+test-synthetic-evidence-ban-v1: image-demo image-panic
+	$(PYTHON) tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json
+	$(PYTHON) tools/run_perf_baseline_v1.py --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/perf-baseline-v1.json
+	$(PYTHON) tools/check_perf_regression_v1.py --baseline $(OUT)/perf-baseline-v1.json --runtime-capture $(OUT)/booted-runtime-v1.json --out $(OUT)/perf-regression-v1.json
+	$(PYTHON) tools/collect_trace_bundle_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --window-seconds 300 --out $(OUT)/trace-bundle-v2.json
+	$(PYTHON) tools/collect_diagnostic_snapshot_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json
+	$(PYTHON) tools/collect_crash_dump_v1.py --release-image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/crash-dump-v1.json
+	$(PYTHON) tools/symbolize_crash_dump_v1.py --dump $(OUT)/crash-dump-v1.json --out $(OUT)/crash-dump-symbolized-v1.json
+	$(PYTHON) tools/collect_runtime_evidence_v1.py --runtime-capture $(OUT)/booted-runtime-v1.json --trace-bundle $(OUT)/trace-bundle-v2.json --diagnostic-snapshot $(OUT)/diagnostic-snapshot-v2.json --crash-dump $(OUT)/crash-dump-v1.json --crash-symbolized $(OUT)/crash-dump-symbolized-v1.json --perf-baseline $(OUT)/perf-baseline-v1.json --perf-regression $(OUT)/perf-regression-v1.json --out $(OUT)/runtime-evidence-v1.json
 	$(PYTHON) tools/audit_gate_evidence_v1.py --evidence $(OUT)/runtime-evidence-v1.json --out $(OUT)/gate-evidence-audit-v1.json
-	$(PYTHON) -m pytest tests/runtime/test_evidence_integrity_docs_v1.py tests/runtime/test_gate_evidence_audit_v1.py tests/runtime/test_synthetic_evidence_ban_v1.py -v --junitxml=$(OUT)/pytest-synthetic-evidence-ban-v1.xml
+	$(PYTHON) -m pytest tests/runtime/test_evidence_integrity_docs_v1.py tests/runtime/test_booted_runtime_capture_v1.py tests/runtime/test_gate_evidence_audit_v1.py tests/runtime/test_synthetic_evidence_ban_v1.py -v --junitxml=$(OUT)/pytest-synthetic-evidence-ban-v1.xml
 
 test-process-readiness-parity-v1:
 	$(PYTHON) tools/run_compat_surface_campaign_v2.py --out $(OUT)/compat-surface-v2.json

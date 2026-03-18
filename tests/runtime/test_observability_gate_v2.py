@@ -10,6 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / "tools"))
 
+import collect_booted_runtime_v1 as capture_tool  # noqa: E402
 import collect_crash_dump_v1 as crash_collector  # noqa: E402
 import collect_diagnostic_snapshot_v2 as diag_tool  # noqa: E402
 import collect_trace_bundle_v2 as trace_tool  # noqa: E402
@@ -26,10 +27,12 @@ def test_observability_gate_v2_wiring_and_artifacts(tmp_path: Path):
         "docs/runtime/observability_contract_v2.md",
         "docs/runtime/crash_dump_contract_v1.md",
         "docs/runtime/postmortem_triage_playbook_v1.md",
+        "tools/collect_booted_runtime_v1.py",
         "tools/collect_trace_bundle_v2.py",
         "tools/collect_diagnostic_snapshot_v2.py",
         "tools/collect_crash_dump_v1.py",
         "tools/symbolize_crash_dump_v1.py",
+        "tests/runtime/test_booted_runtime_capture_v1.py",
         "tests/runtime/test_observability_docs_v2.py",
         "tests/runtime/test_trace_bundle_v2.py",
         "tests/runtime/test_diag_snapshot_v2.py",
@@ -55,8 +58,10 @@ def test_observability_gate_v2_wiring_and_artifacts(tmp_path: Path):
 
     assert "test-observability-v2" in makefile
     for entry in [
-        "tools/collect_trace_bundle_v2.py --seed 20260309 --window-seconds 300 --out $(OUT)/trace-bundle-v2.json",
-        "tools/collect_diagnostic_snapshot_v2.py --seed 20260309 --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json",
+        "tools/collect_booted_runtime_v1.py --image $(OUT)/os-go.iso --kernel $(OUT)/kernel-go.elf --panic-image $(OUT)/os-panic.iso --out $(OUT)/booted-runtime-v1.json",
+        "tools/collect_trace_bundle_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --window-seconds 300 --out $(OUT)/trace-bundle-v2.json",
+        "tools/collect_diagnostic_snapshot_v2.py --runtime-capture $(OUT)/booted-runtime-v1.json --trace-bundle $(OUT)/trace-bundle-v2.json --out $(OUT)/diagnostic-snapshot-v2.json",
+        "tests/runtime/test_booted_runtime_capture_v1.py",
         "tests/runtime/test_observability_docs_v2.py",
         "tests/runtime/test_trace_bundle_v2.py",
         "tests/runtime/test_diag_snapshot_v2.py",
@@ -69,6 +74,7 @@ def test_observability_gate_v2_wiring_and_artifacts(tmp_path: Path):
     assert "make test-observability-v2" in ci
     assert "observability-v2-artifacts" in ci
     assert "out/pytest-observability-v2.xml" in ci
+    assert "out/booted-runtime-v1.json" in ci
     assert "out/trace-bundle-v2.json" in ci
     assert "out/diagnostic-snapshot-v2.json" in ci
 
@@ -78,17 +84,19 @@ def test_observability_gate_v2_wiring_and_artifacts(tmp_path: Path):
     assert "docs/architecture/SOURCE_MAP.md" in readme
     assert "docs/archive/README.md" in readme
 
+    capture_out = tmp_path / "booted-runtime-v1.json"
     trace_out = tmp_path / "trace-bundle-v2.json"
     diag_out = tmp_path / "diagnostic-snapshot-v2.json"
     dump_out = tmp_path / "crash-dump-v1.json"
     sym_out = tmp_path / "crash-dump-symbolized-v1.json"
 
-    assert trace_tool.main(["--seed", "20260309", "--out", str(trace_out)]) == 0
+    assert capture_tool.main(["--fixture", "--out", str(capture_out)]) == 0
+    assert trace_tool.main(["--runtime-capture", str(capture_out), "--out", str(trace_out)]) == 0
     assert (
         diag_tool.main(
             [
-                "--seed",
-                "20260309",
+                "--runtime-capture",
+                str(capture_out),
                 "--trace-bundle",
                 str(trace_out),
                 "--out",
@@ -97,7 +105,7 @@ def test_observability_gate_v2_wiring_and_artifacts(tmp_path: Path):
         )
         == 0
     )
-    assert crash_collector.main(["--out", str(dump_out)]) == 0
+    assert crash_collector.main(["--fixture", "--out", str(dump_out)]) == 0
     assert symbolizer.main(["--dump", str(dump_out), "--out", str(sym_out)]) == 0
 
     trace_data = json.loads(trace_out.read_text(encoding="utf-8"))

@@ -34,7 +34,10 @@ def test_crash_docs_declare_required_contract_tokens():
         "Symbol map ID: `rugo.kernel_symbol_map.v1`",
         "Triage playbook linkage: `rugo.postmortem_triage_playbook.v1`",
         "Register set with `rip`, `rsp`, and `rbp`.",
+        "Runtime provenance with `release_image_path`, `panic_image_path`,",
         "Release identity with `kernel_build_id` and `release_channel`.",
+        "Symbolization must preserve `runtime_provenance`.",
+        "Default panic lane boots `out/os-panic.iso` while preserving linkage to",
         "Local sub-gate: `make test-crash-dump-v1`",
         "Parent gate: `make test-observability-v2`",
     ]:

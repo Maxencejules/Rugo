@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Sequence, Set
 
 import collect_runtime_evidence_v1 as collector
+import runtime_capture_common_v1 as runtime_capture
 
 
 SCHEMA = "rugo.gate_evidence_audit_report.v1"
@@ -85,7 +86,6 @@ def run_audit(
         domain="identity",
         passed=schema_valid,
     )
-
     _append_check(
         checks,
         check_id="evidence_policy_id_match",
@@ -112,7 +112,11 @@ def run_audit(
 
     for check_id in [
         "runtime_capture_ratio",
+        "qemu_trace_presence_ratio",
+        "panic_trace_presence_ratio",
         "trace_linkage_ratio",
+        "default_image_binding_ratio",
+        "boot_instance_binding_ratio",
         "provenance_fields_ratio",
         "synthetic_evidence_ratio",
         "synthetic_only_artifacts",
@@ -122,6 +126,8 @@ def run_audit(
         row = evidence_checks.get(check_id)
         passed = isinstance(row, dict) and row.get("pass") is True
         domain = "synthetic" if check_id.startswith("synthetic") or check_id.startswith("detached") else "provenance"
+        if check_id in {"runtime_capture_ratio", "qemu_trace_presence_ratio", "panic_trace_presence_ratio", "trace_linkage_ratio"}:
+            domain = "execution"
         _append_check(
             checks,
             check_id=check_id,
@@ -138,9 +144,17 @@ def run_audit(
         checks,
         check_id="runtime_lane_coverage",
         domain="provenance",
-        passed={"qemu", "baremetal"}.issubset(lanes),
+        passed={"qemu", "panic"}.issubset(lanes),
     )
 
+    default_image_path = str(evidence.get("release_image_path", ""))
+    _append_check(
+        checks,
+        check_id="release_image_binding",
+        domain="wiring",
+        passed=default_image_path == runtime_capture.DEFAULT_RELEASE_IMAGE_PATH,
+        detail=default_image_path,
+    )
     _append_check(
         checks,
         check_id="release_gate_binding",
@@ -151,6 +165,7 @@ def run_audit(
     total_failures = sum(1 for check in checks if check["pass"] is False)
     summary = {
         "identity": _domain_summary(checks, "identity"),
+        "execution": _domain_summary(checks, "execution"),
         "provenance": _domain_summary(checks, "provenance"),
         "synthetic": _domain_summary(checks, "synthetic"),
         "wiring": _domain_summary(checks, "wiring"),
@@ -201,7 +216,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="path to runtime evidence report; if omitted, generate in-memory evidence",
     )
-    parser.add_argument("--seed", type=int, default=collector.DEFAULT_SEED)
+    parser.add_argument("--runtime-capture", default="")
+    parser.add_argument("--trace-bundle", default="")
+    parser.add_argument("--diagnostic-snapshot", default="")
+    parser.add_argument("--crash-dump", default="")
+    parser.add_argument("--crash-symbolized", default="")
+    parser.add_argument("--perf-baseline", default="")
+    parser.add_argument("--perf-regression", default="")
     parser.add_argument(
         "--inject-failure",
         action="append",
@@ -233,13 +254,38 @@ def main(argv: List[str] | None = None) -> int:
             evidence = _read_json(evidence_path)
             evidence_present = True
     else:
+        required = [
+            args.runtime_capture,
+            args.trace_bundle,
+            args.diagnostic_snapshot,
+            args.crash_dump,
+            args.crash_symbolized,
+            args.perf_baseline,
+            args.perf_regression,
+        ]
+        if any(not value for value in required):
+            print("error: generating evidence in-memory requires all artifact paths")
+            return 2
         try:
             injected_failures = _normalize_failures(args.inject_failure)
         except ValueError as exc:
             print(f"error: {exc}")
             return 2
         evidence = collector.collect_runtime_evidence(
-            seed=args.seed,
+            runtime_capture_payload=runtime_capture.read_json(Path(args.runtime_capture)),
+            runtime_capture_path=args.runtime_capture,
+            trace_bundle_payload=runtime_capture.read_json(Path(args.trace_bundle)),
+            trace_bundle_path=args.trace_bundle,
+            diagnostic_snapshot_payload=runtime_capture.read_json(Path(args.diagnostic_snapshot)),
+            diagnostic_snapshot_path=args.diagnostic_snapshot,
+            crash_dump_payload=runtime_capture.read_json(Path(args.crash_dump)),
+            crash_dump_path=args.crash_dump,
+            crash_symbolized_payload=runtime_capture.read_json(Path(args.crash_symbolized)),
+            crash_symbolized_path=args.crash_symbolized,
+            perf_baseline_payload=runtime_capture.read_json(Path(args.perf_baseline)),
+            perf_baseline_path=args.perf_baseline,
+            perf_regression_payload=runtime_capture.read_json(Path(args.perf_regression)),
+            perf_regression_path=args.perf_regression,
             injected_failures=injected_failures,
         )
         evidence_present = True
@@ -254,8 +300,7 @@ def main(argv: List[str] | None = None) -> int:
     report["gate_pass"] = report["total_failures"] <= args.max_failures
 
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    runtime_capture.write_json(out_path, report)
 
     print(f"gate-evidence-audit-report: {out_path}")
     print(f"total_failures: {report['total_failures']}")

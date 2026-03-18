@@ -20,8 +20,18 @@ def _strip_timestamp(payload: dict) -> dict:
 
 
 def test_crash_dump_build_dump_is_deterministic_except_timestamp():
-    first = collector.build_dump(panic_code=13, panic_reason="kernel_panic")
-    second = collector.build_dump(panic_code=13, panic_reason="kernel_panic")
+    first = collector.build_dump(
+        panic_code=13,
+        panic_reason="kernel_panic",
+        release_image_digest="digest",
+        panic_trace_digest="trace",
+    )
+    second = collector.build_dump(
+        panic_code=13,
+        panic_reason="kernel_panic",
+        release_image_digest="digest",
+        panic_trace_digest="trace",
+    )
     assert _strip_timestamp(first) == _strip_timestamp(second)
 
 
@@ -29,8 +39,9 @@ def test_crash_dump_capture_v1_schema(tmp_path: Path):
     out = tmp_path / "crash-dump-v1.json"
     rc = collector.main(
         [
+            "--fixture",
             "--panic-code",
-            "77",
+            "0x4d",
             "--panic-reason",
             "test_fault",
             "--kernel-build-id",
@@ -49,6 +60,9 @@ def test_crash_dump_capture_v1_schema(tmp_path: Path):
     assert data["panic_reason"] == "test_fault"
     assert data["release_channel"] == "stable"
     assert data["kernel_build_id"] == "rugo-kernel-2026.03.09"
+    assert data["runtime_provenance"]["release_image_path"] == "out/os-go.iso"
+    assert data["runtime_provenance"]["panic_image_path"] == "out/os-panic.iso"
+    assert data["runtime_provenance"]["panic_trace_id"]
     assert data["dump_id"].startswith("dump-")
     assert set(["rip", "rsp", "rbp"]).issubset(set(data["registers"].keys()))
     assert len(data["stack_frames"]) >= 1
