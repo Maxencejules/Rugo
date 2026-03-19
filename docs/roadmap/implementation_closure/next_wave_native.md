@@ -1,46 +1,61 @@
 # Next-Wave Native Driver Backlog Closure
 
-`M53` and `M54` are already marked `done` in the flat milestone ledger, but
-they are best read as contract and gate milestones rather than as literal
-native-driver completion. This document states the higher bar.
+As of `2026-03-19`, `M53` and `M54` are no longer only contract or
+qualification milestones. The repo now has a real native NVMe lane that boots
+in QEMU, binds a PCI device, maps BAR MMIO, routes interrupts, uses DMA-safe
+buffers, emits live diagnostics, and drives the existing block plus C4
+durability surface end to end.
 
-## Completed Backlogs In Scope
+## Runtime-Backed Outcome
 
-| Backlog | Current class | Current repo reading | Literal implementation target | Still required |
+| Backlog | Runtime class now | Implemented lane | Live markers | Live evidence |
 |---|---|---|---|---|
-| `M53 Native Driver Contract Expansion v1` | `Evidence-first` | The repo has native-driver, PCIe DMA, firmware-blob, and diagnostics contracts plus deterministic evidence generators. | The kernel has a real native-driver subsystem with probe, bind, DMA-safe memory, interrupt handling, firmware policy, and live diagnostics. | Add a driver core, PCI device discovery, BAR mapping, interrupt routing, DMA policy enforcement, firmware-loading hooks, and runtime-generated diagnostics emitted by actual drivers. |
-| `M54 Native Storage Drivers v1` | `Evidence-first` | The repo has NVMe and AHCI contracts, support-matrix v7, block-flush docs, and synthetic qualification tests, but no visible NVMe or AHCI runtime path in the kernel. | The kernel discovers NVMe or AHCI controllers, performs identify and queue setup, reads and writes blocks, flushes data, handles reset or timeout paths, and exports that path through the existing block or fsync surface. | Implement actual NVMe or AHCI drivers, integrate them with block I/O syscalls and filesystem durability semantics, add reset and error recovery, and prove them on supported virtual or physical controllers. |
+| `M53 Native Driver Contract Expansion v1` | `Runtime-backed` | `kernel_rs/src/runtime/native.rs` plus shared block-driver dispatch in `kernel_rs/src/lib.rs` now provide native probe or bind, BAR mapping, MSI or MSI-X routing, DMA-safe memory, firmware-policy hooks, and live diagnostics. | `IRQ: vector bound`, `BAR: map ok`, `DRV: bind driver=nvme`, `FW: allow signed driver=nvme` | `tools/run_native_driver_live_v1.py`, `tests/hw/test_native_driver_live_v1.py`, `make test-native-driver-live-v1` |
+| `M54 Native Storage Drivers v1` | `Runtime-backed (NVMe-first)` | The kernel discovers NVMe, performs controller enable, identify, I/O queue setup, block read or write, flush, replay, and `fsync` propagation through the existing block and C4 runtime surface. | `NVME: ready`, `NVME: identify ok`, `NVME: io queue ok`, `BLK: rw ok`, `RECOV: replay ok`, `BLK: fua ok`, `BLK: flush ordered` | `tools/run_native_storage_live_v1.py`, `tests/runtime/test_connected_runtime_c4_native.py`, `tests/hw/test_native_storage_live_v1.py`, `make test-native-storage-live-v1` |
 
-## Architecture That Should Exist Before Calling These Done
+## Implemented Architecture
 
-- A driver subsystem:
-  - stable device registry
-  - probe and bind lifecycle
-  - driver-owned state with teardown paths
-- PCI support beyond the current VirtIO assumptions:
-  - BAR discovery and mapping
-  - MSI, MSI-X, or legacy interrupt routing
-  - DMA-safe buffer allocation and ownership rules
-- Runtime diagnostics:
-  - identify and capability dumps from live drivers
-  - queue and reset counters
-  - surfaced health state for the operator and test lanes
-- Storage integration:
-  - request queue abstraction rather than direct one-off block logic
-  - flush, timeout, error, and recovery semantics
-  - filesystem-visible durability propagation
+- Driver core:
+  - `block_driver_probe`, `block_io_dispatch`, and `block_flush_dispatch` now
+    route storage requests through either legacy VirtIO or native NVMe.
+  - `runtime::native::probe_nvme` performs probe, bind, queue bring-up, and
+    error reporting.
+- PCI or MMIO support:
+  - native PCI probing, BAR discovery, and a kernel-installed uncached MMIO
+    window now back live controller access.
+  - MSI or MSI-X routing is exercised on the native lane with an explicit
+    `x2apic` QEMU CPU profile.
+- DMA or firmware policy:
+  - NVMe queues, identify buffers, and data pages use explicit DMA-safe address
+    translation.
+  - firmware policy is surfaced as a live runtime hook through
+    `FW: allow signed driver=nvme`.
+- Storage durability:
+  - the C4 storage path now runs on NVMe, including journal replay, FUA-backed
+    state commit, flush ordering, and runtime file persistence.
 
-## Recommended Implementation Order
+## Live Evidence Commands
 
-1. Extract the current VirtIO block path from `kernel_rs/src/lib.rs` into a
-   general block-driver abstraction.
-2. Add a real PCI device and MMIO support layer that later drivers can reuse.
-3. Implement one native storage path end to end, preferably NVMe first.
-4. Reuse the same block interface for AHCI only after the queue, timeout, and
-   reset model is stable.
-5. Replace synthetic native-storage evidence with artifacts collected from the
-   live driver on supported controllers.
+1. Build the native images:
+   - `make image-blk-native image-go-native`
+2. Collect live driver evidence:
+   - `python tools/run_native_driver_live_v1.py --out out/native-driver-live-v1.json`
+3. Collect live storage or durability evidence:
+   - `python tools/run_native_storage_live_v1.py --out out/native-storage-live-v1.json`
+4. Run the live tests:
+   - `python -m pytest tests/hw/test_native_driver_live_v1.py tests/hw/test_native_storage_live_v1.py tests/runtime/test_connected_runtime_c4_native.py -v`
 
-Until that exists, `M53` and `M54` should be treated as backlog closure for
-contracts and qualification scaffolding, not as proof that native drivers are
-already implemented.
+## Current Native Profile
+
+- Machine: QEMU `q35`
+- CPU: `qemu64,+x2apic`
+- Storage device: `nvme,drive=disk0,serial=nvme0,logical_block_size=512`
+- Network device for the C4 lane: legacy `virtio-net-pci`
+
+## Remaining Breadth Gap
+
+- `M54` is now literal for the NVMe-first runtime lane, but AHCI is still a
+  remaining breadth task rather than an in-kernel implementation.
+- The new live lane proves native-driver or native-storage substance; the older
+  synthetic contract tools remain useful as contract regressions, not as the
+  only source of truth.

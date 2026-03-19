@@ -44,6 +44,22 @@ M53 source of truth remains:
 - PR-2: complete (2026-03-11)
 - PR-3: complete (2026-03-11)
 
+## Runtime Closure Addendum (2026-03-19)
+
+- `kernel_rs/src/runtime/native.rs` now implements a real native-driver path
+  for the NVMe lane, including probe or bind, PCI capability inspection, BAR
+  MMIO mapping, MSI or MSI-X routing, DMA-safe memory translation, firmware
+  policy hooks, and live diagnostics.
+- `kernel_rs/src/lib.rs` now exposes that path through a shared block-driver
+  core instead of keeping native work isolated to synthetic tooling.
+- Live M53 evidence now exists in:
+  - `tools/run_native_driver_live_v1.py`
+  - `tests/hw/test_native_driver_live_v1.py`
+  - `out/native-driver-live-v1.json`
+  - `make test-native-driver-live-v1`
+- The runtime-backed native-driver lane currently targets QEMU `q35` with
+  `-cpu qemu64,+x2apic`.
+
 ## Historical Rugo implementation summary
 
 ### Historical Rust kernel surface

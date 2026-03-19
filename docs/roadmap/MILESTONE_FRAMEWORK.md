@@ -89,7 +89,7 @@ it can claim. They should not dominate the top-line progress signal.
 | `X2` Hardware, Firmware, and Driver Breadth | done | Support claims now bind to a shared device registry, probe/bind lifecycle, firmware/SMP evidence, and audited target-class qualification across the historical hardware backlog. | `M9`, `M15`, `M23`, `M37`, `M43`, `M45`, `M46`, `M47` |
 | `X3` Platform and Ecosystem Feature Breadth | done | Storage/platform extras, package/repo expansion, and catalog/distribution scale exceed the minimum core-service OS baseline. | `M26`, `M38`, `M39` |
 | `X4` Desktop and Workflow Breadth | done | Display, input, windowing, GUI runtime, shell, installer, and bounded desktop workflows exist as an additional product surface on top of the core OS. | `M35`, `M44`, `M48`, `M49`, `M50`, `M51`, `M52` |
-| `X5` Next-Wave Breadth Research | open | Future work expands native drivers, alternate architectures, advanced storage/network features, desktop usability breadth, SDK/app distribution, and community surface without being mistaken for core-runtime completion. | likely fed by `M53-M77`, `M82-M83` |
+| `X5` Next-Wave Breadth Research | open | Future work expands native drivers, alternate architectures, advanced storage/network features, desktop usability breadth, SDK/app distribution, and community surface without being mistaken for core-runtime completion. A runtime-backed NVMe seed now exists for `M53-M54`; the remaining work is breadth beyond that seed. | likely fed by `M53-M77`, `M82-M83` |
 
 ## Mapping From Old Milestones To New Tracks
 

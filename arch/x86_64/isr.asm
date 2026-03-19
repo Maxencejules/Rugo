@@ -32,6 +32,8 @@ ISR_ERR   14               ; #PF  Page Fault
 
 ; --- IRQ stubs (remapped by PIC to vectors 32+) ---
 ISR_NOERR 32               ; IRQ0  PIT timer
+ISR_NOERR 64               ; Native-driver MSI/MSI-X
+ISR_NOERR 65               ; Local APIC spurious vector
 
 ; --- Software interrupt for syscalls (int 0x80 = vector 128) ---
 ISR_NOERR 128              ; Syscall gate (DPL=3 set in IDT by Rust)

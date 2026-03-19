@@ -309,6 +309,22 @@ fn serial_write_hex(val: u64) {
     serial_write(&buf);
 }
 
+fn serial_write_u64_dec(val: u64) {
+    let mut buf = [0u8; 20];
+    let mut idx = buf.len();
+    let mut value = val;
+    if value == 0 {
+        serial_write(b"0");
+        return;
+    }
+    while value != 0 {
+        idx -= 1;
+        buf[idx] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    serial_write(&buf[idx..]);
+}
+
 // --------------- Limine boot protocol markers (v8 API) ---------------
 
 #[used]
@@ -521,6 +537,10 @@ unsafe fn idt_init() {
         fn isr_stub_13();
         fn isr_stub_14();
         fn isr_stub_32();
+        #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+        fn isr_stub_64();
+        #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+        fn isr_stub_65();
         fn isr_stub_128();
     }
 
@@ -530,6 +550,11 @@ unsafe fn idt_init() {
     idt_set_gate(13, isr_stub_13 as *const () as u64);
     idt_set_gate(14, isr_stub_14 as *const () as u64);
     idt_set_gate(32, isr_stub_32 as *const () as u64);
+    #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+    {
+        idt_set_gate(64, isr_stub_64 as *const () as u64);
+        idt_set_gate(65, isr_stub_65 as *const () as u64);
+    }
 
     let handler = isr_stub_128 as *const () as u64;
     IDT[128] = IdtEntry {
@@ -638,6 +663,12 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
                     loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
                 }
                 schedule();
+            }
+            #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+            64 | 65 => {
+                if runtime::native::handle_irq(int_num) {
+                    return;
+                }
             }
             128 => {
                 syscall_dispatch(frame);
@@ -4164,9 +4195,90 @@ static mut BLK_KV2P_DELTA: u64 = 0; // kphys - kvirt (wrapping)
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "go_test"))]
 const BLK_MAX_QUEUE_SIZE: u16 = 256;
 
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveBlockDriver {
+    None,
+    VirtioLegacy,
+    Nvme,
+}
+
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+static mut ACTIVE_BLOCK_DRIVER: ActiveBlockDriver = ActiveBlockDriver::None;
+
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "go_test"))]
 unsafe fn blk_kv2p(va: u64) -> u64 {
     va.wrapping_add(BLK_KV2P_DELTA)
+}
+
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+unsafe fn block_driver_class() -> &'static [u8] {
+    match ACTIVE_BLOCK_DRIVER {
+        ActiveBlockDriver::Nvme => b"nvme",
+        ActiveBlockDriver::VirtioLegacy => b"virtio-blk-pci",
+        ActiveBlockDriver::None => b"none",
+    }
+}
+
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+unsafe fn emit_native_probe_error(err: runtime::native::ProbeError) {
+    match err {
+        runtime::native::ProbeError::NotFound => serial_write(b"NVME: controller missing\n"),
+        runtime::native::ProbeError::MmioBarMissing => serial_write(b"NVME: bar missing\n"),
+        runtime::native::ProbeError::IrqUnavailable => serial_write(b"NVME: irq unavailable\n"),
+        runtime::native::ProbeError::ControllerTimeout => {
+            serial_write(b"NVME: controller timeout\n")
+        }
+        runtime::native::ProbeError::IoQueueFailed => serial_write(b"NVME: io queue fail\n"),
+        runtime::native::ProbeError::IdentifyFailed => serial_write(b"NVME: identify fail\n"),
+        runtime::native::ProbeError::NamespaceMissing => serial_write(b"NVME: namespace missing\n"),
+    }
+}
+
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+unsafe fn block_driver_probe(prefer_native: bool, require_native: bool, emit_native_negative: bool) -> bool {
+    ACTIVE_BLOCK_DRIVER = ActiveBlockDriver::None;
+
+    if prefer_native || require_native {
+        match runtime::native::probe_nvme(BLK_KV2P_DELTA, HHDM_OFFSET) {
+            Ok(_) => {
+                ACTIVE_BLOCK_DRIVER = ActiveBlockDriver::Nvme;
+                return true;
+            }
+            Err(err) if emit_native_negative => emit_native_probe_error(err),
+            Err(_) => {}
+        }
+        if require_native {
+            return false;
+        }
+    }
+
+    if let Some(iobase) = pci_find_virtio_blk() {
+        if virtio_blk_init(iobase) {
+            ACTIVE_BLOCK_DRIVER = ActiveBlockDriver::VirtioLegacy;
+            serial_write(b"BLK: found virtio-blk\n");
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+unsafe fn block_io_dispatch(write: bool, sector: u64, len: usize, fua: bool) -> bool {
+    match ACTIVE_BLOCK_DRIVER {
+        ActiveBlockDriver::VirtioLegacy => virtio_blk_io(write, sector, len),
+        ActiveBlockDriver::Nvme => runtime::native::nvme_read_write(write, sector, len, fua),
+        ActiveBlockDriver::None => false,
+    }
+}
+
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+unsafe fn block_flush_dispatch() -> bool {
+    match ACTIVE_BLOCK_DRIVER {
+        ActiveBlockDriver::VirtioLegacy => true,
+        ActiveBlockDriver::Nvme => runtime::native::nvme_flush(),
+        ActiveBlockDriver::None => false,
+    }
 }
 
 // --------------- M5: VirtIO block init ---------------------------------------
@@ -4341,7 +4453,7 @@ unsafe fn sys_blk_read(lba: u64, buf: u64, len: u64) -> u64 {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     // Read from disk
-    if !virtio_blk_io(false, lba, n) {
+    if !block_io_dispatch(false, lba, n, false) {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     // Copyout to user buffer
@@ -4364,7 +4476,7 @@ unsafe fn sys_blk_write(lba: u64, buf: u64, len: u64) -> u64 {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     // Write to disk
-    if !virtio_blk_io(true, lba, n) {
+    if !block_io_dispatch(true, lba, n, false) {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     len
@@ -5904,7 +6016,7 @@ unsafe fn r4_storage_runtime_load(file: R4StorageRuntimeFile) {
         0,
         R4_STORAGE_RUNTIME_FILE_CACHE[idx].len(),
     );
-    if !virtio_blk_io(false, r4_storage_runtime_sector(file), 512) {
+    if !block_io_dispatch(false, r4_storage_runtime_sector(file), 512, false) {
         return;
     }
     let magic = u32::from_le_bytes([
@@ -5952,6 +6064,7 @@ unsafe fn r4_storage_runtime_write(file: R4StorageRuntimeFile, data: &[u8]) -> b
         0,
         seq,
         data,
+        matches!(ACTIVE_BLOCK_DRIVER, ActiveBlockDriver::Nvme),
     ) {
         return false;
     }
@@ -5997,6 +6110,7 @@ unsafe fn r4_storage_write_record(
     flags: u32,
     seq: u32,
     data: &[u8],
+    fua: bool,
 ) -> bool {
     if data.len() > R4_STORAGE_MAX_BYTES {
         return false;
@@ -6009,13 +6123,13 @@ unsafe fn r4_storage_write_record(
     if !data.is_empty() {
         BLK_DATA_PAGE.0[16..16 + data.len()].copy_from_slice(data);
     }
-    virtio_blk_io(true, sector, 512)
+    block_io_dispatch(true, sector, 512, fua)
 }
 
 #[cfg(feature = "go_test")]
 unsafe fn r4_storage_load_state_cache() {
     R4_STORAGE_DURABLE_LEN = 0;
-    if !virtio_blk_io(false, R4_STORAGE_STATE_SECTOR, 512) {
+    if !block_io_dispatch(false, R4_STORAGE_STATE_SECTOR, 512, false) {
         return;
     }
     let magic = u32::from_le_bytes([
@@ -6053,7 +6167,14 @@ unsafe fn r4_storage_load_state_cache() {
 unsafe fn r4_storage_clear_journal() -> bool {
     R4_STORAGE_JOURNAL_LEN = 0;
     core::ptr::write_bytes(R4_STORAGE_JOURNAL.as_mut_ptr(), 0, R4_STORAGE_JOURNAL.len());
-    r4_storage_write_record(R4_STORAGE_JOURNAL_SECTOR, R4_STORAGE_JOURNAL_MAGIC, 0, R4_STORAGE_SEQ, &[])
+    r4_storage_write_record(
+        R4_STORAGE_JOURNAL_SECTOR,
+        R4_STORAGE_JOURNAL_MAGIC,
+        0,
+        R4_STORAGE_SEQ,
+        &[],
+        matches!(ACTIVE_BLOCK_DRIVER, ActiveBlockDriver::Nvme),
+    )
 }
 
 #[cfg(feature = "go_test")]
@@ -6067,6 +6188,7 @@ unsafe fn r4_storage_commit_state(data: &[u8]) -> bool {
         0,
         R4_STORAGE_SEQ,
         data,
+        matches!(ACTIVE_BLOCK_DRIVER, ActiveBlockDriver::Nvme),
     ) {
         return false;
     }
@@ -6079,7 +6201,7 @@ unsafe fn r4_storage_commit_state(data: &[u8]) -> bool {
 
 #[cfg(feature = "go_test")]
 unsafe fn r4_storage_boot_recover() {
-    if !virtio_blk_io(false, R4_STORAGE_JOURNAL_SECTOR, 512) {
+    if !block_io_dispatch(false, R4_STORAGE_JOURNAL_SECTOR, 512, false) {
         r4_storage_load_state_cache();
         return;
     }
@@ -6137,6 +6259,7 @@ unsafe fn r4_storage_write_journal(data: &[u8]) -> bool {
         1,
         R4_STORAGE_SEQ,
         data,
+        false,
     )
 }
 
@@ -6152,6 +6275,12 @@ unsafe fn r4_storage_fsync() -> bool {
     if !r4_storage_clear_journal() {
         return false;
     }
+    if matches!(ACTIVE_BLOCK_DRIVER, ActiveBlockDriver::Nvme) {
+        serial_write(b"BLK: fua ok\n");
+    }
+    if !block_flush_dispatch() {
+        return false;
+    }
     serial_write(b"BLK: flush ordered\n");
     true
 }
@@ -6163,17 +6292,18 @@ unsafe fn r4_storage_boot_probe() {
     let kaddr_resp_ptr = core::ptr::read_volatile(core::ptr::addr_of!(KADDR_REQUEST.response));
     let kphys = (*kaddr_resp_ptr).physical_base;
     let kvirt = (*kaddr_resp_ptr).virtual_base;
-    let _hhdm = (*hhdm_resp_ptr).offset;
+    HHDM_OFFSET = (*hhdm_resp_ptr).offset;
     BLK_KV2P_DELTA = kphys.wrapping_sub(kvirt);
 
-        if let Some(iobase) = pci_find_virtio_blk() {
-        if virtio_blk_init(iobase) {
-            R4_STORAGE_READY = true;
-            serial_write(b"STORC4: block ready\n");
-            r4_storage_boot_recover();
-            r4_storage_runtime_load(R4StorageRuntimeFile::PkgState);
-            r4_storage_runtime_load(R4StorageRuntimeFile::Platform);
-        }
+    if block_driver_probe(true, cfg!(feature = "native_go_test"), cfg!(feature = "native_go_test"))
+    {
+        R4_STORAGE_READY = true;
+        serial_write(b"STORC4: block ready driver=");
+        serial_write(block_driver_class());
+        serial_write(b"\n");
+        r4_storage_boot_recover();
+        r4_storage_runtime_load(R4StorageRuntimeFile::PkgState);
+        r4_storage_runtime_load(R4StorageRuntimeFile::Platform);
     }
 }
 
@@ -7481,7 +7611,7 @@ pub extern "C" fn kmain() -> ! {
         enter_ring3_at(USER_CODE_VA, USER_STACK_TOP);
     }
 
-    // M5: blk_test — VirtIO block driver + syscalls
+    // M5: blk_test — block driver + syscalls
     #[cfg(feature = "blk_test")]
     unsafe {
         // Compute kv2p delta from Limine responses
@@ -7492,28 +7622,17 @@ pub extern "C" fn kmain() -> ! {
         let kphys = (*kaddr_resp_ptr).physical_base;
         let kvirt = (*kaddr_resp_ptr).virtual_base;
         BLK_KV2P_DELTA = kphys.wrapping_sub(kvirt);
+        HHDM_OFFSET = (*hhdm_resp_ptr).offset;
 
-        // PCI scan for VirtIO block device
-        match pci_find_virtio_blk() {
-            None => {
-                serial_write(b"BLK: not found\n");
-                qemu_exit(0x31);
-                loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
-            }
-            Some(iobase) => {
-                if !virtio_blk_init(iobase) {
-                    serial_write(b"BLK: init failed\n");
-                    qemu_exit(0x31);
-                    loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
-                }
-                serial_write(b"BLK: found virtio-blk\n");
-            }
+        if !block_driver_probe(true, cfg!(feature = "native_storage_test"), cfg!(feature = "native_storage_test")) {
+            serial_write(b"BLK: not found\n");
+            qemu_exit(0x31);
+            loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
         }
 
         // Set up user mode and run block test blob
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
-        HHDM_OFFSET = (*hhdm_resp_ptr).offset;
         #[cfg(feature = "blk_badptr_test")]
         let user_blob = &BLK_BADPTR_BLOB;
         #[cfg(all(not(feature = "blk_badptr_test"), feature = "blk_badlen_test"))]
@@ -7585,24 +7704,16 @@ pub extern "C" fn kmain() -> ! {
         let kvirt = (*kaddr_resp_ptr).virtual_base;
         BLK_KV2P_DELTA = kphys.wrapping_sub(kvirt);
 
-        match pci_find_virtio_blk() {
-            None => {
-                serial_write(b"BLK: not found\n");
-                qemu_exit(0x31);
-                loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
-            }
-            Some(iobase) => {
-                if !virtio_blk_init(iobase) {
-                    serial_write(b"BLK: init failed\n");
-                    qemu_exit(0x31);
-                    loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
-                }
-            }
+        HHDM_OFFSET = (*hhdm_resp_ptr).offset;
+        if !block_driver_probe(true, false, false) {
+            serial_write(b"BLK: not found\n");
+            qemu_exit(0x31);
+            loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
         }
 
         // --- fsd: mount SimpleFS v0 ---
         // Read superblock from sector 0
-        if !virtio_blk_io(false, 0, 512) {
+        if !block_io_dispatch(false, 0, 512, false) {
             serial_write(b"FSD: read error\n");
             qemu_exit(0x31);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
@@ -7623,7 +7734,7 @@ pub extern "C" fn kmain() -> ! {
         serial_write(b"FSD: mount ok\n");
 
         // --- fsd: read file table from sector 1 ---
-        if !virtio_blk_io(false, 1, 512) {
+        if !block_io_dispatch(false, 1, 512, false) {
             serial_write(b"FSD: ft read error\n");
             qemu_exit(0x31);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
@@ -7663,7 +7774,7 @@ pub extern "C" fn kmain() -> ! {
         }
 
         // --- pkg: read hello.pkg from disk ---
-        if !virtio_blk_io(false, pkg_sector as u64, 512) {
+        if !block_io_dispatch(false, pkg_sector as u64, 512, false) {
             serial_write(b"PKG: read error\n");
             qemu_exit(0x31);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
@@ -7735,11 +7846,10 @@ pub extern "C" fn kmain() -> ! {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
         r4_c4_runtime_init();
-        let go_user_bin = if cfg!(feature = "go_desktop_test") {
-            GO_DESKTOP_BIN
-        } else {
-            GO_USER_BIN
-        };
+        #[cfg(feature = "go_desktop_test")]
+        let go_user_bin = GO_DESKTOP_BIN;
+        #[cfg(not(feature = "go_desktop_test"))]
+        let go_user_bin = GO_USER_BIN;
         setup_go_user_pages(go_user_bin);
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);

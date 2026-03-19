@@ -60,7 +60,7 @@ default Rust-kernel plus Go-service product lane.
 | [core_runtime.md](core_runtime.md) | `M10`, `M12`, `M13`, `M16`, `M18`, `M19`, `M22`, `M25`, `M42` | What is still missing in the actual kernel and default Go runtime? |
 | [tooling_and_release.md](tooling_and_release.md) | `G2`, `M11`, `M14`, `M20`, `M21`, `M24`, `M28`, `M29`, `M30`, `M31`, `M32`, `M33`, `M34`, `M40` | What is still missing before these process and validation milestones are literal rather than merely gated? |
 | [expansion_breadth.md](expansion_breadth.md) | `M8`, `M9`, `M15`, `M17`, `M23`, `M26`, `M27`, `M35-M39`, `M41`, `M43-M52` | What runtime, driver, package, and desktop work would make the breadth claims literal? |
-| [next_wave_native.md](next_wave_native.md) | `M53-M54` | What would real native-driver and native-storage completion require? |
+| [next_wave_native.md](next_wave_native.md) | `M53-M54` | What native-driver and native-storage runtime closure now exists, and what breadth still remains? |
 
 ## Rule For Literal Closure
 

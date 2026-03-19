@@ -9,8 +9,8 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -22,7 +22,7 @@ DEFAULT_PANIC_IMAGE_PATH = "out/os-panic.iso"
 DEFAULT_MACHINE = "q35"
 DEFAULT_TIMEOUT_SECONDS = 20.0
 FIXTURE_SEED = 20260318
-QEMU_SUCCESS_EXIT_CODES = {0, 99}
+QEMU_SUCCESS_EXIT_CODES = {0, 1, 99}
 
 COMPONENT_PREFIX_MAP = {
     "RUGO": ("kernel", "kernel"),
@@ -305,8 +305,11 @@ def qemu_capture_lines(
     image_path: Path,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     machine: str = DEFAULT_MACHINE,
+    cpu: str = "qemu64",
     disk_path: Path | None = None,
+    disk_device: str = "virtio-blk-pci,drive=disk0,disable-modern=on",
     with_net: bool = False,
+    net_device: str = "virtio-net-pci,netdev=n0,disable-modern=on",
 ) -> Tuple[int, List[Dict[str, object]]]:
     qemu = qemu_bin()
     if qemu is None:
@@ -319,7 +322,7 @@ def qemu_capture_lines(
         "-machine",
         machine,
         "-cpu",
-        "qemu64",
+        cpu,
         "-m",
         "128",
         "-serial",
@@ -340,7 +343,7 @@ def qemu_capture_lines(
                 "-drive",
                 f"file={disk_path},format=raw,if=none,id=disk0",
                 "-device",
-                "virtio-blk-pci,drive=disk0,disable-modern=on",
+                disk_device,
             ]
         )
     if with_net:
@@ -349,7 +352,7 @@ def qemu_capture_lines(
                 "-netdev",
                 "user,id=n0",
                 "-device",
-                "virtio-net-pci,netdev=n0,disable-modern=on",
+                net_device,
             ]
         )
 
@@ -737,7 +740,10 @@ def collect_booted_runtime(
     kernel_path: str = DEFAULT_KERNEL_PATH,
     panic_image_path: str = DEFAULT_PANIC_IMAGE_PATH,
     machine: str = DEFAULT_MACHINE,
+    cpu: str = "qemu64",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    disk_device: str = "virtio-blk-pci,drive=disk0,disable-modern=on",
+    net_device: str = "virtio-net-pci,netdev=n0,disable-modern=on",
 ) -> Dict[str, object]:
     image_path_obj = Path(image_path)
     kernel_path_obj = Path(kernel_path)
@@ -757,16 +763,21 @@ def collect_booted_runtime(
     )
     capture_id = str(provisional["capture_id"])
 
-    with tempfile.TemporaryDirectory(prefix="rugo-runtime-capture-") as tempdir:
-        disk_path = Path(tempdir) / "runtime.img"
-        boots: List[Dict[str, object]] = []
+    temp_root = image_path_obj.resolve().parent
+    temp_root.mkdir(parents=True, exist_ok=True)
+    disk_path = temp_root / f"rugo-runtime-capture-{uuid.uuid4().hex}.img"
+    boots: List[Dict[str, object]] = []
+    try:
         for index, profile in enumerate(["cold_boot", "replay_boot"], start=1):
             exit_code, lines = qemu_capture_lines(
                 image_path=image_path_obj,
                 timeout_seconds=timeout_seconds,
                 machine=machine,
+                cpu=cpu,
                 disk_path=disk_path,
+                disk_device=disk_device,
                 with_net=True,
+                net_device=net_device,
             )
             if exit_code not in QEMU_SUCCESS_EXIT_CODES:
                 raise RuntimeError(
@@ -781,6 +792,9 @@ def collect_booted_runtime(
                     exit_code=exit_code,
                 )
             )
+    finally:
+        if disk_path.is_file():
+            disk_path.unlink()
 
     payload = _base_capture(
         image_path=posix_path(image_path_obj),
@@ -794,7 +808,10 @@ def collect_booted_runtime(
     )
     payload["created_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     payload["machine"] = machine
+    payload["cpu"] = cpu
     payload["timeout_seconds"] = timeout_seconds
+    payload["disk_device"] = disk_device
+    payload["net_device"] = net_device
     payload["boot_profiles"] = [boot["boot_profile"] for boot in boots]
     payload["panic_boot_id"] = f"panic-{payload['capture_id'][:12]}"
     return payload

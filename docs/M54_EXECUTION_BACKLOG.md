@@ -42,6 +42,25 @@ M54 source of truth remains:
 - PR-2: complete (2026-03-12)
 - PR-3: complete (2026-03-12)
 
+## Runtime Closure Addendum (2026-03-19)
+
+- The kernel now has a real NVMe storage path, not only contract docs and
+  deterministic generators.
+- `kernel_rs/src/lib.rs` routes block I/O, runtime-file persistence, and C4
+  journal or state or `fsync` traffic through native NVMe when the native lane
+  is selected.
+- `kernel_rs/src/runtime/native.rs` performs controller enable, identify,
+  queue bring-up, block read or write, flush, and live IRQ or DMA diagnostics.
+- Live M54 evidence now exists in:
+  - `tools/run_native_storage_live_v1.py`
+  - `tests/hw/test_native_storage_live_v1.py`
+  - `tests/runtime/test_connected_runtime_c4_native.py`
+  - `out/native-storage-live-v1.json`
+  - `make test-native-storage-live-v1`
+- The runtime-backed native storage lane currently targets QEMU `q35` with
+  `-cpu qemu64,+x2apic` and an `nvme` device. AHCI remains a breadth follow-on,
+  not part of this runtime closure.
+
 ## Historical Rugo implementation summary
 
 ### Historical Rust kernel surface

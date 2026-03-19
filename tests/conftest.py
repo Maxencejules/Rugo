@@ -44,12 +44,14 @@ ISO_QUOTA_ENDPOINTS_PATH = os.path.join(REPO_ROOT, "out", "os-quota-endpoints.is
 ISO_QUOTA_SHM_PATH = os.path.join(REPO_ROOT, "out", "os-quota-shm.iso")
 ISO_QUOTA_THREADS_PATH = os.path.join(REPO_ROOT, "out", "os-quota-threads.iso")
 ISO_BLK_PATH = os.path.join(REPO_ROOT, "out", "os-blk.iso")
+ISO_BLK_NATIVE_PATH = os.path.join(REPO_ROOT, "out", "os-blk-native.iso")
 ISO_STRESS_BLK_PATH = os.path.join(REPO_ROOT, "out", "os-stress-blk.iso")
 ISO_BLK_BADLEN_PATH = os.path.join(REPO_ROOT, "out", "os-blk-badlen.iso")
 ISO_BLK_BADPTR_PATH = os.path.join(REPO_ROOT, "out", "os-blk-badptr.iso")
 ISO_BLK_INVARIANTS_PATH = os.path.join(REPO_ROOT, "out", "os-blk-invariants.iso")
 ISO_BLK_INIT_FAIL_PATH = os.path.join(REPO_ROOT, "out", "os-blk-init-fail.iso")
 BLK_DISK_IMG = os.path.join(REPO_ROOT, "out", "blk-test.img")
+BLK_NATIVE_DISK_IMG = os.path.join(REPO_ROOT, "out", "blk-native-test.img")
 ISO_FS_PATH = os.path.join(REPO_ROOT, "out", "os-fs.iso")
 FS_DISK_IMG = os.path.join(REPO_ROOT, "out", "fs-test.img")
 ISO_FS_BADMAGIC_PATH = os.path.join(REPO_ROOT, "out", "os-fs-badmagic.iso")
@@ -61,6 +63,7 @@ PKG_REPO_V1_PATH = os.path.join(REPO_ROOT, "out", "repo-v1.json")
 PKG_BOOTSTRAP_V1_TOOL = os.path.join(REPO_ROOT, "tools", "pkg_bootstrap_v1.py")
 ISO_NET_PATH = os.path.join(REPO_ROOT, "out", "os-net.iso")
 ISO_GO_PATH = os.path.join(REPO_ROOT, "out", "os-go.iso")
+ISO_GO_NATIVE_PATH = os.path.join(REPO_ROOT, "out", "os-go-native.iso")
 ISO_COMPAT_REAL_PATH = os.path.join(REPO_ROOT, "out", "os-compat-real.iso")
 ISO_GO_STD_PATH = os.path.join(REPO_ROOT, "out", "os-go-std.iso")
 ISO_SEC_RIGHTS_PATH = os.path.join(REPO_ROOT, "out", "os-sec-rights.iso")
@@ -370,6 +373,7 @@ def _boot_iso_with_disk(
     iso_path,
     disk_path,
     machine="q35",
+    cpu="qemu64",
     device="virtio-blk-pci,drive=disk0,disable-modern=on",
 ):
     """Boot an ISO in QEMU with a selectable block-device profile."""
@@ -380,7 +384,7 @@ def _boot_iso_with_disk(
     cmd = [
         QEMU_BIN,
         "-machine", machine,
-        "-cpu", "qemu64",
+        "-cpu", cpu,
         "-m", "128",
         "-serial", "stdio",
         "-display", "none",
@@ -421,6 +425,20 @@ def qemu_serial_blk():
     if not os.path.isfile(ISO_BLK_PATH):
         pytest.skip(f"ISO not built: {ISO_BLK_PATH}")
     return _boot_iso_with_disk(ISO_BLK_PATH, BLK_DISK_IMG)
+
+
+@pytest.fixture
+def qemu_serial_blk_native():
+    """Boot the native NVMe block test image on the live-driver profile."""
+    if not os.path.isfile(ISO_BLK_NATIVE_PATH):
+        pytest.skip(f"ISO not built: {ISO_BLK_NATIVE_PATH}")
+    return _boot_iso_with_disk(
+        ISO_BLK_NATIVE_PATH,
+        BLK_NATIVE_DISK_IMG,
+        machine="q35",
+        cpu="qemu64,+x2apic",
+        device="nvme,drive=disk0,serial=nvme0,logical_block_size=512",
+    )
 
 
 @pytest.fixture
@@ -657,6 +675,7 @@ def _boot_iso_with_disk_and_net(
     iso_path,
     disk_path,
     machine="q35",
+    cpu="qemu64",
     block_device="virtio-blk-pci,drive=disk0,disable-modern=on",
     net_device="virtio-net-pci,netdev=n0,disable-modern=on",
 ):
@@ -672,7 +691,7 @@ def _boot_iso_with_disk_and_net(
     cmd = [
         QEMU_BIN,
         "-machine", machine,
-        "-cpu", "qemu64",
+        "-cpu", cpu,
         "-m", "128",
         "-serial", "stdio",
         "-display", "none",
@@ -758,6 +777,31 @@ def qemu_go_c4_runtime():
 
     def _boot():
         return _boot_iso_with_disk_and_net(ISO_GO_PATH, disk_path)
+
+    try:
+        yield _boot, disk_path
+    finally:
+        if os.path.isfile(disk_path):
+            os.remove(disk_path)
+
+
+@pytest.fixture
+def qemu_go_c4_runtime_native():
+    """Return a boot helper and disk path for the native NVMe C4 runtime lane."""
+    if not os.path.isfile(ISO_GO_NATIVE_PATH):
+        pytest.skip(f"ISO not built: {ISO_GO_NATIVE_PATH}")
+
+    os.makedirs(os.path.join(REPO_ROOT, "out"), exist_ok=True)
+    disk_path = os.path.join(REPO_ROOT, "out", f"go-native-c4-runtime-{uuid.uuid4().hex}.img")
+
+    def _boot():
+        return _boot_iso_with_disk_and_net(
+            ISO_GO_NATIVE_PATH,
+            disk_path,
+            machine="q35",
+            cpu="qemu64,+x2apic",
+            block_device="nvme,drive=disk0,serial=nvme0,logical_block_size=512",
+        )
 
     try:
         yield _boot, disk_path

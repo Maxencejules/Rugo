@@ -40,6 +40,7 @@ endif
        build-quota-shm image-quota-shm \
        build-quota-threads image-quota-threads \
        build-blk image-blk \
+       build-blk-native image-blk-native \
        build-blk-badlen image-blk-badlen \
        build-blk-badptr image-blk-badptr \
        build-blk-invariants image-blk-invariants \
@@ -49,6 +50,7 @@ endif
        build-pkg-hash image-pkg-hash \
        build-net image-net \
        build-go image-go build-go-desktop image-go-desktop \
+       build-go-native image-go-native \
        build-compat-real image-compat-real \
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
@@ -59,7 +61,7 @@ endif
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
-       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-x2-hardware-runtime-v1 test-x3-platform-runtime-v1 test-native-storage-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 test-desktop-profile-runtime-v1 \
+       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-native-driver-live-v1 test-x2-hardware-runtime-v1 test-x3-platform-runtime-v1 test-native-storage-v1 test-native-storage-live-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 test-desktop-profile-runtime-v1 \
        help kernel kernel-only kernel-demo userspace userspace-go userspace-std userspace-desktop image-kernel image-demo image-std image-desktop boot-kernel boot-demo boot-std boot-desktop smoke-kernel smoke-demo smoke-std smoke-desktop gate-all \
        run run-kernel demo demo-go validate test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
@@ -112,6 +114,10 @@ FS_BADMAGIC_IMG = $(OUT)/fs-badmagic.img
 # Rust kernel staticlib
 CARGO_TARGET = x86_64-unknown-none
 KERNEL_LIB   = kernel_rs/target/$(CARGO_TARGET)/release/librugo_kernel.a
+NATIVE_BLK_TARGET_DIR = kernel_rs/target/native-blk
+NATIVE_BLK_KERNEL_LIB = $(NATIVE_BLK_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_kernel.a
+NATIVE_GO_TARGET_DIR = kernel_rs/target/native-go
+NATIVE_GO_KERNEL_LIB = $(NATIVE_GO_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_kernel.a
 
 # --- Targets ------------------------------------------------------------------
 
@@ -362,6 +368,12 @@ build-blk: $(ASM_OBJS) boot/linker.ld
 	cd kernel_rs && $(CARGO) build --release --features blk_test
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-blk.elf $(ASM_OBJS) $(KERNEL_LIB)
 
+# --- M54: Native NVMe block test kernel ---------------------------------------
+
+build-blk-native: $(ASM_OBJS) boot/linker.ld
+	cd kernel_rs && CARGO_TARGET_DIR=target/native-blk $(CARGO) build --release --features native_storage_test
+	$(LD) $(LDFLAGS) -o $(OUT)/kernel-blk-native.elf $(ASM_OBJS) $(NATIVE_BLK_KERNEL_LIB)
+
 # --- M5: VirtIO block bad-length test kernel ----------------------------------
 
 build-blk-badlen: $(ASM_OBJS) boot/linker.ld
@@ -473,6 +485,9 @@ image-svc-bad-endpoint: build-svc-bad-endpoint
 image-blk: build-blk
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-blk.elf ISO_NAME=os-blk.iso bash tools/mkimage.sh
 
+image-blk-native: build-blk-native
+	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-blk-native.elf ISO_NAME=os-blk-native.iso bash tools/mkimage.sh
+
 image-blk-badlen: build-blk-badlen
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-blk-badlen.elf ISO_NAME=os-blk-badlen.iso bash tools/mkimage.sh
 
@@ -544,6 +559,13 @@ build-go: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN)
 
 image-go: build-go
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go.elf ISO_NAME=os-go.iso bash tools/mkimage.sh
+
+build-go-native: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN)
+	cd kernel_rs && CARGO_TARGET_DIR=target/native-go $(CARGO) build --release --features native_go_test
+	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go-native.elf $(ASM_OBJS) $(NATIVE_GO_KERNEL_LIB)
+
+image-go-native: build-go-native
+	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go-native.elf ISO_NAME=os-go-native.iso bash tools/mkimage.sh
 
 build-go-desktop: $(ASM_OBJS) boot/linker.ld $(GO_DESKTOP_BIN)
 	cd kernel_rs && $(CARGO) build --release --features go_desktop_test
@@ -1042,11 +1064,16 @@ test-desktop-workflows-v1:
 test-native-driver-contract-v1:
 	$(PYTHON) tools/run_native_driver_diagnostics_v1.py --out $(OUT)/native-driver-diagnostics-v1.json
 	$(SUBMAKE) test-native-driver-diagnostics-v1
+	$(SUBMAKE) test-native-driver-live-v1
 	$(PYTHON) -m pytest tests/hw/test_native_driver_docs_v1.py tests/hw/test_pcie_dma_contract_v1.py tests/hw/test_firmware_blob_policy_v1.py tests/hw/test_driver_bind_lifecycle_v1.py tests/hw/test_irq_dma_policy_v1.py tests/hw/test_firmware_blob_enforcement_v1.py tests/hw/test_native_driver_diagnostics_v1.py tests/hw/test_native_driver_contract_gate_v1.py -v --junitxml=$(OUT)/pytest-native-driver-contract-v1.xml
 
 test-native-driver-diagnostics-v1:
 	$(PYTHON) tools/run_native_driver_diagnostics_v1.py --out $(OUT)/native-driver-diagnostics-v1.json
 	$(PYTHON) -m pytest tests/hw/test_native_driver_docs_v1.py tests/hw/test_pcie_dma_contract_v1.py tests/hw/test_firmware_blob_policy_v1.py tests/hw/test_driver_bind_lifecycle_v1.py tests/hw/test_irq_dma_policy_v1.py tests/hw/test_firmware_blob_enforcement_v1.py tests/hw/test_native_driver_diagnostics_v1.py tests/hw/test_native_driver_diag_gate_v1.py -v --junitxml=$(OUT)/pytest-native-driver-diagnostics-v1.xml
+
+test-native-driver-live-v1: image-blk-native
+	$(PYTHON) tools/run_native_driver_live_v1.py --out $(OUT)/native-driver-live-v1.json
+	$(PYTHON) -m pytest tests/hw/test_native_driver_live_v1.py -v --junitxml=$(OUT)/pytest-native-driver-live-v1.xml
 
 test-x2-hardware-runtime-v1:
 	$(PYTHON) tools/run_x2_hardware_runtime_v1.py --emit-supporting-reports --out $(OUT)/x2-hardware-runtime-v1.json
@@ -1060,7 +1087,12 @@ test-x3-platform-runtime-v1: image-go image-panic
 test-native-storage-v1:
 	$(PYTHON) tools/run_native_storage_diagnostics_v1.py --out $(OUT)/native-storage-v1.json
 	$(SUBMAKE) test-hw-matrix-v7
+	$(SUBMAKE) test-native-storage-live-v1
 	$(PYTHON) -m pytest tests/hw/test_nvme_ahci_docs_v1.py tests/storage/test_block_flush_contract_v1.py tests/hw/test_nvme_identify_v1.py tests/hw/test_nvme_io_queue_v1.py tests/hw/test_ahci_rw_v1.py tests/storage/test_nvme_fsync_integration_v1.py tests/hw/test_native_storage_negative_v1.py tests/hw/test_native_storage_gate_v1.py -v --junitxml=$(OUT)/pytest-native-storage-v1.xml
+
+test-native-storage-live-v1: image-go-native
+	$(PYTHON) tools/run_native_storage_live_v1.py --out $(OUT)/native-storage-live-v1.json
+	$(PYTHON) -m pytest tests/hw/test_native_storage_live_v1.py tests/runtime/test_connected_runtime_c4_native.py -v --junitxml=$(OUT)/pytest-native-storage-live-v1.xml
 
 test-hw-matrix-v7:
 	$(PYTHON) tools/run_hw_matrix_v7.py --out $(OUT)/hw-matrix-v7.json
