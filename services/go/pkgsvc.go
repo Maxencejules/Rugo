@@ -131,11 +131,11 @@ func pkgServiceMain() {
 
 	serviceEP := sysIpcEndpointCreate()
 	if serviceEP == sysErr {
-		setServiceState(servicePkg, stateFailed)
+		markServiceFailed(servicePkg)
 		fail(msgPkgSvcErr[:])
 	}
 	if sysSvcRegister(&namePkgSvc[0], uintptr(len(namePkgSvc)), serviceEP) == sysErr {
-		setServiceState(servicePkg, stateFailed)
+		markServiceFailed(servicePkg)
 		fail(msgPkgSvcErr[:])
 	}
 
@@ -147,7 +147,7 @@ func pkgServiceMain() {
 		var req [8]byte
 		n := sysIpcRecv(serviceEP, &req[0], uintptr(len(req)))
 		if n == sysErr {
-			setServiceState(servicePkg, stateFailed)
+			markServiceFailed(servicePkg)
 			fail(msgPkgSvcErr[:])
 		}
 		if n == 1 && req[0] == cmdStop {
@@ -155,15 +155,15 @@ func pkgServiceMain() {
 			break
 		}
 		if n != 2 || req[0] != cmdPkg {
-			setServiceState(servicePkg, stateFailed)
+			markServiceFailed(servicePkg)
 			fail(msgPkgSvcErr[:])
 		}
 		if !runPkgFlow() {
-			setServiceState(servicePkg, stateFailed)
+			markServiceFailed(servicePkg)
 			fail(msgPkgSvcErr[:])
 		}
 		if sysIpcSend(uintptr(req[1]), &replyOK[0], uintptr(len(replyOK))) == sysErr {
-			setServiceState(servicePkg, stateFailed)
+			markServiceFailed(servicePkg)
 			fail(msgPkgSvcErr[:])
 		}
 	}

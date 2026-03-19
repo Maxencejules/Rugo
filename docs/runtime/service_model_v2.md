@@ -1,18 +1,18 @@
 # Service Model v2
 
-Date: 2026-03-09  
-Milestone: M25 Userspace Service Model + Init v2  
-Service Model ID: `rugo.service_model.v2`  
-Dependency order schema: `rugo.service_dependency_order.v2`  
-Lifecycle report schema: `rugo.service_lifecycle_report.v2`  
+Date: 2026-03-19
+Milestone: M25 Userspace Service Model + Init v2
+Service Model ID: `rugo.service_model.v2`
+Dependency order schema: `rugo.service_dependency_order.v2`
+Lifecycle report schema: `rugo.service_lifecycle_report.v2`
 Restart report schema: `rugo.restart_policy_report.v2`
 
 ## Purpose
 
-Define deterministic userspace service lifecycle behavior for startup, shutdown,
-failure handling, and restart decisions.
+Define deterministic userspace service lifecycle, readiness, restart, and
+shutdown behavior for the default Rust-kernel plus Go-userspace lane.
 
-The live default Go lane now exercises this model with `timesvc`, `diagsvc`,
+The live default Go lane exercises this model with `timesvc`, `diagsvc`,
 `pkgsvc`, and `shell` on the real `go_test` boot path.
 
 ## Lifecycle states
@@ -23,9 +23,16 @@ Services move through these states only:
 - `blocked` (waiting for dependencies)
 - `starting`
 - `running`
+- `ready`
 - `failed`
 - `stopping`
 - `stopped`
+
+Interpretation:
+
+- `running` means the task is alive inside its init path.
+- `ready` means the service contract is usable by dependents.
+- Dependencies are satisfied only when upstream services are `ready`.
 
 Any transition outside this state machine is a contract violation.
 
@@ -34,16 +41,19 @@ Any transition outside this state machine is a contract violation.
 Deterministic startup rule: topological dependency order, then lexical service
 name.
 
-Deterministic shutdown rule: reverse startup order.
+Deterministic shutdown rule: reverse startup order after session exit.
 
 Dependency cycles are invalid and must fail plan generation before service
 activation begins.
 
 ## Failure propagation rules
 
-- If a dependency is not `running`, dependent services remain `blocked`.
-- Failure of a `critical` dependency blocks `operational` state.
-- Failure of a `best-effort` service does not block `operational` state.
+- If a dependency is not `ready`, dependent services remain `blocked`.
+- Failure of a required dependency blocks `operational` state.
+- Failure of an optional service does not block `operational` state.
+
+The default manifest keeps `timesvc`, `diagsvc`, and `shell` required while
+`pkgsvc` is optional on the default lane.
 
 ## Restart policy contract
 
@@ -66,18 +76,40 @@ until a manual recovery action.
 
 Each declared service may also carry:
 
-- a startup phase (`core` or `services`)
+- a startup phase (`core`, `base`, or `session`)
 - a bounded startup budget before the manager declares the service wedged
 - an optional stop command for controlled shutdown
+- an explicit required or optional boot class
 
 The default Go lane uses those fields to:
 
-- reach `operational` only after the `core` phase is healthy
+- reach `operational` only after the required base services are `ready`
+- hold `shell` until the required base services report `ready`
 - emit deterministic wedge markers instead of waiting forever in `starting`
 - apply per-service scheduler class through `sys_sched_set`
 - request orderly shutdown of remaining services after the shell completes
+- emit `GOSVCM: phase shutdown` before ordered teardown begins
 - expose kernel-backed task snapshots through `diagsvc` and `sys_proc_info`
 - enforce a storage-only isolation profile on the shipped `pkgsvc` path
+
+## Service result reporting
+
+Lifecycle state and service result are tracked separately.
+
+Representative result tokens:
+
+- `online`
+- `runtime-failed`
+- `spawn-failed`
+- `wedge`
+- `restarting`
+- `ordered-stop`
+- `session-done`
+- `shutdown-error`
+- `restart-exhausted`
+
+The manager emits terminal reap markers with `res=` outcome context, and
+diagnostic snapshots now carry both `svc=` lifecycle and `res=` result fields.
 
 ## Enforcement
 
@@ -98,13 +130,11 @@ Runtime-backed default-lane evidence:
 - `tests/runtime/test_service_boot_runtime_v2.py` boots `make image-go` and
   verifies manifest-driven lifecycle markers from the real TinyGo init/service
   path rather than only deterministic models.
-- The live boot path now reaps exited service tasks through `sys_wait` and
-  exercises bounded restart on the default shell service before the successful
-  run reaches `ready`.
-- The same boot path now launches `diagsvc`, services a live diagnostic request
+- The live boot path reaps exited service tasks through `sys_wait`, exercises
+  bounded restart on the default shell service before the successful run reaches
+  `ready`, and emits per-service `res=` outcome markers.
+- The same boot path launches `diagsvc`, services a live diagnostic request
   from `shell`, and performs bounded stop control on the remaining services.
-- The same boot path now launches `pkgsvc`, serves a live package/update flow,
-  and proves its storage-backed isolation profile on the shipped image.
-- The service manager now applies explicit scheduler class to each spawned
-  service, and `diagsvc` snapshots kernel task identity/state/accounting from
-  the live booted system.
+- The same boot path launches `pkgsvc` by default, serves a live package/update
+  flow when present, and treats package-service failure as optional instead of a
+  release-lane boot blocker.

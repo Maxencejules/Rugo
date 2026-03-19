@@ -24,7 +24,7 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "SVC: diagsvc declared",
             "GOSVCM: plan diagsvc role=diag",
             "SVC: pkgsvc declared",
-            "GOSVCM: plan pkgsvc role=pkg",
+            "GOSVCM: plan pkgsvc role=pkg phase=base need=optional",
             "SVC: shell declared",
             "GOSVCM: plan shell role=shell",
             "GOSVCM: phase core",
@@ -77,7 +77,8 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "SVC: shell stopping",
             "SVC: shell stopped",
             "ISOC5: cleanup ok",
-            "GOSVCM: reap shell stopped",
+            "GOSVCM: reap shell stopped res=session-done",
+            "GOSVCM: phase shutdown",
             "GOSVCM: stop pkgsvc",
             "SVC: pkgsvc stopping",
             "GOSVCM: stop diagsvc",
@@ -87,16 +88,17 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "SVC: timesvc stopped",
             "DIAGSVC: stop",
             "SVC: diagsvc stopped",
-            "GOSVCM: reap timesvc",
-            "GOSVCM: reap diagsvc",
-            "GOSVCM: reap pkgsvc",
+            "GOSVCM: reap timesvc stopped res=ordered-stop",
+            "GOSVCM: reap diagsvc stopped res=ordered-stop",
+            "GOSVCM: reap pkgsvc stopped res=ordered-stop",
+            "GOINIT: result shutdown-clean",
             "GOINIT: ready",
             "RUGO: halt ok",
         ],
     )
 
     assert serial.count("GOSVCM: plan ") == 4
-    assert serial.count("GOSVCM: phase ") == 3
+    assert serial.count("GOSVCM: phase ") == 4
     assert serial.count("SVC: shell starting") == 3
     assert serial.count("GOSVCM: class shell best-effort") == 3
     assert serial.count("GOSVCM: class timesvc critical") == 1
@@ -115,8 +117,10 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
     assert serial.count("GOSVCM: stop pkgsvc") == 1
     assert serial.count("GOSVCM: stop diagsvc") == 1
     assert serial.count("GOSVCM: stop timesvc") == 1
+    assert serial.count("GOSVCM: phase shutdown") == 1
     assert serial.count("SVC: diagsvc stopped") == 1
     assert serial.count("SVC: pkgsvc stopped") == 1
+    assert "GOINIT: result shutdown-clean" in serial
 
     for error_marker in (
         "GOINIT: err",

@@ -56,11 +56,11 @@ func timeServiceMain() {
 
 	serviceEP := sysIpcEndpointCreate()
 	if serviceEP == sysErr {
-		setServiceState(serviceTime, stateFailed)
+		markServiceFailed(serviceTime)
 		fail(msgTimeSvcErr[:])
 	}
 	if sysSvcRegister(&nameTimeSvc[0], uintptr(len(nameTimeSvc)), serviceEP) == sysErr {
-		setServiceState(serviceTime, stateFailed)
+		markServiceFailed(serviceTime)
 		fail(msgTimeSvcErr[:])
 	}
 
@@ -72,26 +72,26 @@ func timeServiceMain() {
 		var req [8]byte
 		n := sysIpcRecv(serviceEP, &req[0], uintptr(len(req)))
 		if n == sysErr {
-			setServiceState(serviceTime, stateFailed)
+			markServiceFailed(serviceTime)
 			fail(msgTimeSvcErr[:])
 		}
 		if n == 1 && req[0] == cmdStop {
 			break
 		}
 		if n != 2 || req[0] != cmdTime {
-			setServiceState(serviceTime, stateFailed)
+			markServiceFailed(serviceTime)
 			fail(msgTimeSvcErr[:])
 		}
 		log(msgTimeSvcReq[:])
 
 		if sysTimeNow() == sysErr {
-			setServiceState(serviceTime, stateFailed)
+			markServiceFailed(serviceTime)
 			fail(msgTimeSvcErr[:])
 		}
 		log(msgTimeSvcTime[:])
 
 		if sysIpcSend(uintptr(req[1]), &replyOK[0], uintptr(len(replyOK))) == sysErr {
-			setServiceState(serviceTime, stateFailed)
+			markServiceFailed(serviceTime)
 			fail(msgTimeSvcErr[:])
 		}
 	}
@@ -107,11 +107,11 @@ func diagServiceMain() {
 
 	serviceEP := sysIpcEndpointCreate()
 	if serviceEP == sysErr {
-		setServiceState(serviceDiag, stateFailed)
+		markServiceFailed(serviceDiag)
 		fail(msgDiagSvcErr[:])
 	}
 	if sysSvcRegister(&nameDiagSvc[0], uintptr(len(nameDiagSvc)), serviceEP) == sysErr {
-		setServiceState(serviceDiag, stateFailed)
+		markServiceFailed(serviceDiag)
 		fail(msgDiagSvcErr[:])
 	}
 
@@ -123,7 +123,7 @@ func diagServiceMain() {
 		var req [8]byte
 		n := sysIpcRecv(serviceEP, &req[0], uintptr(len(req)))
 		if n == sysErr {
-			setServiceState(serviceDiag, stateFailed)
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
 		if n == 1 && req[0] == cmdStop {
@@ -131,7 +131,7 @@ func diagServiceMain() {
 			break
 		}
 		if n != 2 || req[0] != cmdDiag {
-			setServiceState(serviceDiag, stateFailed)
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
 
@@ -141,24 +141,24 @@ func diagServiceMain() {
 		logServiceSnapshot(serviceShell)
 		logServiceSnapshot(servicePkg)
 		if !logKernelTaskSnapshot(serviceTime) {
-			setServiceState(serviceDiag, stateFailed)
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
 		if !logKernelTaskSnapshot(serviceDiag) {
-			setServiceState(serviceDiag, stateFailed)
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
 		if !logKernelTaskSnapshot(serviceShell) {
-			setServiceState(serviceDiag, stateFailed)
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
-		if !logKernelTaskSnapshot(servicePkg) {
-			setServiceState(serviceDiag, stateFailed)
+		if serviceTasks[servicePkg] != taskUnset && !logKernelTaskSnapshot(servicePkg) {
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
 
 		if sysIpcSend(uintptr(req[1]), &replyOK[0], uintptr(len(replyOK))) == sysErr {
-			setServiceState(serviceDiag, stateFailed)
+			markServiceFailed(serviceDiag)
 			fail(msgDiagSvcErr[:])
 		}
 	}
@@ -176,91 +176,88 @@ func shellMain() {
 	if shellRecycles < 2 {
 		shellRecycles++
 		log(msgShellRecycle[:])
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		sysThreadExit()
 		fail(msgShellErr[:])
 	}
 
 	timeEP := sysSvcLookup(&nameTimeSvc[0], uintptr(len(nameTimeSvc)))
 	if timeEP == sysErr {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	log(msgShellLookup[:])
 
 	var deny [1]byte
 	if sysIpcRecv(timeEP, &deny[0], uintptr(len(deny))) != sysErr {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	log(msgShellRecvDeny[:])
 
 	if sysSvcRegister(&nameHijack[0], uintptr(len(nameHijack)), timeEP) != sysErr {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	log(msgShellRegDeny[:])
 
 	if sysThreadSpawn(spawnEntry) != sysErr {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	log(msgShellSpawnDeny[:])
 
 	replyEP := sysIpcEndpointCreate()
 	if replyEP == sysErr {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 
 	diagEP := sysSvcLookup(&nameDiagSvc[0], uintptr(len(nameDiagSvc)))
 	if diagEP == sysErr {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 
 	pkgEP := sysSvcLookup(&namePkgSvc[0], uintptr(len(namePkgSvc)))
-	if pkgEP == sysErr {
-		setServiceState(serviceShell, stateFailed)
-		fail(msgShellErr[:])
-	}
 
 	setServiceState(serviceShell, stateReady)
 
 	if !requestTime(timeEP, replyEP) {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	log(msgShellReply[:])
 
 	if !requestDiag(diagEP, replyEP) {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	log(msgShellDiag[:])
 
 	if !runC4Storage() || !runC4Network() {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	if !runC5Isolation(replyEP, diagEP) || !runC5Reliability(replyEP, timeEP) {
-		setServiceState(serviceShell, stateFailed)
+		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
 	if desktopProfileEnabled {
 		if !runDesktopProfile(replyEP, diagEP) {
-			setServiceState(serviceShell, stateFailed)
+			markServiceFailed(serviceShell)
 			fail(msgShellErr[:])
 		}
 	}
-	if pkgRuntimeAvailable() {
+	if pkgEP != sysErr && pkgRuntimeAvailable() {
 		if !requestPkg(pkgEP, replyEP) {
-			setServiceState(serviceShell, stateFailed)
+			markServiceFailed(serviceShell)
 			fail(msgShellErr[:])
 		}
 		log(msgShellPkg[:])
 	}
 
+	setServiceResult(serviceShell, serviceResultSessionDone)
 	setServiceState(serviceShell, stateStopping)
 	shellComplete = 1
 	setServiceState(serviceShell, stateStopped)
@@ -489,7 +486,7 @@ func verifyServiceProfiles(shellEndpointCount uint64) bool {
 	}
 
 	if !loadServiceTaskInfo(servicePkg, &info) {
-		return false
+		return serviceManifest[servicePkg].required == requiredOptional
 	}
 	if info.DomainID != 4 {
 		return false

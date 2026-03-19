@@ -38,7 +38,7 @@ def _simulate_boot(fail_service: str | None = None) -> dict[str, object]:
 
     for name in order:
         deps = SERVICE_MANIFEST[name]["deps"]
-        if any(states[dep] != "running" for dep in deps):
+        if any(states[dep] != "ready" for dep in deps):
             states[name] = "blocked"
             timeline.append(f"blocked:{name}")
             continue
@@ -53,13 +53,15 @@ def _simulate_boot(fail_service: str | None = None) -> dict[str, object]:
 
         states[name] = "running"
         timeline.append(f"running:{name}")
+        states[name] = "ready"
+        timeline.append(f"ready:{name}")
 
     critical = [
         name
         for name, cfg in SERVICE_MANIFEST.items()
         if cfg["class"] == "critical"
     ]
-    operational = all(states[name] == "running" for name in critical)
+    operational = all(states[name] == "ready" for name in critical)
     return {
         "schema": "rugo.service_lifecycle_report.v2",
         "start_order": order,
@@ -70,8 +72,8 @@ def _simulate_boot(fail_service: str | None = None) -> dict[str, object]:
 
 
 def _simulate_shutdown(start_order: list[str], states: dict[str, str]) -> list[str]:
-    running = [name for name in start_order if states[name] == "running"]
-    return list(reversed(running))
+    ready = [name for name in start_order if states[name] == "ready"]
+    return list(reversed(ready))
 
 
 def test_boot_to_operational_is_deterministic():
@@ -84,7 +86,7 @@ def test_boot_to_operational_is_deterministic():
     assert first["operational"] is True
 
 
-def test_shutdown_order_is_reverse_of_running_start_order():
+def test_shutdown_order_is_reverse_of_ready_start_order():
     report = _simulate_boot()
     shutdown_order = _simulate_shutdown(report["start_order"], report["states"])
     assert shutdown_order == ["sshd", "pkgd", "netd", "devmgr", "logger"]
@@ -99,3 +101,15 @@ def test_critical_failure_blocks_operational_state_and_dependents():
     assert states["netd"] == "blocked"
     assert states["pkgd"] == "blocked"
     assert states["sshd"] == "blocked"
+
+
+def test_optional_failure_does_not_block_operational_state():
+    report = _simulate_boot(fail_service="pkgd")
+    states = report["states"]
+
+    assert report["operational"] is True
+    assert states["logger"] == "ready"
+    assert states["devmgr"] == "ready"
+    assert states["netd"] == "ready"
+    assert states["pkgd"] == "failed"
+    assert states["sshd"] == "ready"

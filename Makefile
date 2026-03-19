@@ -661,6 +661,7 @@ smoke-demo: image-demo
 		--expect "TIMESVC: ready" \
 		--expect "GOSH: start" \
 		--expect "SVC: shell ready" \
+		--expect "GOINIT: result shutdown-clean" \
 		--expect "GOINIT: ready" \
 		--expect "RUGO: halt ok"
 

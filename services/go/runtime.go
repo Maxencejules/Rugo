@@ -31,7 +31,10 @@ const (
 	phaseCore = iota
 	phaseServices
 	phaseSession
+	phaseShutdown
 )
+
+const phaseCount = 4
 
 const (
 	stateDeclared = iota
@@ -50,6 +53,26 @@ const taskUnset = 0xFF
 const (
 	requiredOptional = iota
 	requiredBoot
+)
+
+const (
+	initResultBootFailed = iota
+	initResultSessionFailed
+	initResultShutdownFailed
+	initResultShutdownClean
+)
+
+const (
+	serviceResultUnset = iota
+	serviceResultOnline
+	serviceResultRuntimeFailed
+	serviceResultSpawnFailed
+	serviceResultWedge
+	serviceResultRestarting
+	serviceResultOrderedStop
+	serviceResultSessionDone
+	serviceResultShutdownError
+	serviceResultRestartExhausted
 )
 
 type serviceSpec struct {
@@ -76,6 +99,7 @@ var (
 	serviceStates = [serviceCount]byte{stateUnset, stateUnset, stateUnset, stateUnset}
 	serviceTasks  = [serviceCount]byte{taskUnset, taskUnset, taskUnset, taskUnset}
 
+	serviceResults  [serviceCount]byte
 	serviceRestarts [serviceCount]byte
 	serviceStarts   [serviceCount]byte
 	serviceFailures [serviceCount]byte
@@ -130,7 +154,7 @@ var serviceManifest = [...]serviceSpec{
 		class:        classBestEffort,
 		policy:       restartOnFailure,
 		required:     requiredBoot,
-		deps:         (1 << serviceTime) | (1 << serviceDiag) | (1 << servicePkg),
+		deps:         (1 << serviceTime) | (1 << serviceDiag),
 		phase:        phaseSession,
 		startBudget:  12,
 		restartLimit: 2,
@@ -141,7 +165,7 @@ var serviceManifest = [...]serviceSpec{
 		role:         rolePkg[:],
 		class:        classBestEffort,
 		policy:       restartOnFailure,
-		required:     requiredBoot,
+		required:     requiredOptional,
 		deps:         1 << serviceTime,
 		phase:        phaseServices,
 		startBudget:  8,
@@ -157,6 +181,7 @@ var (
 	msgGoInitBootstrap   = [...]byte{'G', 'O', 'I', 'N', 'I', 'T', ':', ' ', 'b', 'o', 'o', 't', 's', 't', 'r', 'a', 'p', '\n'}
 	msgGoInitSpawn       = [...]byte{'G', 'O', 'I', 'N', 'I', 'T', ':', ' ', 's', 'v', 'c', 'm', 'g', 'r', ' ', 'u', 'p', '\n'}
 	msgGoInitOperational = [...]byte{'G', 'O', 'I', 'N', 'I', 'T', ':', ' ', 'o', 'p', 'e', 'r', 'a', 't', 'i', 'o', 'n', 'a', 'l', '\n'}
+	msgGoInitResult      = [...]byte{'G', 'O', 'I', 'N', 'I', 'T', ':', ' ', 'r', 'e', 's', 'u', 'l', 't', ' '}
 	msgGoInitReady       = [...]byte{'G', 'O', 'I', 'N', 'I', 'T', ':', ' ', 'r', 'e', 'a', 'd', 'y', '\n'}
 	msgGoInitErr         = [...]byte{'G', 'O', 'I', 'N', 'I', 'T', ':', ' ', 'e', 'r', 'r', '\n'}
 
@@ -199,6 +224,7 @@ var (
 	msgMetricNeed    = [...]byte{'n', 'e', 'e', 'd', '='}
 	msgMetricDeps    = [...]byte{'d', 'e', 'p', 's', '='}
 	msgMetricPolicy  = [...]byte{'r', 's', 't', '='}
+	msgMetricResult  = [...]byte{'r', 'e', 's', '='}
 	msgSpace         = [...]byte{' '}
 	msgComma         = [...]byte{','}
 	msgSlash         = [...]byte{'/'}
@@ -226,7 +252,22 @@ var (
 	msgPhaseCore        = [...]byte{'c', 'o', 'r', 'e'}
 	msgPhaseServices    = [...]byte{'b', 'a', 's', 'e'}
 	msgPhaseSession     = [...]byte{'s', 'e', 's', 's', 'i', 'o', 'n'}
+	msgPhaseShutdown    = [...]byte{'s', 'h', 'u', 't', 'd', 'o', 'w', 'n'}
 	msgDepsNone         = [...]byte{'n', 'o', 'n', 'e'}
+	msgInitBootFailed   = [...]byte{'b', 'o', 'o', 't', '-', 'f', 'a', 'i', 'l', 'e', 'd'}
+	msgInitSessFailed   = [...]byte{'s', 'e', 's', 's', 'i', 'o', 'n', '-', 'f', 'a', 'i', 'l', 'e', 'd'}
+	msgInitShdnFailed   = [...]byte{'s', 'h', 'u', 't', 'd', 'o', 'w', 'n', '-', 'f', 'a', 'i', 'l', 'e', 'd'}
+	msgInitShdnClean    = [...]byte{'s', 'h', 'u', 't', 'd', 'o', 'w', 'n', '-', 'c', 'l', 'e', 'a', 'n'}
+	msgResultNone       = [...]byte{'n', 'o', 'n', 'e'}
+	msgResultOnline     = [...]byte{'o', 'n', 'l', 'i', 'n', 'e'}
+	msgResultRuntime    = [...]byte{'r', 'u', 'n', 't', 'i', 'm', 'e', '-', 'f', 'a', 'i', 'l', 'e', 'd'}
+	msgResultSpawn      = [...]byte{'s', 'p', 'a', 'w', 'n', '-', 'f', 'a', 'i', 'l', 'e', 'd'}
+	msgResultWedge      = [...]byte{'w', 'e', 'd', 'g', 'e'}
+	msgResultRestarting = [...]byte{'r', 'e', 's', 't', 'a', 'r', 't', 'i', 'n', 'g'}
+	msgResultStop       = [...]byte{'o', 'r', 'd', 'e', 'r', 'e', 'd', '-', 's', 't', 'o', 'p'}
+	msgResultSession    = [...]byte{'s', 'e', 's', 's', 'i', 'o', 'n', '-', 'd', 'o', 'n', 'e'}
+	msgResultShutdown   = [...]byte{'s', 'h', 'u', 't', 'd', 'o', 'w', 'n', '-', 'e', 'r', 'r', 'o', 'r'}
+	msgResultExhausted  = [...]byte{'r', 'e', 's', 't', 'a', 'r', 't', '-', 'e', 'x', 'h', 'a', 'u', 's', 't', 'e', 'd'}
 )
 
 func bootRuntime() {
@@ -245,14 +286,21 @@ func bootRuntime() {
 	}
 
 	log(msgGoInitSpawn[:])
-	serviceManagerMain(order)
+	result := serviceManagerMain(order)
+	logInitResult(result)
+	if result != initResultShutdownClean {
+		fail(msgGoInitErr[:])
+	}
+	log(msgGoInitReady[:])
+	sysThreadExit()
+	fail(msgGoInitErr[:])
 }
 
-func serviceManagerMain(order [serviceCount]byte) {
+func serviceManagerMain(order [serviceCount]byte) byte {
 	log(msgSvcMgrStart[:])
 
 	var idx uintptr
-	var phaseLogged [3]byte
+	var phaseLogged [phaseCount]byte
 	for idx = 0; idx < serviceCount; idx++ {
 		serviceID := uintptr(order[idx])
 		setServiceState(serviceID, stateDeclared)
@@ -261,7 +309,11 @@ func serviceManagerMain(order [serviceCount]byte) {
 
 	var liveChildren uintptr
 	for bootFailed == 0 {
-		liveChildren += launchEligibleServices(order, bootOperational != 0, &phaseLogged)
+		launched, failed := launchEligibleServices(order, bootOperational != 0, &phaseLogged)
+		liveChildren += launched
+		if failed {
+			return managerError(managerFailureResult())
+		}
 
 		if bootOperational == 0 && allBootServicesReady() {
 			bootOperational = 1
@@ -271,8 +323,9 @@ func serviceManagerMain(order [serviceCount]byte) {
 
 		if shellComplete != 0 && shutdownStarted == 0 {
 			shutdownStarted = 1
+			logManagerPhase(phaseShutdown, &phaseLogged)
 			if !beginShutdown(order) {
-				fail(msgSvcMgrErr[:])
+				return managerError(initResultShutdownFailed)
 			}
 		}
 
@@ -282,7 +335,7 @@ func serviceManagerMain(order [serviceCount]byte) {
 
 		serviceID, restart, ok := reapService()
 		if !ok {
-			fail(msgSvcMgrErr[:])
+			return managerError(managerFailureResult())
 		}
 		liveChildren--
 
@@ -290,7 +343,7 @@ func serviceManagerMain(order [serviceCount]byte) {
 			logServiceAction(msgSvcMgrRetry[:], serviceID)
 			if !scheduleRestart(serviceID) {
 				if serviceNeedsSuccess(serviceID) {
-					fail(msgSvcMgrErr[:])
+					return managerError(managerFailureResult())
 				}
 				continue
 			}
@@ -300,28 +353,17 @@ func serviceManagerMain(order [serviceCount]byte) {
 	}
 
 	if bootFailed != 0 {
-		fail(msgSvcMgrErr[:])
+		return managerError(managerFailureResult())
 	}
 
-	if serviceStates[serviceShell] != stateStopped {
-		fail(msgSvcMgrErr[:])
-	}
-	if serviceStates[servicePkg] != stateStopped {
-		fail(msgSvcMgrErr[:])
-	}
-	if serviceStates[serviceTime] != stateStopped {
-		fail(msgSvcMgrErr[:])
-	}
-	if serviceStates[serviceDiag] != stateStopped {
-		fail(msgSvcMgrErr[:])
+	if !serviceManagerCleanExit() {
+		return managerError(managerFailureResult())
 	}
 
-	log(msgGoInitReady[:])
-	sysThreadExit()
-	fail(msgSvcMgrErr[:])
+	return initResultShutdownClean
 }
 
-func launchEligibleServices(order [serviceCount]byte, sessionAllowed bool, phaseLogged *[3]byte) uintptr {
+func launchEligibleServices(order [serviceCount]byte, sessionAllowed bool, phaseLogged *[phaseCount]byte) (uintptr, bool) {
 	var idx uintptr
 	var liveChildren uintptr
 
@@ -346,14 +388,14 @@ func launchEligibleServices(order [serviceCount]byte, sessionAllowed bool, phase
 
 		if !launchService(serviceID) {
 			if serviceNeedsSuccess(serviceID) {
-				fail(msgSvcMgrErr[:])
+				return liveChildren, true
 			}
 			continue
 		}
 		liveChildren++
 	}
 
-	return liveChildren
+	return liveChildren, false
 }
 
 func phaseAllowed(phase byte, sessionAllowed bool) bool {
@@ -480,6 +522,7 @@ func launchService(serviceID uintptr) bool {
 		spawnServiceID = serviceID
 		tid := sysThreadSpawn(spawnEntry)
 		if tid == sysErr {
+			setServiceResult(serviceID, serviceResultSpawnFailed)
 			setServiceState(serviceID, stateFailed)
 			serviceTasks[serviceID] = taskUnset
 		} else {
@@ -496,6 +539,7 @@ func launchService(serviceID uintptr) bool {
 		for serviceStates[serviceID] != stateReady && serviceStates[serviceID] != stateFailed && bootFailed == 0 {
 			if budget == 0 {
 				logServiceAction(msgSvcMgrWedge[:], serviceID)
+				setServiceResult(serviceID, serviceResultWedge)
 				setServiceState(serviceID, stateFailed)
 				break
 			}
@@ -513,6 +557,9 @@ func launchService(serviceID uintptr) bool {
 				return true
 			}
 			if !scheduleRestart(serviceID) {
+				if serviceResultForFailure(serviceResults[serviceID]) == serviceResultRuntimeFailed {
+					setServiceResult(serviceID, serviceResultRestartExhausted)
+				}
 				return false
 			}
 		default:
@@ -593,12 +640,17 @@ func scheduleRestart(serviceID uintptr) bool {
 		return false
 	}
 	if serviceRestarts[serviceID] >= serviceManifest[serviceID].restartLimit {
+		setServiceResult(serviceID, serviceResultRestartExhausted)
 		return false
 	}
 
 	backoff := restartBackoffYields[serviceRestarts[serviceID]]
 	serviceRestarts[serviceID]++
-	return yieldCount(backoff)
+	if !yieldCount(backoff) {
+		return false
+	}
+	setServiceResult(serviceID, serviceResultRestarting)
+	return true
 }
 
 func yieldCount(count uintptr) bool {
@@ -637,15 +689,18 @@ func requestServiceStop(serviceID uintptr) bool {
 
 	ep := sysSvcLookup(&serviceManifest[serviceID].name[0], uintptr(len(serviceManifest[serviceID].name)))
 	if ep == sysErr {
+		setServiceResult(serviceID, serviceResultShutdownError)
 		return false
 	}
 
 	req := [1]byte{stopCmd}
 	if sysIpcSend(ep, &req[0], 1) == sysErr {
+		setServiceResult(serviceID, serviceResultShutdownError)
 		return false
 	}
 
 	logServiceAction(msgSvcMgrStop[:], serviceID)
+	setServiceResult(serviceID, serviceResultOrderedStop)
 	setServiceState(serviceID, stateStopping)
 	return true
 }
@@ -662,8 +717,11 @@ func setServiceState(serviceID uintptr, state byte) {
 	switch state {
 	case stateStarting:
 		serviceStarts[serviceID]++
+	case stateReady:
+		setServiceResult(serviceID, serviceResultOnline)
 	case stateFailed:
 		serviceFailures[serviceID]++
+		setServiceResult(serviceID, serviceResultForFailure(serviceResults[serviceID]))
 	}
 
 	logServiceState(serviceID, state)
@@ -688,6 +746,9 @@ func logServiceStateAction(prefix []byte, serviceID uintptr, state byte) {
 	log(serviceManifest[serviceID].name)
 	log(msgSpace[:])
 	log(stateLabel(state))
+	log(msgSpace[:])
+	log(msgMetricResult[:])
+	log(serviceResultLabel(serviceResults[serviceID]))
 	log(msgNewline[:])
 }
 
@@ -731,7 +792,7 @@ func applyServiceScheduling(serviceID uintptr, tid uintptr) bool {
 	return true
 }
 
-func logManagerPhase(phase byte, phaseLogged *[3]byte) {
+func logManagerPhase(phase byte, phaseLogged *[phaseCount]byte) {
 	if phaseLogged[phase] != 0 {
 		return
 	}
@@ -845,6 +906,8 @@ func phaseLabel(phase byte) []byte {
 		return msgPhaseCore[:]
 	case phaseSession:
 		return msgPhaseSession[:]
+	case phaseShutdown:
+		return msgPhaseShutdown[:]
 	default:
 		return msgPhaseServices[:]
 	}
@@ -853,6 +916,103 @@ func phaseLabel(phase byte) []byte {
 func serviceIsActive(serviceID uintptr) bool {
 	state := serviceStates[serviceID]
 	return state == stateRunning || state == stateReady
+}
+
+func serviceManagerCleanExit() bool {
+	var serviceID uintptr
+	for serviceID = 0; serviceID < serviceCount; serviceID++ {
+		state := serviceStates[serviceID]
+		if serviceNeedsSuccess(serviceID) {
+			if state != stateStopped {
+				return false
+			}
+			continue
+		}
+		if serviceTasks[serviceID] != taskUnset {
+			return false
+		}
+		if state != stateStopped && state != stateFailed && state != stateDeclared && state != stateBlocked {
+			return false
+		}
+	}
+	return true
+}
+
+func managerFailureResult() byte {
+	if shutdownStarted != 0 {
+		return initResultShutdownFailed
+	}
+	if bootOperational != 0 {
+		return initResultSessionFailed
+	}
+	return initResultBootFailed
+}
+
+func managerError(result byte) byte {
+	log(msgSvcMgrErr[:])
+	return result
+}
+
+func logInitResult(result byte) {
+	log(msgGoInitResult[:])
+	log(initResultLabel(result))
+	log(msgNewline[:])
+}
+
+func initResultLabel(result byte) []byte {
+	switch result {
+	case initResultBootFailed:
+		return msgInitBootFailed[:]
+	case initResultSessionFailed:
+		return msgInitSessFailed[:]
+	case initResultShutdownFailed:
+		return msgInitShdnFailed[:]
+	default:
+		return msgInitShdnClean[:]
+	}
+}
+
+func setServiceResult(serviceID uintptr, result byte) {
+	serviceResults[serviceID] = result
+}
+
+func serviceResultForFailure(current byte) byte {
+	switch current {
+	case serviceResultSpawnFailed, serviceResultWedge, serviceResultShutdownError, serviceResultRestartExhausted:
+		return current
+	default:
+		return serviceResultRuntimeFailed
+	}
+}
+
+func serviceResultLabel(result byte) []byte {
+	switch result {
+	case serviceResultOnline:
+		return msgResultOnline[:]
+	case serviceResultRuntimeFailed:
+		return msgResultRuntime[:]
+	case serviceResultSpawnFailed:
+		return msgResultSpawn[:]
+	case serviceResultWedge:
+		return msgResultWedge[:]
+	case serviceResultRestarting:
+		return msgResultRestarting[:]
+	case serviceResultOrderedStop:
+		return msgResultStop[:]
+	case serviceResultSessionDone:
+		return msgResultSession[:]
+	case serviceResultShutdownError:
+		return msgResultShutdown[:]
+	case serviceResultRestartExhausted:
+		return msgResultExhausted[:]
+	default:
+		return msgResultNone[:]
+	}
+}
+
+func markServiceFailed(serviceID uintptr) {
+	setServiceResult(serviceID, serviceResultRuntimeFailed)
+	setServiceState(serviceID, stateFailed)
 }
 
 func taskStateLabel(state uint64) []byte {
@@ -917,6 +1077,9 @@ func logServiceSnapshot(serviceID uintptr) {
 	log(msgSpace[:])
 	log(msgMetricSvc[:])
 	log(stateLabel(serviceStates[serviceID]))
+	log(msgSpace[:])
+	log(msgMetricResult[:])
+	log(serviceResultLabel(serviceResults[serviceID]))
 	log(msgNewline[:])
 }
 

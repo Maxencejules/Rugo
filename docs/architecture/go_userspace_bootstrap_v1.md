@@ -44,7 +44,8 @@ Boot phases on the default lane:
 4. `core phase`
    `timesvc` must reach `ready`.
 5. `base phase`
-   `diagsvc` and `pkgsvc` must reach `ready`.
+   `diagsvc` must reach `ready`; `pkgsvc` is launched here as an optional base
+   service.
 6. `session phase`
    `shell` starts only after all required base services are `ready`.
 7. `bounded shutdown`
@@ -57,7 +58,7 @@ Boot phases on the default lane:
 - `gosvcm`: service manager for the default manifest
 - `timesvc`: required time service, critical scheduler class
 - `diagsvc`: required diagnostics and operator snapshot service
-- `pkgsvc`: required package or platform state service for the default lane
+- `pkgsvc`: optional package or platform state service for the default lane
 - `shell`: required session entrypoint, started after base services are ready
 
 ## Lifecycle Model
@@ -89,9 +90,9 @@ Default manifest:
 
 - `timesvc`: no dependencies, `phase=core`, `required`, `restart=on-failure/3`
 - `diagsvc`: depends on `timesvc`, `phase=base`, `required`, `restart=on-failure/3`
-- `pkgsvc`: depends on `timesvc`, `phase=base`, `required`, `restart=on-failure/3`
-- `shell`: depends on `timesvc`, `diagsvc`, and `pkgsvc`, `phase=session`,
-  `required`, `restart=on-failure/2`
+- `pkgsvc`: depends on `timesvc`, `phase=base`, `optional`, `restart=on-failure/3`
+- `shell`: depends on `timesvc` and `diagsvc`, `phase=session`, `required`,
+  `restart=on-failure/2`
 
 Policy rules:
 
@@ -114,7 +115,9 @@ Key markers on the default lane:
 - `GOINIT: operational`
 - `GOSVCM: phase session`
 - `SVC: shell ready`
+- `GOSVCM: phase shutdown`
 - `GOSVCM: reap ... failed|stopped`
+- `GOINIT: result shutdown-clean`
 - `GOINIT: ready`
 
 These markers are intentionally small and serial-friendly. They are sufficient
@@ -141,6 +144,6 @@ python tools/run_perf_baseline_v1.py --runtime-capture out/booted-runtime-v1-boo
 
 ## Next Step
 
-The next bounded improvement is to separate ordered service shutdown from
-session shutdown with an explicit init-owned shutdown result code, while still
-keeping the single-image Rust-kernel plus Go-userspace lane intact.
+The next bounded improvement is failure-injection coverage for the optional
+`pkgsvc` degraded boot path, so the non-blocking package-service policy is
+proven by live runtime evidence instead of by contract alone.

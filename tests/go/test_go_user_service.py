@@ -48,7 +48,9 @@ def test_go_userspace_bootstrap(qemu_serial_go):
             "TIMESVC: req ok",
             "TIMESVC: time ok",
             "GOSH: reply ok",
+            "GOSVCM: phase shutdown",
             "GOSVCM: reap timesvc",
+            "GOINIT: result shutdown-clean",
             "GOINIT: ready",
             "RUGO: halt ok",
         ],
@@ -59,7 +61,10 @@ def test_go_userspace_bootstrap(qemu_serial_go):
         f"Full output:\n{serial}"
     )
     assert serial.count("GOSVCM: plan ") == 4
+    assert "GOSVCM: plan pkgsvc role=pkg phase=base need=optional" in serial
+    assert serial.count("GOSVCM: phase ") == 4
     assert serial.count("SVC: shell ready") == 1
+    assert "GOINIT: result shutdown-clean" in serial
 
     for error_marker in (
         "GOINIT: err",

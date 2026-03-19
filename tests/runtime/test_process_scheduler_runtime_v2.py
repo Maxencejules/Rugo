@@ -19,14 +19,14 @@ def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go):
             "SVC: shell running",
             "GOSH: recycle",
             "SVC: shell failed",
-            "GOSVCM: reap shell failed",
+            "GOSVCM: reap shell failed res=runtime-failed",
             "GOSVCM: restart shell",
             "SVC: shell starting",
             "GOSH: start",
             "SVC: shell running",
             "GOSH: recycle",
             "SVC: shell failed",
-            "GOSVCM: reap shell failed",
+            "GOSVCM: reap shell failed res=runtime-failed",
             "GOSVCM: restart shell",
             "SVC: shell starting",
             "GOSH: start",
@@ -43,13 +43,15 @@ def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go):
             "SVC: shell stopping",
             "SVC: shell stopped",
             "ISOC5: cleanup ok",
-            "GOSVCM: reap shell stopped",
+            "GOSVCM: reap shell stopped res=session-done",
+            "GOSVCM: phase shutdown",
             "GOSVCM: stop pkgsvc",
             "GOSVCM: stop diagsvc",
             "GOSVCM: stop timesvc",
             "SVC: timesvc stopping",
             "SVC: timesvc stopped",
-            "GOSVCM: reap timesvc",
+            "GOSVCM: reap timesvc stopped res=ordered-stop",
+            "GOINIT: result shutdown-clean",
             "GOINIT: ready",
         ],
     )
@@ -62,9 +64,11 @@ def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go):
     assert serial.count("GOSVCM: restart shell") == 2
     assert serial.count("GOSVCM: reap shell") == 3
     assert serial.count("GOSVCM: stop pkgsvc") == 1
+    assert serial.count("GOSVCM: phase shutdown") == 1
     assert serial.count("SVC: timesvc stopped") == 1
     assert serial.count("GOSVCM: stop diagsvc") == 1
     assert serial.count("GOSVCM: stop timesvc") == 1
+    assert "GOINIT: result shutdown-clean" in serial
     assert "R4: deadlock" not in serial, f"Unexpected deadlock marker.\nFull output:\n{serial}"
     assert "GOSVCM: err" not in serial, f"Unexpected service-manager error.\nFull output:\n{serial}"
     assert "R4: mgr" not in serial, f"Unexpected manager debug marker.\nFull output:\n{serial}"
