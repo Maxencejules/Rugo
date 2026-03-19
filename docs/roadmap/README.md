@@ -38,6 +38,11 @@ The historical core-runtime backlog is closed in the ledger.
 records `M10`, `M12`, `M13`, `M16`, `M18`, `M19`, `M22`, `M25`, and `M42` as
 runtime-backed closures on the default lane.
 
+The historical X2 hardware backlog is closed on a shared runtime-backed qualification lane.
+[implementation_closure/expansion_breadth.md](implementation_closure/expansion_breadth.md)
+records `M9`, `M15`, `M23`, `M37`, `M43`, `M45`, `M46`, and `M47` as
+runtime-backed hardware closures through the X2 aggregate gate.
+
 ## Observable Core Progress
 
 The repo is closer to its goal only when the default lane can do more of the

@@ -165,6 +165,16 @@ Make expanded hardware and promotion checks release-blocking.
   - `docs/STATUS.md`
   - `README.md`
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- Matrix v4 now feeds the shared x2 hardware runtime qualification device
+  registry instead of remaining an isolated promotion-era report.
+- `make test-x2-hardware-runtime-v1` consumes the v4 driver lifecycle rows as
+  reusable probe/runtime foundation for later X2 targets.
+- Additional device classes must land through the shared registry and target
+  gate, not as one-off matrix expansions.
+
 ## Non-goals for M37 backlog
 
 - Unsupported hardware-family claims without matrix v4 evidence.

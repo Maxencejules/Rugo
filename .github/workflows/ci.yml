@@ -1104,6 +1104,27 @@ jobs:
             out/pytest-native-driver-diagnostics-v1.xml
             out/native-driver-diagnostics-v1.json
 
+      - name: X2 hardware runtime v1 gate
+        run: |
+          make test-x2-hardware-runtime-v1
+
+      - name: Upload X2 hardware runtime v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x2-hardware-runtime-v1-artifacts
+          path: |
+            out/pytest-x2-hardware-runtime-v1.xml
+            out/x2-hardware-runtime-v1.json
+            out/measured-boot-v1.json
+            out/hw-diagnostics-v3.json
+            out/hw-matrix-v4.json
+            out/hw-firmware-smp-v1.json
+            out/hw-matrix-v6.json
+            out/baremetal-io-v1.json
+            out/hw-claim-promotion-v1.json
+            out/native-driver-diagnostics-v1.json
+
       - name: Native storage v1 gate
         run: |
           make test-native-storage-v1

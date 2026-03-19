@@ -86,7 +86,7 @@ it can claim. They should not dominate the top-line progress signal.
 | New milestone | Status | Meaning of done | Historical mapping |
 |---|---|---|---|
 | `X1` Compatibility Surface Expansion | done | The repo supports a larger external app and POSIX-like surface than the core Go-service lane strictly needs, with explicit deferred behavior and compatibility gates. | `M8`, `M17`, `M27`, `M36`, `M41` |
-| `X2` Hardware, Firmware, and Driver Breadth | done | Support claims broaden from QEMU-centric reference platforms into tiered device, firmware, and audited claim-promotion programs. | `M9`, `M15`, `M23`, `M37`, `M43`, `M45`, `M46`, `M47` |
+| `X2` Hardware, Firmware, and Driver Breadth | done | Support claims now bind to a shared device registry, probe/bind lifecycle, firmware/SMP evidence, and audited target-class qualification across the historical hardware backlog. | `M9`, `M15`, `M23`, `M37`, `M43`, `M45`, `M46`, `M47` |
 | `X3` Platform and Ecosystem Feature Breadth | done | Storage/platform extras, package/repo expansion, and catalog/distribution scale exceed the minimum core-service OS baseline. | `M26`, `M38`, `M39` |
 | `X4` Desktop and Workflow Breadth | done | Display, input, windowing, GUI runtime, shell, installer, and bounded desktop workflows exist as an additional product surface on top of the core OS. | `M35`, `M44`, `M48`, `M49`, `M50`, `M51`, `M52` |
 | `X5` Next-Wave Breadth Research | open | Future work expands native drivers, alternate architectures, advanced storage/network features, desktop usability breadth, SDK/app distribution, and community surface without being mistaken for core-runtime completion. | likely fed by `M53-M77`, `M82-M83` |
@@ -134,6 +134,11 @@ The historical core-runtime backlog is closed in the ledger.
 [implementation_closure/core_runtime.md](implementation_closure/core_runtime.md)
 records `M10`, `M12`, `M13`, `M16`, `M18`, `M19`, `M22`, `M25`, and `M42` as
 runtime-backed closures on the default lane.
+
+The historical X2 hardware backlog is closed on a shared runtime-backed qualification lane.
+[implementation_closure/expansion_breadth.md](implementation_closure/expansion_breadth.md)
+records `M9`, `M15`, `M23`, `M37`, `M43`, `M45`, `M46`, and `M47` as
+runtime-backed hardware closures through the X2 aggregate gate.
 
 Those documents cover every backlog-bearing milestone currently marked done in
 the ledger, including `G2` and `M8-M54`.

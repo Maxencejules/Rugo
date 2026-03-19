@@ -235,6 +235,16 @@ promoting v6 to the primary hardware gate.
   - `docs/STATUS.md`
   - `README.md`
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- The modern VirtIO shadow gate now feeds the shared x2 hardware runtime
+  qualification lane as explicit modern target classes.
+- `make test-x2-hardware-runtime-v1` reuses the v6 lifecycle rows and bind
+  diagnostics instead of treating the modern platform surface as shadow-only.
+- New virtual-platform claims must land through the shared X2 target evidence
+  path before they are promoted.
+
 ## Non-goals for M45 backlog
 
 - bare-metal NIC expansion (`e1000e`, `rtl8169`)

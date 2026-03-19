@@ -217,6 +217,16 @@ its Tier 2 promotion floor.
   - `docs/STATUS.md`
   - `README.md`
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- The bare-metal board profiles now feed the shared x2 hardware runtime
+  qualification lane as named Tier 2 target classes.
+- `make test-x2-hardware-runtime-v1` binds wired NIC, USB input, removable
+  media, and recovery evidence to the same runtime-backed target report.
+- Additional bare-metal classes must join the shared X2 target registry before
+  they can be treated as supportable.
+
 ## Non-goals for M46 backlog
 
 - Wi-Fi, Bluetooth, or audio breadth

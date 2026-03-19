@@ -179,6 +179,16 @@ Make hardware matrix v3 and firmware-attestation checks release-blocking.
   - `docs/STATUS.md`
   - `README.md`
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- The measured-boot report, firmware diagnostics, and suspend or hotplug
+  evidence now feed the shared x2 hardware runtime qualification report.
+- `make test-x2-hardware-runtime-v1` promotes the firmware/SMP-aware target
+  classes and keeps measured boot bound to the same runtime-backed lane.
+- Future firmware expansion must preserve the same target-class and
+  attestation-backed qualification path.
+
 ## Non-goals for M23 backlog
 
 - Broad unsupported hardware-family claims beyond declared matrix tiers.

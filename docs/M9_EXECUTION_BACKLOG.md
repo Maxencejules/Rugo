@@ -123,6 +123,18 @@ Promote M9 matrix checks to CI and close milestone status docs.
 - M9 gate is release-enforced in CI.
 - M9 status is marked `done` with clear evidence pointers.
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- The historical matrix rows for q35 and i440fx now feed the shared x2
+  hardware runtime qualification gate instead of standing alone as matrix-only
+  evidence.
+- `make test-x2-hardware-runtime-v1` promotes the transitional block and net
+  target classes into the shared device registry and target qualification
+  report.
+- Any future M9-era target expansion must extend the shared X2 qualification
+  lane rather than adding a detached matrix-only claim.
+
 ## Non-goals for M9 backlog
 
 - Full non-virtio hardware family expansion (NVMe/AHCI/native NICs).

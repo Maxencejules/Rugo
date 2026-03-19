@@ -124,6 +124,16 @@ Promote M15 checks to required local and CI gates.
 - Hardware matrix v2 gate is required in local and CI release lanes.
 - M15 can be marked done with artifact-linked evidence.
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- The historical v2 tier and policy surface now feeds the shared x2 hardware
+  runtime qualification gate instead of remaining a standalone contract lane.
+- `make test-x2-hardware-runtime-v1` binds the v2 transitional targets to the
+  shared device registry, probe lifecycle, and target qualification report.
+- New tier-policy work must now land through the shared X2 target evidence path
+  before it is treated as a broadened support claim.
+
 ## Non-goals for M15 backlog
 
 - Immediate broad non-x86 architecture expansion.

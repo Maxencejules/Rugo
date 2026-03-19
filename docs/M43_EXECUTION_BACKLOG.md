@@ -205,6 +205,16 @@ Make expanded native driver and firmware/SMP checks release-blocking.
   - `docs/STATUS.md`
   - `README.md`
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- Firmware-table validation, SMP interrupt evidence, and native-driver baseline
+  rows now feed the shared x2 hardware runtime qualification report.
+- `make test-x2-hardware-runtime-v1` keeps the firmware/SMP target classes
+  bound to the same device registry and target-qualification lane.
+- Future interrupt-routing or SMP-safe driver work must preserve the same X2
+  runtime-backed qualification contract.
+
 ## Non-goals for M43 backlog
 
 - Broad hardware-family claims without repeatable matrix evidence.

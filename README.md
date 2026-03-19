@@ -79,6 +79,11 @@ Visible proof paths:
   Emits the machine-readable M53 diagnostics bundle for bind, IRQ or DMA, and
   firmware allow or deny paths.
   Proof: `tests/hw/test_native_driver_diag_gate_v1.py`
+- `make test-x2-hardware-runtime-v1`
+  Aggregates the historical X2 hardware backlog into one runtime-backed device
+  registry, firmware/SMP, and target-qualification bundle.
+  Proof: `tests/hw/test_x2_hardware_gate_v1.py`,
+  `tests/hw/test_x2_hardware_runtime_v1.py`
 - `make test-hw-matrix-v7`
   Emits the machine-readable M54 matrix bundle for q35 NVMe and i440fx AHCI
   coverage on top of the v6 baseline.

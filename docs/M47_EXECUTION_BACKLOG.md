@@ -198,6 +198,17 @@ changes to auditable gate results.
   - `docs/STATUS.md`
   - `README.md`
 
+## X2 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared x2 hardware runtime qualification lane.
+- Claim promotion and support-tier audit now consume the shared x2 hardware
+  runtime qualification evidence rather than auditing a separate claim-only
+  lane.
+- `make test-x2-hardware-runtime-v1` keeps promoted classes tied to explicit
+  target qualification, device registry, and bind evidence.
+- Future claim rows must remain subordinate to the same runtime-backed target
+  evidence instead of policy-only promotion.
+
 ## Non-goals for M47 backlog
 
 - implementing new hardware classes unrelated to support-tier policy
