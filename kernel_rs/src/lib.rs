@@ -2623,6 +2623,8 @@ static USER_YIELD_BLOB: [u8; 53] = [
 
 #[cfg(feature = "go_test")]
 static GO_USER_BIN: &[u8] = include_bytes!("../../out/gousr.bin");
+#[cfg(feature = "go_desktop_test")]
+static GO_DESKTOP_BIN: &[u8] = include_bytes!("../../out/gousr-desktop.bin");
 
 // --------------- X1 runtime-backed compatibility ELF corpus ------------------
 
@@ -7733,7 +7735,12 @@ pub extern "C" fn kmain() -> ! {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
         r4_c4_runtime_init();
-        setup_go_user_pages(GO_USER_BIN);
+        let go_user_bin = if cfg!(feature = "go_desktop_test") {
+            GO_DESKTOP_BIN
+        } else {
+            GO_USER_BIN
+        };
+        setup_go_user_pages(go_user_bin);
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         R4_TASKS[0].state = R4State::Running;

@@ -238,6 +238,12 @@ func shellMain() {
 		setServiceState(serviceShell, stateFailed)
 		fail(msgShellErr[:])
 	}
+	if desktopProfileEnabled {
+		if !runDesktopProfile(replyEP, diagEP) {
+			setServiceState(serviceShell, stateFailed)
+			fail(msgShellErr[:])
+		}
+	}
 
 	pkgEP := sysSvcLookup(&namePkgSvc[0], uintptr(len(namePkgSvc)))
 	if pkgEP == sysErr {

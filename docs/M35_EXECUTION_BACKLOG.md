@@ -170,6 +170,16 @@ Make desktop baseline and GUI app compatibility release-blocking.
   - `docs/STATUS.md`
   - `README.md`
 
+## X4 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared desktop profile runtime
+  qualification lane.
+- The historical desktop/session baseline now feeds the boot-backed
+  `os-go-desktop.iso` image through `make test-desktop-profile-runtime-v1`
+  instead of remaining a standalone deterministic-only lane.
+- Future desktop baseline breadth must land through the same desktop profile
+  runtime qualification path before it is treated as an expanded X4 claim.
+
 ## Non-goals for M35 backlog
 
 - Universal desktop compatibility claims beyond declared profile.

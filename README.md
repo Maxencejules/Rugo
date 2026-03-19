@@ -90,6 +90,11 @@ Visible proof paths:
   replay update flow, and persistent runtime-media evidence.
   Proof: `tests/pkg/test_x3_platform_runtime_gate_v1.py`,
   `tests/pkg/test_x3_platform_runtime_service_v1.py`
+- `make test-desktop-profile-runtime-v1`
+  Aggregates the historical X4 desktop backlog into one boot-backed
+  desktop-profile qualification bundle on `out/os-go-desktop.iso`.
+  Proof: `tests/desktop/test_desktop_profile_runtime_gate_v1.py`,
+  `tests/desktop/test_desktop_profile_runtime_v1.py`
 - `make test-hw-matrix-v7`
   Emits the machine-readable M54 matrix bundle for q35 NVMe and i440fx AHCI
   coverage on top of the v6 baseline.

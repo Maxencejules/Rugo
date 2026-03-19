@@ -213,6 +213,16 @@ Make runtime-backed desktop/ecosystem v2 qualification release-blocking.
   - `docs/STATUS.md`
   - `README.md`
 
+## X4 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared desktop profile runtime
+  qualification lane.
+- The bounded real-desktop and ecosystem v2 artifacts now sit beside the
+  boot-backed desktop-profile image and are aggregated by
+  `make test-desktop-profile-runtime-v1`.
+- Future desktop/app breadth must attach to the same boot-backed desktop
+  profile before it is treated as a broadened X4 claim.
+
 ## Non-goals for M44 backlog
 
 - Universal GUI/app compatibility claims outside declared v2 classes.

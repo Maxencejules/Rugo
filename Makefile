@@ -48,7 +48,7 @@ endif
        build-fs-badmagic image-fs-badmagic \
        build-pkg-hash image-pkg-hash \
        build-net image-net \
-       build-go image-go \
+       build-go image-go build-go-desktop image-go-desktop \
        build-compat-real image-compat-real \
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
@@ -59,8 +59,8 @@ endif
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
-       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-x2-hardware-runtime-v1 test-x3-platform-runtime-v1 test-native-storage-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 \
-       help kernel kernel-only kernel-demo userspace userspace-go userspace-std image-kernel image-demo image-std boot-kernel boot-demo boot-std smoke-kernel smoke-demo smoke-std gate-all \
+       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-x2-hardware-runtime-v1 test-x3-platform-runtime-v1 test-native-storage-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 test-desktop-profile-runtime-v1 \
+       help kernel kernel-only kernel-demo userspace userspace-go userspace-std userspace-desktop image-kernel image-demo image-std image-desktop boot-kernel boot-demo boot-std boot-desktop smoke-kernel smoke-demo smoke-std smoke-desktop gate-all \
        run run-kernel demo demo-go validate test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
 # Tools
@@ -98,6 +98,7 @@ LDFLAGS   = -nostdlib -static -T boot/linker.ld
 # Output
 OUT = out
 GO_USER_BIN = $(OUT)/gousr.bin
+GO_DESKTOP_BIN = $(OUT)/gousr-desktop.bin
 GO_STD_BIN = $(OUT)/gostd.bin
 X1_CLI_FILE_ELF = $(OUT)/x1-cli-file.elf
 X1_PROC_SOCK_ELF = $(OUT)/x1-proc-sock.elf
@@ -123,6 +124,9 @@ $(OUT):
 
 $(GO_USER_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/syscalls.go services/go/hash.go services/go/pkgsvc.go services/go/linker.ld services/go/go.mod | $(OUT)
 	bash tools/build_go.sh
+
+$(GO_DESKTOP_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/desktop.go services/go/profile_default.go services/go/profile_desktop.go services/go/syscalls.go services/go/hash.go services/go/pkgsvc.go services/go/linker.ld services/go/go.mod | $(OUT)
+	bash tools/build_go.sh --service-dir services/go --build-tags desktop_profile --out-elf out/gousr-desktop.elf --out-bin out/gousr-desktop.bin --target-json out/rugo-desktop-target.json
 
 $(GO_STD_BIN) $(GO_STD_CONTRACT): tools/build_go_std_spike.sh tools/bootstrap_go_port_v1.sh tools/gostd_stock_builder/main.go tools/runtime_toolchain_contract_v1.py services/go_std/main.go services/go_std/go.mod services/go_std/linker.ld services/go_std/start.asm services/go_std/rt0.asm services/go_std/runtime_stubs.asm services/go_std/syscalls.asm docs/runtime/port_contract_v1.md docs/runtime/abi_stability_policy_v1.md docs/runtime/toolchain_bootstrap_v1.md | $(OUT)
 	$(BASH) tools/bootstrap_go_port_v1.sh --rebuild
@@ -532,12 +536,21 @@ userspace-go: $(GO_USER_BIN)
 
 userspace: userspace-go
 
+userspace-desktop: $(GO_DESKTOP_BIN)
+
 build-go: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN)
 	cd kernel_rs && $(CARGO) build --release --features go_test
 	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go.elf $(ASM_OBJS) $(KERNEL_LIB)
 
 image-go: build-go
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go.elf ISO_NAME=os-go.iso bash tools/mkimage.sh
+
+build-go-desktop: $(ASM_OBJS) boot/linker.ld $(GO_DESKTOP_BIN)
+	cd kernel_rs && $(CARGO) build --release --features go_desktop_test
+	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go-desktop.elf $(ASM_OBJS) $(KERNEL_LIB)
+
+image-go-desktop: build-go-desktop
+	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go-desktop.elf ISO_NAME=os-go-desktop.iso bash tools/mkimage.sh
 
 build-compat-real: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN) $(X1_CLI_FILE_ELF) $(X1_PROC_SOCK_ELF)
 	cd kernel_rs && $(CARGO) build --release --features compat_real_test
@@ -587,6 +600,8 @@ image-kernel: image
 
 image-demo: image-go
 
+image-desktop: image-go-desktop
+
 image-std: image-go-std
 
 boot-kernel: image-kernel
@@ -603,6 +618,9 @@ demo-go: boot-demo
 
 boot-std: image-std
 	./tools/run_qemu.sh --iso $(OUT)/os-go-std.iso
+
+boot-desktop: image-desktop
+	./tools/run_qemu.sh --iso $(OUT)/os-go-desktop.iso
 
 demo: demo-go
 
@@ -629,6 +647,15 @@ smoke-std: image-go-std
 		--expect "RUGO: boot ok" \
 		--expect "GOSTD: ok" \
 		--expect "RUGO: halt ok"
+
+smoke-desktop: image-desktop
+	$(BASH) tools/smoke_boot.sh --iso $(OUT)/os-go-desktop.iso \
+		--label desktop \
+		--expect "RUGO: boot ok" \
+		--expect "DESKBOOT: profile desktop_v1" \
+		--expect "DESKDISP: mode 1280x720@60" \
+		--expect "DESKGUI: toolkit rugo.widgets.retain.v1" \
+		--expect "DESKBOOT: ready"
 
 gate-all: test-qemu
 
@@ -1049,6 +1076,10 @@ test-real-app-catalog-v2:
 	$(PYTHON) tools/run_real_catalog_audit_v2.py --out $(OUT)/real-catalog-audit-v2.json
 	$(PYTHON) -m pytest tests/pkg/test_ecosystem_scale_docs_v2.py tests/pkg/test_pkg_install_success_rate_v2.py tests/pkg/test_catalog_reproducibility_v2.py tests/pkg/test_distribution_workflow_v2.py tests/pkg/test_real_catalog_gate_v2.py -v --junitxml=$(OUT)/pytest-real-app-catalog-v2.xml
 
+test-desktop-profile-runtime-v1: image-go-desktop
+	$(PYTHON) tools/run_desktop_profile_runtime_v1.py --image $(OUT)/os-go-desktop.iso --kernel $(OUT)/kernel-go-desktop.elf --runtime-capture-out $(OUT)/desktop-profile-capture-v1.json --emit-supporting-reports --supporting-dir $(OUT) --out $(OUT)/desktop-profile-runtime-v1.json
+	$(PYTHON) -m pytest tests/desktop/test_desktop_profile_runtime_docs_v1.py tests/desktop/test_desktop_profile_runtime_v1.py tests/desktop/test_desktop_profile_runtime_gate_v1.py -v --junitxml=$(OUT)/pytest-desktop-profile-runtime-v1.xml
+
 repro-check:
 	@set -e; \
 	OUT1="$(OUT)/repro-1"; \
@@ -1074,11 +1105,15 @@ help:
 		'  make kernel       - build the Rust kernel ELF' \
 		'  make userspace    - build the default TinyGo userspace payload' \
 		'  make image-demo   - build the default demo ISO (Rust kernel + Go userspace)' \
+		'  make image-desktop - build the desktop-profile ISO (Rust kernel + Go userspace)' \
 		'  make boot-demo    - boot the default demo ISO in QEMU' \
+		'  make boot-desktop - boot the desktop-profile ISO in QEMU' \
 		'  make smoke-demo   - boot the demo ISO and verify serial markers without Python' \
+		'  make smoke-desktop - boot the desktop ISO and verify desktop markers without Python' \
 		'  make image-std    - build the supported stock-Go ISO' \
 		'  make boot-std     - boot the supported stock-Go ISO in QEMU' \
 		'  make smoke-std    - boot the stock-Go ISO and verify serial markers without Python' \
+		'  make test-desktop-profile-runtime-v1 - boot and qualify the desktop-profile runtime bundle' \
 		'  make image-kernel - build the kernel-only ISO' \
 		'  make boot-kernel  - boot the kernel-only ISO in QEMU' \
 		'  make smoke-kernel - boot the kernel-only ISO and verify serial markers without Python' \

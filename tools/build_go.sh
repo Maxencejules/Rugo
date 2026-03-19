@@ -6,6 +6,45 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/out"
 SVC="$ROOT/services/go"
+OUT_ELF="$OUT/gousr.elf"
+OUT_BIN="$OUT/gousr.bin"
+TARGET_JSON="$OUT/rugo-target.json"
+BUILD_TAGS=()
+MAX_BIN_BYTES=24576
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --service-dir)
+            SVC="$ROOT/${2:-}"
+            shift 2
+            ;;
+        --out-elf)
+            OUT_ELF="$ROOT/${2:-}"
+            shift 2
+            ;;
+        --out-bin)
+            OUT_BIN="$ROOT/${2:-}"
+            shift 2
+            ;;
+        --target-json)
+            TARGET_JSON="$ROOT/${2:-}"
+            shift 2
+            ;;
+        --build-tags)
+            BUILD_TAGS+=("${2:-}")
+            shift 2
+            ;;
+        --max-bin-bytes)
+            MAX_BIN_BYTES="${2:-}"
+            shift 2
+            ;;
+        *)
+            echo "error: unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
 mkdir -p "$OUT"
 
 # In WSL, Windows-installed Go/TinyGo tools may only exist as .exe paths.
@@ -108,12 +147,13 @@ OBJCOPY_BIN="$(find_tool objcopy objcopy.exe "$MINGW_WIN_BIN/objcopy.exe" "$MING
     exit 1
 }
 
-NASM_OUT="$OUT/go_start.o"
+SERVICE_NAME="$(basename "$SVC")"
+NASM_OUT="$OUT/${SERVICE_NAME}_start.o"
 NASM_SRC="$SVC/start.asm"
-TINYGO_TARGET="$OUT/rugo-target.json"
-TINYGO_OUT="$OUT/gousr.elf"
-OBJCOPY_IN="$OUT/gousr.elf"
-OBJCOPY_OUT="$OUT/gousr.bin"
+TINYGO_TARGET="$TARGET_JSON"
+TINYGO_OUT="$OUT_ELF"
+OBJCOPY_IN="$OUT_ELF"
+OBJCOPY_OUT="$OUT_BIN"
 
 if tool_uses_host_paths "$NASM_BIN"; then
     NASM_OUT="$(to_host_path "$NASM_OUT")"
@@ -135,14 +175,16 @@ echo "==> Assembling Go startup stubs..."
 # --- Generate target JSON with absolute paths ---
 # TinyGo ldflags need absolute paths since LLD CWD is unpredictable.
 # Use forward slashes which work on both Unix and Windows in LLD.
-START_OBJ="$OUT/go_start.o"
+START_OBJ="$NASM_OUT"
 LINKER_LD="$SVC/linker.ld"
 if tool_uses_host_paths "$TINYGO_BIN"; then
     START_OBJ="$(to_host_path "$START_OBJ")"
     LINKER_LD="$(to_host_path "$LINKER_LD")"
 fi
 
-cat > "$OUT/rugo-target.json" <<ENDJSON
+mkdir -p "$(dirname "$OUT_ELF")" "$(dirname "$OUT_BIN")" "$(dirname "$TARGET_JSON")"
+
+cat > "$TARGET_JSON" <<ENDJSON
 {
 	"llvm-target": "x86_64-unknown-none-elf",
 	"cpu": "x86-64",
@@ -178,14 +220,19 @@ ENDJSON
 # --- Build with TinyGo ---
 echo "==> Building Go user binary with TinyGo..."
 cd "$SVC"
-"$TINYGO_BIN" build -target="$TINYGO_TARGET" -no-debug -o "$TINYGO_OUT" .
+TINYGO_BUILD_ARGS=()
+for tag in "${BUILD_TAGS[@]}"; do
+    [ -n "$tag" ] || continue
+    TINYGO_BUILD_ARGS+=("-tags=$tag")
+done
+"$TINYGO_BIN" build -target="$TINYGO_TARGET" -no-debug "${TINYGO_BUILD_ARGS[@]}" -o "$TINYGO_OUT" .
 
 # --- Convert to flat binary ---
 echo "==> Converting to flat binary..."
 "$OBJCOPY_BIN" -O binary "$OBJCOPY_IN" "$OBJCOPY_OUT"
-BIN_SIZE=$(stat -c%s "$OUT/gousr.bin" 2>/dev/null || stat -f%z "$OUT/gousr.bin" 2>/dev/null || wc -c < "$OUT/gousr.bin")
-if [ "$BIN_SIZE" -gt 24576 ]; then
-    echo "ERROR: Go user binary exceeds the current 24576-byte userspace image limit ($BIN_SIZE bytes)"
+BIN_SIZE=$(stat -c%s "$OUT_BIN" 2>/dev/null || stat -f%z "$OUT_BIN" 2>/dev/null || wc -c < "$OUT_BIN")
+if [ "$BIN_SIZE" -gt "$MAX_BIN_BYTES" ]; then
+    echo "ERROR: Go user binary exceeds the current ${MAX_BIN_BYTES}-byte userspace image limit ($BIN_SIZE bytes)"
     exit 1
 fi
-echo "==> Go user binary: $OUT/gousr.bin ($BIN_SIZE bytes)"
+echo "==> Go user binary: $OUT_BIN ($BIN_SIZE bytes)"

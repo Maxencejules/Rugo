@@ -48,6 +48,11 @@ The historical X3 platform and ecosystem backlog is closed on a shared runtime-b
 records `M26`, `M38`, and `M39` as runtime-backed platform/ecosystem closures
 through the X3 aggregate gate.
 
+The historical X4 desktop and workflow backlog is closed on a shared runtime-backed qualification lane.
+[implementation_closure/expansion_breadth.md](implementation_closure/expansion_breadth.md)
+records `M35`, `M44`, and `M48-M52` as runtime-backed desktop/workflow
+closures through the X4 aggregate gate.
+
 ## Observable Core Progress
 
 The repo is closer to its goal only when the default lane can do more of the

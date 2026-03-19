@@ -1202,3 +1202,31 @@ jobs:
             out/pytest-real-app-catalog-v2.xml
             out/real-pkg-install-v2.json
             out/real-catalog-audit-v2.json
+
+      - name: Desktop profile runtime v1 gate
+        run: |
+          make test-desktop-profile-runtime-v1
+
+      - name: Upload desktop profile runtime v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-profile-runtime-v1-artifacts
+          path: |
+            out/pytest-desktop-profile-runtime-v1.xml
+            out/desktop-profile-capture-v1.json
+            out/desktop-profile-runtime-v1.json
+            out/os-go-desktop.iso
+            out/kernel-go-desktop.elf
+            out/desktop-smoke-v1.json
+            out/gui-app-matrix-v1.json
+            out/display-runtime-v1.json
+            out/input-seat-v1.json
+            out/window-system-v1.json
+            out/gui-runtime-v1.json
+            out/toolkit-compat-v1.json
+            out/desktop-shell-v1.json
+            out/graphical-installer-v1.json
+            out/real-gui-matrix-v2.json
+            out/real-pkg-install-v2.json
+            out/real-catalog-audit-v2.json

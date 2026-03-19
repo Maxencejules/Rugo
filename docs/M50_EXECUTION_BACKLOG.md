@@ -201,6 +201,15 @@ profile.
   - `docs/STATUS.md`
   - `README.md`
 
+## X4 runtime-backed closure addendum (2026-03-18)
+
+- This backlog is now governed by the shared desktop profile runtime
+  qualification lane.
+- The historical surface/compositor reports now feed the boot-backed desktop
+  image and the shared X4 aggregate gate.
+- Future window/compositor breadth must land through the same desktop-profile
+  runtime qualification path before it is treated as an expanded X4 claim.
+
 ## Non-goals for M50 backlog
 
 - X11 or Wayland protocol compatibility claims

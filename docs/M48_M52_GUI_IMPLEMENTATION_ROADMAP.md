@@ -21,6 +21,10 @@ This roadmap defines the next execution phase to move from "GUI-qualified by
 contract and artifacts" to "GUI implemented in-tree and exercised end to end"
 without making premature parity claims.
 
+The historical X4 desktop backlog is now closed on the shared desktop profile
+runtime qualification lane in `docs/desktop/desktop_profile_runtime_v1.md` and
+`make test-desktop-profile-runtime-v1`.
+
 ## Scope and boundaries
 
 In scope:
@@ -57,6 +61,12 @@ Out of scope:
 | `test-compositor-damage-v1` | M50 | surface damage tracking, z-order, and composition correctness |
 | `test-toolkit-compat-v1` | M51 | app render/event loop behavior against the declared GUI runtime profile |
 | `test-desktop-workflows-v1` | M52 | launcher/settings/file-open/shutdown graphical workflow baseline |
+
+## Aggregate runtime gate
+
+- `test-desktop-profile-runtime-v1`
+  Boot-backed X4 qualification across `M35`, `M44`, and `M48-M52` on
+  `out/os-go-desktop.iso`.
 
 ## Suggested cadence
 
