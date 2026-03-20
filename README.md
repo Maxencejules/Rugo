@@ -24,6 +24,7 @@ Top-level wayfinding:
 Architecture and roadmap:
 - overview: [docs/architecture/README.md](docs/architecture/README.md)
 - repo strategy: [docs/architecture/repo-strategy.md](docs/architecture/repo-strategy.md)
+- v1 product definition: [docs/RUGO_V1_PRODUCT.md](docs/RUGO_V1_PRODUCT.md)
 - roadmap summary: [docs/roadmap/README.md](docs/roadmap/README.md)
 - milestone framework: [docs/roadmap/MILESTONE_FRAMEWORK.md](docs/roadmap/MILESTONE_FRAMEWORK.md)
 
@@ -95,6 +96,12 @@ Visible proof paths:
   desktop-profile qualification bundle on `out/os-go-desktop.iso`.
   Proof: `tests/desktop/test_desktop_profile_runtime_gate_v1.py`,
   `tests/desktop/test_desktop_profile_runtime_v1.py`
+- `make test-product-alpha-v1`
+  Boots the alpha-candidate native desktop image on q35 plus NVMe and binds
+  desktop, package/update, installer/recovery, and diagnostics evidence to one
+  product-level report.
+  Proof: `tests/build/test_product_alpha_gate_v1.py`,
+  `tests/build/test_product_alpha_qualification_v1.py`
 - `make test-hw-matrix-v7`
   Emits the machine-readable M54 matrix bundle for q35 NVMe and i440fx AHCI
   coverage on top of the v6 baseline.
@@ -137,6 +144,7 @@ make userspace    # build the default TinyGo userspace payload
 make image-demo   # build the default demo ISO
 make boot-demo    # boot the default demo ISO in QEMU
 make smoke-demo   # boot + verify demo serial markers without Python
+make test-product-alpha-v1 # qualify the alpha candidate native desktop image
 make image-std    # build the supported stock-Go ISO
 make boot-std     # boot the supported stock-Go ISO in QEMU
 make smoke-std    # boot + verify stock-Go serial markers without Python

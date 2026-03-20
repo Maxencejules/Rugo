@@ -1230,3 +1230,33 @@ jobs:
             out/real-gui-matrix-v2.json
             out/real-pkg-install-v2.json
             out/real-catalog-audit-v2.json
+
+      - name: Product alpha v1 gate
+        run: |
+          make test-product-alpha-v1
+
+      - name: Upload product alpha v1 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-alpha-v1-artifacts
+          path: |
+            out/pytest-product-alpha-v1.xml
+            out/product-alpha-runtime-capture-v1.json
+            out/product-alpha-v1.json
+            out/product-alpha-x4-runtime-v1.json
+            out/product-alpha-x3-runtime-v1.json
+            out/product-alpha-graphical-installer-v1.json
+            out/product-alpha-release-bundle-v1.json
+            out/product-alpha-installer-v2.json
+            out/product-alpha-install-state-v1.json
+            out/product-alpha-update-metadata-v1.json
+            out/product-alpha-upgrade-drill-v3.json
+            out/product-alpha-recovery-drill-v3.json
+            out/product-alpha-trace-bundle-v2.json
+            out/product-alpha-diagnostic-snapshot-v2.json
+            out/product-alpha-crash-dump-v1.json
+            out/product-alpha-crash-dump-symbolized-v1.json
+            out/os-go-desktop-native.iso
+            out/kernel-go-desktop-native.elf
+            out/product-alpha-supporting

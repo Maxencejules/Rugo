@@ -49,7 +49,7 @@ endif
        build-fs-badmagic image-fs-badmagic \
        build-pkg-hash image-pkg-hash \
        build-net image-net \
-       build-go image-go build-go-desktop image-go-desktop \
+       build-go image-go build-go-desktop image-go-desktop build-go-desktop-native image-go-desktop-native \
        build-go-native image-go-native \
        build-compat-real image-compat-real \
        build-go-std image-go-std \
@@ -61,7 +61,7 @@ endif
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
        test-compat-surface-v1 test-posix-gap-closure-v1 test-hw-matrix-v4 test-hw-baremetal-promotion-v1 test-storage-platform-v1 test-storage-feature-contract-v1 test-ecosystem-scale-v1 test-app-catalog-health-v1 \
        test-evidence-integrity-v1 test-synthetic-evidence-ban-v1 test-process-readiness-parity-v1 test-posix-gap-closure-v2 test-isolation-baseline-v1 test-namespace-cgroup-v1 \
-       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-native-driver-live-v1 test-x2-hardware-runtime-v1 test-x3-platform-runtime-v1 test-native-storage-v1 test-native-storage-live-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 test-desktop-profile-runtime-v1 \
+       test-hw-firmware-smp-v1 test-native-driver-matrix-v1 test-hw-matrix-v6 test-virtio-platform-v1 test-baremetal-io-baseline-v1 test-usb-input-removable-v1 test-hw-claim-promotion-v1 test-hw-support-tier-audit-v1 test-display-runtime-v1 test-scanout-path-v1 test-input-seat-v1 test-hid-event-path-v1 test-window-system-v1 test-compositor-damage-v1 test-gui-runtime-v1 test-toolkit-compat-v1 test-desktop-shell-v1 test-desktop-workflows-v1 test-native-driver-contract-v1 test-native-driver-diagnostics-v1 test-native-driver-live-v1 test-x2-hardware-runtime-v1 test-x3-platform-runtime-v1 test-native-storage-v1 test-native-storage-live-v1 test-hw-matrix-v7 test-real-ecosystem-desktop-v2 test-real-app-catalog-v2 test-desktop-profile-runtime-v1 test-product-alpha-v1 \
        help kernel kernel-only kernel-demo userspace userspace-go userspace-std userspace-desktop image-kernel image-demo image-std image-desktop boot-kernel boot-demo boot-std boot-desktop smoke-kernel smoke-demo smoke-std smoke-desktop gate-all \
        run run-kernel demo demo-go validate test-qemu test-hw-matrix test-hw-matrix-v2 test-hw-matrix-v3 test-hw-matrix-v4 repro-check clean legacy docker-all docker-legacy
 
@@ -118,6 +118,8 @@ NATIVE_BLK_TARGET_DIR = kernel_rs/target/native-blk
 NATIVE_BLK_KERNEL_LIB = $(NATIVE_BLK_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_kernel.a
 NATIVE_GO_TARGET_DIR = kernel_rs/target/native-go
 NATIVE_GO_KERNEL_LIB = $(NATIVE_GO_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_kernel.a
+NATIVE_GO_DESKTOP_TARGET_DIR = kernel_rs/target/native-go-desktop
+NATIVE_GO_DESKTOP_KERNEL_LIB = $(NATIVE_GO_DESKTOP_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_kernel.a
 
 # --- Targets ------------------------------------------------------------------
 
@@ -573,6 +575,13 @@ build-go-desktop: $(ASM_OBJS) boot/linker.ld $(GO_DESKTOP_BIN)
 
 image-go-desktop: build-go-desktop
 	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go-desktop.elf ISO_NAME=os-go-desktop.iso bash tools/mkimage.sh
+
+build-go-desktop-native: $(ASM_OBJS) boot/linker.ld $(GO_DESKTOP_BIN)
+	cd kernel_rs && CARGO_TARGET_DIR=target/native-go-desktop $(CARGO) build --release --features go_desktop_test,native_go_test
+	$(LD) $(LDFLAGS) -o $(OUT)/kernel-go-desktop-native.elf $(ASM_OBJS) $(NATIVE_GO_DESKTOP_KERNEL_LIB)
+
+image-go-desktop-native: build-go-desktop-native
+	PATH="$(WSL_PATH)" CC="$(CC)" XORRISO="$(XORRISO)" KERNEL_ELF=kernel-go-desktop-native.elf ISO_NAME=os-go-desktop-native.iso bash tools/mkimage.sh
 
 build-compat-real: $(ASM_OBJS) boot/linker.ld $(GO_USER_BIN) $(X1_CLI_FILE_ELF) $(X1_PROC_SOCK_ELF)
 	cd kernel_rs && $(CARGO) build --release --features compat_real_test
@@ -1114,6 +1123,10 @@ test-desktop-profile-runtime-v1: image-go-desktop
 	$(PYTHON) tools/run_desktop_profile_runtime_v1.py --image $(OUT)/os-go-desktop.iso --kernel $(OUT)/kernel-go-desktop.elf --runtime-capture-out $(OUT)/desktop-profile-capture-v1.json --emit-supporting-reports --supporting-dir $(OUT) --out $(OUT)/desktop-profile-runtime-v1.json
 	$(PYTHON) -m pytest tests/desktop/test_desktop_profile_runtime_docs_v1.py tests/desktop/test_desktop_profile_runtime_v1.py tests/desktop/test_desktop_profile_runtime_gate_v1.py -v --junitxml=$(OUT)/pytest-desktop-profile-runtime-v1.xml
 
+test-product-alpha-v1: image-go-desktop-native image-panic
+	$(PYTHON) tools/run_product_alpha_qualification_v1.py --image $(OUT)/os-go-desktop-native.iso --kernel $(OUT)/kernel-go-desktop-native.elf --panic-image $(OUT)/os-panic.iso --runtime-capture-out $(OUT)/product-alpha-runtime-capture-v1.json --artifact-dir $(OUT) --supporting-dir $(OUT)/product-alpha-supporting --emit-supporting-reports --out $(OUT)/product-alpha-v1.json
+	$(PYTHON) -m pytest tests/build/test_product_alpha_docs_v1.py tests/build/test_product_alpha_qualification_v1.py tests/build/test_product_alpha_gate_v1.py -v --junitxml=$(OUT)/pytest-product-alpha-v1.xml
+
 repro-check:
 	@set -e; \
 	OUT1="$(OUT)/repro-1"; \
@@ -1144,6 +1157,7 @@ help:
 		'  make boot-desktop - boot the desktop-profile ISO in QEMU' \
 		'  make smoke-demo   - boot the demo ISO and verify serial markers without Python' \
 		'  make smoke-desktop - boot the desktop ISO and verify desktop markers without Python' \
+		'  make test-product-alpha-v1 - boot and qualify the alpha product candidate on the native desktop image' \
 		'  make image-std    - build the supported stock-Go ISO' \
 		'  make boot-std     - boot the supported stock-Go ISO in QEMU' \
 		'  make smoke-std    - boot the stock-Go ISO and verify serial markers without Python' \
