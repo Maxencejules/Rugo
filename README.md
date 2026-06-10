@@ -55,6 +55,11 @@ Visible proof paths:
   memory foundation: Limine-memmap frame allocator, kernel heap self-test,
   and the demand-paged user heap window touched live from Go init.
   Proof: `tests/mm/test_mm_foundation_v1.py`, contract `docs/runtime/memory_v1.md`
+- `make test-sched-preempt-v1`
+  Boots the default Go image and verifies PIT-driven preemption of user
+  tasks in the product lane, including the preemption-safe init protocol.
+  Proof: `tests/sched/test_preempt_default_lane_v1.py`, contract
+  `docs/runtime/scheduler_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

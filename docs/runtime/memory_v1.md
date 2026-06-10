@@ -38,8 +38,13 @@ kernel heap, and demand paging.
 - Quota: 1024 frames (4 MiB) for now. Faults beyond the quota, outside the
   window, or on already-present pages fall through to the existing
   user-fault containment path (task is killed).
-- Kernel-mode touches of unmapped window pages stay fatal by design: user
-  space must touch a page before passing it into a syscall.
+- Syscall pointer validation **pre-maps** window pages exactly as the fault
+  path would: freshly allocated, never-touched memory is a valid syscall
+  buffer. Other kernel-mode touches of unmapped pages stay fatal.
+- Layout within the window: `[0x0100_0000, 0x0101_0000)` is the boot-time
+  demand probe; the TinyGo userspace bump heap starts at `0x0110_0000`
+  (`services/go/start.asm`, atomic `lock xadd` bump, pages arrive zeroed
+  from the fault path).
 
 ## Marker contract
 
@@ -50,7 +55,7 @@ kernel heap, and demand paging.
 | `MM: heap ok size=0x<16-digit hex>` | kernel heap window reserved |
 | `MM: heap none` | contiguous heap window unavailable |
 | `MM: heap selftest ok` / `... err` | boot-time Box/Vec alloc-free-reuse check |
-| `MM: demand map va=0x<page>` | one window page mapped on first touch |
+| `MM: demand map va=0x<page>` | one probe-range page mapped on first touch (heap pages above `0x0110_0000` map silently so workload-dependent counts never perturb marker assertions) |
 | `GOINIT: mem demand ok` / `... err` | Go init touched 16 window pages successfully |
 
 All markers are asserted in order by `tests/mm/test_mm_foundation_v1.py`
