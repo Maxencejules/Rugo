@@ -52,3 +52,18 @@ def test_heap_boot_marker_go_lane(qemu_serial_go):
         "MM: heap selftest ok",
         "GOINIT: ready",
     ])
+
+
+def test_demand_paging_go_lane(qemu_serial_go):
+    out = qemu_serial_go.stdout
+    _find_in_order(out, [
+        "GOINIT: bootstrap",
+        "MM: demand map va=0x",
+        "GOINIT: mem demand ok",
+        "GOINIT: svcmgr up",
+        "GOINIT: ready",
+        "RUGO: halt ok",
+    ])
+    assert out.count("MM: demand map va=0x") == 16
+    assert "GOINIT: mem demand err" not in out
+    assert "USERPF:" not in out

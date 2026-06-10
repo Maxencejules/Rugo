@@ -278,6 +278,7 @@ func bootRuntime() {
 	}
 
 	log(msgGoInitBootstrap[:])
+	runMemDemandProbe()
 
 	var order [serviceCount]byte
 	if !buildStartPlan(&order) {
