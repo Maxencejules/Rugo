@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 const (
 	sysErr  = ^uintptr(0)
@@ -91,6 +91,8 @@ type serviceSpec struct {
 var (
 	spawnEntry      uintptr
 	spawnServiceID  uintptr
+	spawnAck        uintptr
+	serviceGoFlag   [serviceCount]byte
 	bootFailed      uintptr
 	bootOperational uintptr
 	shutdownStarted uintptr
@@ -131,7 +133,7 @@ var serviceManifest = [...]serviceSpec{
 		required:     requiredBoot,
 		deps:         0,
 		phase:        phaseCore,
-		startBudget:  8,
+		startBudget:  32,
 		restartLimit: 3,
 		stopCmd:      cmdStop,
 	},
@@ -143,7 +145,7 @@ var serviceManifest = [...]serviceSpec{
 		required:     requiredBoot,
 		deps:         1 << serviceTime,
 		phase:        phaseServices,
-		startBudget:  8,
+		startBudget:  32,
 		restartLimit: 3,
 		stopCmd:      cmdStop,
 	},
@@ -155,7 +157,7 @@ var serviceManifest = [...]serviceSpec{
 		required:     requiredBoot,
 		deps:         (1 << serviceTime) | (1 << serviceDiag),
 		phase:        phaseSession,
-		startBudget:  12,
+		startBudget:  48,
 		restartLimit: 2,
 		stopCmd:      0,
 	},
@@ -167,7 +169,7 @@ var serviceManifest = [...]serviceSpec{
 		required:     requiredOptional,
 		deps:         1 << serviceTime,
 		phase:        phaseServices,
-		startBudget:  8,
+		startBudget:  32,
 		restartLimit: 3,
 		stopCmd:      cmdStop,
 	},
@@ -519,6 +521,14 @@ func depsReady(mask byte) bool {
 func launchService(serviceID uintptr) bool {
 	for {
 		setServiceState(serviceID, stateStarting)
+		// Spawn handshake: the child latches its identity and acks, then
+		// holds at a gate until isolation and scheduling are applied.
+		// Under preemption the child can run at any instruction after
+		// sysThreadSpawn; without the gate it could act before limits
+		// exist, and without the ack a wedge path could overwrite
+		// spawnServiceID while the child had not yet read it.
+		spawnAck = 0
+		serviceGoFlag[serviceID] = 0
 		spawnServiceID = serviceID
 		tid := sysThreadSpawn(spawnEntry)
 		if tid == sysErr {
@@ -526,6 +536,16 @@ func launchService(serviceID uintptr) bool {
 			setServiceState(serviceID, stateFailed)
 			serviceTasks[serviceID] = taskUnset
 		} else {
+			ackBudget := uintptr(64)
+			for spawnAck == 0 && ackBudget > 0 {
+				if sysYield() != 0 {
+					fail(msgSvcMgrErr[:])
+				}
+				ackBudget--
+			}
+			if spawnAck == 0 {
+				fail(msgSvcMgrErr[:])
+			}
 			serviceTasks[serviceID] = byte(tid)
 			if !applyServiceIsolation(serviceID, tid) {
 				fail(msgSvcMgrErr[:])
@@ -533,6 +553,7 @@ func launchService(serviceID uintptr) bool {
 			if !applyServiceScheduling(serviceID, tid) {
 				fail(msgSvcMgrErr[:])
 			}
+			serviceGoFlag[serviceID] = 1
 		}
 
 		budget := uintptr(serviceManifest[serviceID].startBudget)
@@ -693,15 +714,20 @@ func requestServiceStop(serviceID uintptr) bool {
 		return false
 	}
 
+	// Log and publish `stopping` BEFORE delivering the stop command.
+	// Under preemption the child can wake, stop, and exit the instant
+	// the IPC lands; writing `stopping` afterwards would overwrite the
+	// child's `stopped` and make a clean shutdown look like a failure.
+	logServiceAction(msgSvcMgrStop[:], serviceID)
+	setServiceResult(serviceID, serviceResultOrderedStop)
+	setServiceState(serviceID, stateStopping)
+
 	req := [1]byte{stopCmd}
 	if sysIpcSend(ep, &req[0], 1) == sysErr {
 		setServiceResult(serviceID, serviceResultShutdownError)
 		return false
 	}
 
-	logServiceAction(msgSvcMgrStop[:], serviceID)
-	setServiceResult(serviceID, serviceResultOrderedStop)
-	setServiceState(serviceID, stateStopping)
 	return true
 }
 
@@ -711,8 +737,10 @@ func setServiceState(serviceID uintptr, state byte) {
 		return
 	}
 
-	serviceStates[serviceID] = state
-	serviceLastTick[serviceID] = runtimeTick()
+	// Emit the line BEFORE publishing the state byte: observers react to
+	// the byte, so under preemption a post-publish log could land after
+	// the observer's own output.
+	logServiceState(serviceID, state)
 
 	switch state {
 	case stateStarting:
@@ -724,32 +752,39 @@ func setServiceState(serviceID uintptr, state byte) {
 		setServiceResult(serviceID, serviceResultForFailure(serviceResults[serviceID]))
 	}
 
-	logServiceState(serviceID, state)
+	serviceStates[serviceID] = state
+	serviceLastTick[serviceID] = runtimeTick()
 }
 
 func logServiceState(serviceID uintptr, state byte) {
-	log(msgServicePrefix[:])
-	log(serviceManifest[serviceID].name)
-	log(msgSpace[:])
-	log(stateLabel(state))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgServicePrefix[:])
+	lb.add(serviceManifest[serviceID].name)
+	lb.add(msgSpace[:])
+	lb.add(stateLabel(state))
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
 func logServiceAction(prefix []byte, serviceID uintptr) {
-	log(prefix)
-	log(serviceManifest[serviceID].name)
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(prefix)
+	lb.add(serviceManifest[serviceID].name)
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
 func logServiceStateAction(prefix []byte, serviceID uintptr, state byte) {
-	log(prefix)
-	log(serviceManifest[serviceID].name)
-	log(msgSpace[:])
-	log(stateLabel(state))
-	log(msgSpace[:])
-	log(msgMetricResult[:])
-	log(serviceResultLabel(serviceResults[serviceID]))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(prefix)
+	lb.add(serviceManifest[serviceID].name)
+	lb.add(msgSpace[:])
+	lb.add(stateLabel(state))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricResult[:])
+	lb.add(serviceResultLabel(serviceResults[serviceID]))
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
 func applyServiceIsolation(serviceID uintptr, tid uintptr) bool {
@@ -784,11 +819,13 @@ func applyServiceScheduling(serviceID uintptr, tid uintptr) bool {
 	if sysSchedSet(tid, class) == sysErr {
 		return false
 	}
-	log(msgSvcMgrClass[:])
-	log(serviceManifest[serviceID].name)
-	log(msgSpace[:])
-	log(schedClassLabel(class))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgSvcMgrClass[:])
+	lb.add(serviceManifest[serviceID].name)
+	lb.add(msgSpace[:])
+	lb.add(schedClassLabel(class))
+	lb.add(msgNewline[:])
+	lb.emit()
 	return true
 }
 
@@ -797,39 +834,43 @@ func logManagerPhase(phase byte, phaseLogged *[phaseCount]byte) {
 		return
 	}
 	phaseLogged[phase] = 1
-	log(msgSvcMgrPhase[:])
-	log(phaseLabel(phase))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgSvcMgrPhase[:])
+	lb.add(phaseLabel(phase))
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
 func logServicePlan(serviceID uintptr) {
 	spec := serviceManifest[serviceID]
 
-	log(msgSvcMgrPlan[:])
-	log(spec.name)
-	log(msgSpace[:])
-	log(msgMetricRole[:])
-	log(spec.role)
-	log(msgSpace[:])
-	log(msgMetricPhase[:])
-	log(phaseLabel(spec.phase))
-	log(msgSpace[:])
-	log(msgMetricNeed[:])
-	log(requiredLabel(spec.required))
-	log(msgSpace[:])
-	log(msgMetricDeps[:])
-	logDeps(spec.deps)
-	log(msgSpace[:])
-	log(msgMetricPolicy[:])
-	log(policyLabel(spec.policy))
-	log(msgSlash[:])
-	logUint(uintptr(spec.restartLimit))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgSvcMgrPlan[:])
+	lb.add(spec.name)
+	lb.add(msgSpace[:])
+	lb.add(msgMetricRole[:])
+	lb.add(spec.role)
+	lb.add(msgSpace[:])
+	lb.add(msgMetricPhase[:])
+	lb.add(phaseLabel(spec.phase))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricNeed[:])
+	lb.add(requiredLabel(spec.required))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricDeps[:])
+	addDeps(&lb, spec.deps)
+	lb.add(msgSpace[:])
+	lb.add(msgMetricPolicy[:])
+	lb.add(policyLabel(spec.policy))
+	lb.add(msgSlash[:])
+	lb.addUint(uintptr(spec.restartLimit))
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
-func logDeps(mask byte) {
+func addDeps(lb *lineBuilder, mask byte) {
 	if mask == 0 {
-		log(msgDepsNone[:])
+		lb.add(msgDepsNone[:])
 		return
 	}
 
@@ -840,9 +881,9 @@ func logDeps(mask byte) {
 			continue
 		}
 		if !first {
-			log(msgComma[:])
+			lb.add(msgComma[:])
 		}
-		log(serviceManifest[serviceID].name)
+		lb.add(serviceManifest[serviceID].name)
 		first = false
 	}
 }
@@ -954,9 +995,11 @@ func managerError(result byte) byte {
 }
 
 func logInitResult(result byte) {
-	log(msgGoInitResult[:])
-	log(initResultLabel(result))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgGoInitResult[:])
+	lb.add(initResultLabel(result))
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
 func initResultLabel(result byte) []byte {
@@ -1057,30 +1100,32 @@ func logUint(value uintptr) {
 }
 
 func logServiceSnapshot(serviceID uintptr) {
-	log(msgProcPrefix[:])
-	log(serviceManifest[serviceID].name)
-	log(msgSpace[:])
-	log(msgMetricStarts[:])
-	logUint(uintptr(serviceStarts[serviceID]))
-	log(msgSpace[:])
-	log(msgMetricRest[:])
-	logUint(uintptr(serviceRestarts[serviceID]))
-	log(msgSpace[:])
-	log(msgMetricFail[:])
-	logUint(uintptr(serviceFailures[serviceID]))
-	log(msgSpace[:])
-	log(msgMetricReaps[:])
-	logUint(uintptr(serviceReaps[serviceID]))
-	log(msgSpace[:])
-	log(msgMetricTick[:])
-	logUint(serviceLastTick[serviceID])
-	log(msgSpace[:])
-	log(msgMetricSvc[:])
-	log(stateLabel(serviceStates[serviceID]))
-	log(msgSpace[:])
-	log(msgMetricResult[:])
-	log(serviceResultLabel(serviceResults[serviceID]))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgProcPrefix[:])
+	lb.add(serviceManifest[serviceID].name)
+	lb.add(msgSpace[:])
+	lb.add(msgMetricStarts[:])
+	lb.addUint(uintptr(serviceStarts[serviceID]))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricRest[:])
+	lb.addUint(uintptr(serviceRestarts[serviceID]))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricFail[:])
+	lb.addUint(uintptr(serviceFailures[serviceID]))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricReaps[:])
+	lb.addUint(uintptr(serviceReaps[serviceID]))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricTick[:])
+	lb.addUint(serviceLastTick[serviceID])
+	lb.add(msgSpace[:])
+	lb.add(msgMetricSvc[:])
+	lb.add(stateLabel(serviceStates[serviceID]))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricResult[:])
+	lb.add(serviceResultLabel(serviceResults[serviceID]))
+	lb.add(msgNewline[:])
+	lb.emit()
 }
 
 func logKernelTaskSnapshot(serviceID uintptr) bool {
@@ -1094,57 +1139,68 @@ func logKernelTaskSnapshot(serviceID uintptr) bool {
 		return false
 	}
 
-	log(msgTaskPrefix[:])
-	log(serviceManifest[serviceID].name)
-	log(msgSpace[:])
-	log(msgMetricTid[:])
-	logUint(uintptr(info.TID))
-	log(msgSpace[:])
-	log(msgMetricParent[:])
-	logUint(uintptr(info.ParentTID))
-	log(msgSpace[:])
-	log(msgMetricClass[:])
-	log(schedClassLabel(uintptr(info.SchedClass)))
-	log(msgSpace[:])
-	log(msgMetricState[:])
-	log(taskStateLabel(info.State))
-	log(msgSpace[:])
-	log(msgMetricRun[:])
-	logUint(uintptr(info.DispatchCount))
-	log(msgSpace[:])
-	log(msgMetricYield[:])
-	logUint(uintptr(info.YieldCount))
-	log(msgSpace[:])
-	log(msgMetricBlock[:])
-	logUint(uintptr(info.BlockCount))
-	log(msgSpace[:])
-	log(msgMetricSend[:])
-	logUint(uintptr(info.IpcSendCount))
-	log(msgSpace[:])
-	log(msgMetricRecv[:])
-	logUint(uintptr(info.IpcRecvCount))
-	log(msgSpace[:])
-	log(msgMetricEp[:])
-	logUint(uintptr(info.EndpointCount))
-	log(msgSpace[:])
-	log(msgMetricDomain[:])
-	logUint(uintptr(info.DomainID))
-	log(msgSpace[:])
-	log(msgMetricCap[:])
-	logUint(uintptr(info.CapabilityFlags))
-	log(msgSpace[:])
-	log(msgMetricFd[:])
-	logUint(uintptr(info.FdCount))
-	log(msgSpace[:])
-	log(msgMetricSock[:])
-	logUint(uintptr(info.SocketCount))
-	log(msgNewline[:])
+	var lb lineBuilder
+	lb.add(msgTaskPrefix[:])
+	lb.add(serviceManifest[serviceID].name)
+	lb.add(msgSpace[:])
+	lb.add(msgMetricTid[:])
+	lb.addUint(uintptr(info.TID))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricParent[:])
+	lb.addUint(uintptr(info.ParentTID))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricClass[:])
+	lb.add(schedClassLabel(uintptr(info.SchedClass)))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricState[:])
+	lb.add(taskStateLabel(info.State))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricRun[:])
+	lb.addUint(uintptr(info.DispatchCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricYield[:])
+	lb.addUint(uintptr(info.YieldCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricBlock[:])
+	lb.addUint(uintptr(info.BlockCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricSend[:])
+	lb.addUint(uintptr(info.IpcSendCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricRecv[:])
+	lb.addUint(uintptr(info.IpcRecvCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricEp[:])
+	lb.addUint(uintptr(info.EndpointCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricDomain[:])
+	lb.addUint(uintptr(info.DomainID))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricCap[:])
+	lb.addUint(uintptr(info.CapabilityFlags))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricFd[:])
+	lb.addUint(uintptr(info.FdCount))
+	lb.add(msgSpace[:])
+	lb.add(msgMetricSock[:])
+	lb.addUint(uintptr(info.SocketCount))
+	lb.add(msgNewline[:])
+	lb.emit()
 	return true
 }
 
 //export goSpawnedThreadMain
 func goSpawnedThreadMain() {
-	switch spawnServiceID {
+	// Latch identity first, ack the supervisor, then wait at the gate
+	// until isolation and scheduling are configured for this task.
+	serviceID := spawnServiceID
+	spawnAck = 1
+	for serviceGoFlag[serviceID] == 0 {
+		if sysYield() != 0 {
+			fail(msgGoInitErr[:])
+		}
+	}
+	switch serviceID {
 	case serviceTime:
 		timeServiceMain()
 	case serviceDiag:

@@ -67,9 +67,11 @@ func consoleReadLine(buf []byte) (uintptr, bool) {
 		var ch [1]byte
 		n := sysRead(0, &ch[0], 1)
 		if n != 1 {
-			log(msgShellReadErr)
-			logUint(n)
-			log(msgShellNewline)
+			var lb lineBuilder
+			lb.add(msgShellReadErr)
+			lb.addUint(n)
+			lb.add(msgShellNewline)
+			lb.emit()
 			return 0, false
 		}
 

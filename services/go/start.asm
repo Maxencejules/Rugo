@@ -4,13 +4,25 @@
 bits 64
 default rel
 
-%define GO_HEAP_PTR  0x7F4000
-%define GO_HEAP_BASE 0x7F4008
+; TinyGo bump heap lives in the kernel's demand-paged window
+; [0x100_0000, 0x180_0000). Pages are zero-filled on first touch by the
+; page-fault handler, so allocations come back zeroed without an explicit
+; memset. The old fixed heap at 0x7F4000 shared its 16 KiB with the
+; spawned tasks' stacks (stack tops at 0x7F8000 and up) and overflowed
+; into them once per-line log buffers landed on the heap.
+; 0x110_0000 leaves the first 1 MiB of the window to the boot-time
+; demand probe.
+%define GO_HEAP_PTR  0x1100000
+%define GO_HEAP_BASE 0x1100008
 
 section .text._start
 global _start
 extern main
 _start:
+    ; Seed the bump-heap pointer while still single-threaded; the first
+    ; write demand-maps the page.
+    mov  rax, GO_HEAP_BASE
+    mov  qword [abs GO_HEAP_PTR], rax
     call main
     jmp main.haltForever
 
@@ -209,15 +221,13 @@ main.haltForever:
 
 global runtime.alloc
 runtime.alloc:
-    mov  rax, qword [abs GO_HEAP_PTR]
-    test rax, rax
-    jnz  .has_ptr
-    mov  rax, GO_HEAP_BASE
-.has_ptr:
+    ; Atomic bump: tasks can be preempted mid-allocation, so the
+    ; read-modify-write must be one instruction. xadd returns the old
+    ; pointer (the allocation start) in rdi; the cell is seeded by _start.
     add  rdi, 7
     and  rdi, ~7
-    lea  rdx, [rax + rdi]
-    mov  qword [abs GO_HEAP_PTR], rdx
+    lock xadd qword [abs GO_HEAP_PTR], rdi
+    mov  rax, rdi
     ret
 
 global getrandom
