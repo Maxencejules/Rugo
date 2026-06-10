@@ -25,6 +25,7 @@ Architecture and roadmap:
 - overview: [docs/architecture/README.md](docs/architecture/README.md)
 - repo strategy: [docs/architecture/repo-strategy.md](docs/architecture/repo-strategy.md)
 - v1 product definition: [docs/RUGO_V1_PRODUCT.md](docs/RUGO_V1_PRODUCT.md)
+- default shell-lane Alpha definition: [docs/build/default_alpha_base_os_v1.md](docs/build/default_alpha_base_os_v1.md)
 - roadmap summary: [docs/roadmap/README.md](docs/roadmap/README.md)
 - milestone framework: [docs/roadmap/MILESTONE_FRAMEWORK.md](docs/roadmap/MILESTONE_FRAMEWORK.md)
 
@@ -34,7 +35,7 @@ The front door of this repo is the live Rust-kernel plus Go-userspace lane.
 
 Visible proof paths:
 - `make image-demo` then `make boot-demo`
-  Boots `goinit -> gosvcm -> timesvc -> diagsvc/pkgsvc -> shell` on the default TinyGo lane.
+  Boots `goinit -> gosvcm -> timesvc -> diagsvc/pkgsvc -> shell` on the default TinyGo lane with the declared q35 + virtio disk/net shell profile.
   Proof: `tests/go/test_go_user_service.py`
 - `make image-kernel` then `make boot-kernel`
   Boots the kernel-only lane for boot, paging, trap, and scheduler work.
@@ -142,8 +143,8 @@ make help         # show the primary developer workflows
 make kernel       # build the Rust kernel ELF
 make userspace    # build the default TinyGo userspace payload
 make image-demo   # build the default demo ISO
-make boot-demo    # boot the default demo ISO in QEMU
-make smoke-demo   # boot + verify demo serial markers without Python
+make boot-demo    # boot the default demo ISO as the persistent q35 shell target
+make smoke-demo   # drive the shell's health + shutdown path and verify markers
 make test-product-alpha-v1 # qualify the alpha candidate native desktop image
 make image-std    # build the supported stock-Go ISO
 make boot-std     # boot the supported stock-Go ISO in QEMU

@@ -45,26 +45,13 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "SVC: shell starting",
             "GOSVCM: class shell best-effort",
             "GOSH: start",
-            "GOSH: recycle",
-            "SVC: shell failed",
-            "GOSVCM: reap shell failed",
-            "GOSVCM: restart shell",
-            "SVC: shell starting",
-            "GOSVCM: class shell best-effort",
-            "GOSH: start",
-            "GOSH: recycle",
-            "SVC: shell failed",
-            "GOSVCM: reap shell failed",
-            "GOSVCM: restart shell",
-            "SVC: shell starting",
-            "GOSVCM: class shell best-effort",
-            "GOSH: start",
             "SVC: shell running",
+            "SVC: shell ready",
+            "GOSH: session ready",
             "GOSH: lookup ok",
             "GOSH: recv deny",
             "GOSH: reg deny",
             "GOSH: spawn deny",
-            "SVC: shell ready",
             "TIMESVC: req ok",
             "TIMESVC: time ok",
             "GOSH: reply ok",
@@ -99,18 +86,18 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
 
     assert serial.count("GOSVCM: plan ") == 4
     assert serial.count("GOSVCM: phase ") == 4
-    assert serial.count("SVC: shell starting") == 3
-    assert serial.count("GOSVCM: class shell best-effort") == 3
+    assert serial.count("SVC: shell starting") == 1
+    assert serial.count("GOSVCM: class shell best-effort") == 1
     assert serial.count("GOSVCM: class timesvc critical") == 1
-    assert serial.count("GOSVCM: restart shell") == 2
-    assert serial.count("GOSVCM: reap shell") == 3
-    assert serial.count("GOSH: recycle") == 2
-    assert serial.count("SVC: shell failed") == 2
+    assert serial.count("GOSVCM: restart shell") == 0
+    assert serial.count("GOSVCM: reap shell") == 1
+    assert serial.count("GOSH: crash") == 0
+    assert serial.count("SVC: shell failed") == 0
 
     assert serial.count("SVC: timesvc starting") == 1
     assert serial.count("SVC: timesvc running") == 1
     assert serial.count("SVC: timesvc ready") == 1
-    assert serial.count("SVC: shell running") == 3
+    assert serial.count("SVC: shell running") == 1
     assert serial.count("SVC: shell ready") == 1
     assert serial.count("SVC: shell stopped") == 1
     assert serial.count("SVC: timesvc stopped") == 1

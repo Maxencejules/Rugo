@@ -313,6 +313,17 @@ fn serial_write(s: &[u8]) {
     }
 }
 
+fn serial_can_read() -> bool {
+    unsafe { inb(COM1 + 5) & 0x01 != 0 }
+}
+
+fn serial_read_byte() -> u8 {
+    unsafe {
+        while inb(COM1 + 5) & 0x01 == 0 {}
+        inb(COM1)
+    }
+}
+
 fn serial_write_hex(val: u64) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut buf = [b'0'; 16];
@@ -653,7 +664,22 @@ cfg_m3! {
 
         match M8_FD_TABLE[idx].kind {
             M8FdKind::Free => 0xFFFF_FFFF_FFFF_FFFF,
-            M8FdKind::Console => 0xFFFF_FFFF_FFFF_FFFF,
+            M8FdKind::Console => {
+                let n = len as usize;
+                if n > 256 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let mut kbuf = [0u8; 256];
+                let mut read = 0usize;
+                while read < n {
+                    kbuf[read] = serial_read_byte();
+                    read += 1;
+                }
+                if copyout_user(buf, &kbuf[..read], read).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                read as u64
+            }
             M8FdKind::CompatFile => {
                 let off = M8_FD_TABLE[idx].offset;
                 if off >= M8_COMPAT_FILE.len() {
@@ -934,6 +960,9 @@ cfg_m3! {
                     match M8_FD_TABLE[idx].kind {
                         M8FdKind::Free => revents |= POLLERR,
                         M8FdKind::Console => {
+                            if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 && serial_can_read() {
+                                revents |= POLLIN;
+                            }
                             if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
                                 revents |= POLLOUT;
                             }
@@ -1284,18 +1313,7 @@ cfg_m3! {
         USER_STACK_TOP - (slot as u64) * 0x1000
     }
 
-    unsafe fn m3_reset_state() {
-        M3_CURRENT = 0;
-        M3_THREADING_ACTIVE = false;
-        M8_WAIT_HAS_EXIT = false;
-        M8_WAIT_EXIT_STATUS = 0;
-        M10_SEC_PROFILE = M10SecProfile::Default;
-        for i in 0..M3_MAX_THREADS {
-            M3_THREADS[i] = M3Thread::EMPTY;
-        }
-        for i in 0..M3_MAX_VM_MAPS {
-            M3_VM_MAPS[i] = M3VmMap::EMPTY;
-        }
+    unsafe fn m8_reset_fd_table() {
         for i in 0..M8_FD_MAX {
             M8_FD_TABLE[i] = M8FdEntry::EMPTY;
         }
@@ -1319,6 +1337,21 @@ cfg_m3! {
             offset: 0,
             owner_tid: 0,
         };
+    }
+
+    unsafe fn m3_reset_state() {
+        M3_CURRENT = 0;
+        M3_THREADING_ACTIVE = false;
+        M8_WAIT_HAS_EXIT = false;
+        M8_WAIT_EXIT_STATUS = 0;
+        M10_SEC_PROFILE = M10SecProfile::Default;
+        for i in 0..M3_MAX_THREADS {
+            M3_THREADS[i] = M3Thread::EMPTY;
+        }
+        for i in 0..M3_MAX_VM_MAPS {
+            M3_VM_MAPS[i] = M3VmMap::EMPTY;
+        }
+        m8_reset_fd_table();
     }
 
     unsafe fn m3_bootstrap_main_thread(frame: *mut u64) {
@@ -1400,7 +1433,7 @@ cfg_m3! {
     fn m10_rights_for_kind(kind: M8FdKind) -> u64 {
         match kind {
             M8FdKind::Free => 0,
-            M8FdKind::Console => M10_RIGHT_WRITE | M10_RIGHT_POLL,
+            M8FdKind::Console => M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL,
             M8FdKind::CompatFile => M10_RIGHT_READ | M10_RIGHT_POLL,
             M8FdKind::JournalFile => M10_RIGHT_WRITE | M10_RIGHT_POLL,
             M8FdKind::StateFile => M10_RIGHT_READ | M10_RIGHT_POLL,
@@ -1637,6 +1670,8 @@ cfg_m3! {
             4 => Some(USER_CODE_PAGE_5.0.as_mut_ptr()),
             #[cfg(feature = "go_test")]
             5 => Some(USER_CODE_PAGE_6.0.as_mut_ptr()),
+            #[cfg(feature = "go_test")]
+            6 => Some(USER_CODE_PAGE_7.0.as_mut_ptr()),
             _ => None,
         }
     }
@@ -1789,6 +1824,7 @@ cfg_m3! {
             *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | code_flags;
             *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
             *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
         }
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
@@ -2074,6 +2110,8 @@ cfg_r4! {
     static mut USER_CODE_PAGE_5:  Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
     static mut USER_CODE_PAGE_6:  Page = Page([0; 4096]);
+    #[cfg(feature = "go_test")]
+    static mut USER_CODE_PAGE_7:  Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
     static mut USER_STACK_PAGE_5: Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
@@ -3219,6 +3257,7 @@ cfg_r4! {
         *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | code_flags;
         *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
         *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
         *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
@@ -3280,6 +3319,7 @@ cfg_r4! {
         *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | code_flags;
         *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
         *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
         *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
@@ -3303,6 +3343,7 @@ cfg_r4! {
         core::ptr::write_bytes(USER_CODE_PAGE_4.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
         core::ptr::write_bytes(USER_CODE_PAGE_5.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
         core::ptr::write_bytes(USER_CODE_PAGE_6.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_7.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
 
         let chunks = [
             runtime::process::go_image_chunk(blob, 0),
@@ -3311,6 +3352,7 @@ cfg_r4! {
             runtime::process::go_image_chunk(blob, 3),
             runtime::process::go_image_chunk(blob, 4),
             runtime::process::go_image_chunk(blob, 5),
+            runtime::process::go_image_chunk(blob, 6),
         ];
         let pages = [
             USER_CODE_PAGE.0.as_mut_ptr(),
@@ -3319,6 +3361,7 @@ cfg_r4! {
             USER_CODE_PAGE_4.0.as_mut_ptr(),
             USER_CODE_PAGE_5.0.as_mut_ptr(),
             USER_CODE_PAGE_6.0.as_mut_ptr(),
+            USER_CODE_PAGE_7.0.as_mut_ptr(),
         ];
         for i in 0..runtime::process::GO_IMAGE_MAX_PAGES {
             if chunks[i].is_empty() {
@@ -5469,11 +5512,41 @@ pub extern "C" fn kmain() -> ! {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
         net::r4_c4_runtime_init();
+        m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;
         #[cfg(not(feature = "go_desktop_test"))]
         let go_user_bin = GO_USER_BIN;
         setup_go_user_pages(go_user_bin);
+        if !user_pages_ok(
+            USER_CODE_VA,
+            runtime::process::GO_IMAGE_MAX_BYTES,
+            USER_PERM_READ | USER_PERM_WRITE,
+        ) {
+            for page_idx in 0..runtime::process::GO_IMAGE_MAX_PAGES {
+                let page_va = USER_CODE_VA
+                    + (page_idx * runtime::process::GO_IMAGE_PAGE_SIZE) as u64;
+                if !check_page_user_perms(
+                    page_va,
+                    HHDM_OFFSET,
+                    USER_PERM_READ | USER_PERM_WRITE,
+                ) {
+                    serial_write(b"GO: missing page idx=0x");
+                    serial_write_hex(page_idx as u64);
+                    serial_write(b" va=0x");
+                    serial_write_hex(page_va);
+                    serial_write(b" pte=0x");
+                    match m3_user_pte_ptr(page_va) {
+                        Some(pte) => serial_write_hex(*pte),
+                        None => serial_write(b"NONE"),
+                    }
+                    serial_write(b"\n");
+                }
+            }
+            serial_write(b"GO: user map invalid\n");
+            qemu_exit(0x33);
+            loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
+        }
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         R4_TASKS[0].state = R4State::Running;

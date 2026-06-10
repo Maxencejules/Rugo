@@ -82,7 +82,8 @@ Runtime-backed boot evidence:
   is exercised by the real service manager rather than only by model tests.
 - `tests/runtime/test_process_scheduler_runtime_v2.py` verifies that the same
   init path blocks in `sys_wait`, reaps child services, performs bounded
-  restart on the live booted system, and emits the explicit shutdown phase.
+  restart through the shell's explicit `crash` command on the live booted
+  system, and emits the explicit shutdown phase.
 - `tests/runtime/test_service_control_runtime_v1.py` verifies that the same
-  boot path applies scheduler class to spawned services and exposes kernel task
-  snapshots through `diagsvc`.
+  boot path applies scheduler class to spawned services, leaves the system in a
+  live shell session, and exposes kernel task snapshots through `diagsvc`.

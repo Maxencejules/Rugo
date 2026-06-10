@@ -5,6 +5,7 @@ set -euo pipefail
 ISO=""
 LABEL="boot"
 EXPECT=()
+RUN_ARGS=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -20,9 +21,17 @@ while [ "$#" -gt 0 ]; do
             EXPECT+=("${2:-}")
             shift 2
             ;;
+        --disk|--block-device|--net-device|--machine|--cpu|--mem|--stdin-file)
+            RUN_ARGS+=("$1" "${2:-}")
+            shift 2
+            ;;
+        --with-net)
+            RUN_ARGS+=("$1")
+            shift
+            ;;
         *)
             echo "error: unknown argument: $1" >&2
-            echo "usage: smoke_boot.sh --iso PATH [--label NAME] --expect MARKER..." >&2
+            echo "usage: smoke_boot.sh --iso PATH [--label NAME] [qemu args] --expect MARKER..." >&2
             exit 1
             ;;
     esac
@@ -41,7 +50,7 @@ fi
 TMP_LOG="$(mktemp)"
 trap 'rm -f "$TMP_LOG"' EXIT
 
-if ! ./tools/run_qemu.sh --iso "$ISO" >"$TMP_LOG" 2>&1; then
+if ! ./tools/run_qemu.sh --iso "$ISO" "${RUN_ARGS[@]}" >"$TMP_LOG" 2>&1; then
     cat "$TMP_LOG"
     echo "smoke-$LABEL: QEMU boot failed" >&2
     exit 1

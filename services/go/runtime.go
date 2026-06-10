@@ -105,7 +105,6 @@ var (
 	serviceFailures [serviceCount]byte
 	serviceReaps    [serviceCount]byte
 	serviceLastTick [serviceCount]uintptr
-	shellRecycles   byte
 	c5CleanupLogged byte
 
 	managerCleanupInfo taskInfo

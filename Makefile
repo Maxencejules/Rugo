@@ -110,6 +110,10 @@ KERNEL_SYSCALL_TABLE = $(OUT)/kernel-syscall-table.json
 GO_STD_INTERFACE_REPORT = $(OUT)/gostd-syscall-interface.json
 FS_TEST_IMG = $(OUT)/fs-test.img
 FS_BADMAGIC_IMG = $(OUT)/fs-badmagic.img
+DEMO_ALPHA_DISK = $(OUT)/os-go-alpha.img
+DEMO_SMOKE_DISK = $(OUT)/os-go-smoke.img
+DEMO_SHELL_SCRIPT = validation/default-alpha-shell.txt
+DEMO_STDIN_FILE ?=
 
 # Rust kernel staticlib
 CARGO_TARGET = x86_64-unknown-none
@@ -130,10 +134,10 @@ build: $(ASM_OBJS) boot/linker.ld
 $(OUT):
 	mkdir -p $(OUT)
 
-$(GO_USER_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/syscalls.go services/go/hash.go services/go/pkgsvc.go services/go/linker.ld services/go/go.mod | $(OUT)
+$(GO_USER_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/shell_session.go services/go/syscalls.go services/go/hash.go services/go/pkgsvc.go services/go/linker.ld services/go/go.mod | $(OUT)
 	bash tools/build_go.sh
 
-$(GO_DESKTOP_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/desktop.go services/go/profile_default.go services/go/profile_desktop.go services/go/syscalls.go services/go/hash.go services/go/pkgsvc.go services/go/linker.ld services/go/go.mod | $(OUT)
+$(GO_DESKTOP_BIN): tools/build_go.sh services/go/start.asm services/go/main.go services/go/runtime.go services/go/services.go services/go/shell_session.go services/go/desktop.go services/go/profile_default.go services/go/profile_desktop.go services/go/syscalls.go services/go/hash.go services/go/pkgsvc.go services/go/linker.ld services/go/go.mod | $(OUT)
 	bash tools/build_go.sh --service-dir services/go --build-tags desktop_profile --out-elf out/gousr-desktop.elf --out-bin out/gousr-desktop.bin --target-json out/rugo-desktop-target.json
 
 $(GO_STD_BIN) $(GO_STD_CONTRACT): tools/build_go_std_spike.sh tools/bootstrap_go_port_v1.sh tools/gostd_stock_builder/main.go tools/runtime_toolchain_contract_v1.py services/go_std/main.go services/go_std/go.mod services/go_std/linker.ld services/go_std/start.asm services/go_std/rt0.asm services/go_std/runtime_stubs.asm services/go_std/syscalls.asm docs/runtime/port_contract_v1.md docs/runtime/abi_stability_policy_v1.md docs/runtime/toolchain_bootstrap_v1.md | $(OUT)
@@ -636,22 +640,22 @@ image-desktop: image-go-desktop
 image-std: image-go-std
 
 boot-kernel: image-kernel
-	./tools/run_qemu.sh --iso $(OUT)/os.iso
+	bash tools/run_qemu.sh --iso $(OUT)/os.iso
 
 run-kernel: boot-kernel
 
 run: run-kernel
 
 boot-demo: image-demo
-	./tools/run_qemu.sh --iso $(OUT)/os-go.iso
+	bash tools/run_qemu.sh --iso $(OUT)/os-go.iso --disk $(DEMO_ALPHA_DISK) --with-net $(if $(DEMO_STDIN_FILE),--stdin-file $(DEMO_STDIN_FILE),)
 
 demo-go: boot-demo
 
 boot-std: image-std
-	./tools/run_qemu.sh --iso $(OUT)/os-go-std.iso
+	bash tools/run_qemu.sh --iso $(OUT)/os-go-std.iso
 
 boot-desktop: image-desktop
-	./tools/run_qemu.sh --iso $(OUT)/os-go-desktop.iso
+	bash tools/run_qemu.sh --iso $(OUT)/os-go-desktop.iso
 
 demo: demo-go
 
@@ -663,6 +667,9 @@ smoke-kernel: image-kernel
 
 smoke-demo: image-demo
 	bash tools/smoke_boot.sh --iso $(OUT)/os-go.iso \
+		--disk $(DEMO_SMOKE_DISK) \
+		--with-net \
+		--stdin-file $(DEMO_SHELL_SCRIPT) \
 		--label demo \
 		--expect "RUGO: boot ok" \
 		--expect "GOINIT: start" \
@@ -670,6 +677,7 @@ smoke-demo: image-demo
 		--expect "TIMESVC: ready" \
 		--expect "GOSH: start" \
 		--expect "SVC: shell ready" \
+		--expect "NETC4: reply ok" \
 		--expect "GOINIT: result shutdown-clean" \
 		--expect "GOINIT: ready" \
 		--expect "RUGO: halt ok"

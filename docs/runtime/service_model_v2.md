@@ -13,7 +13,8 @@ Define deterministic userspace service lifecycle, readiness, restart, and
 shutdown behavior for the default Rust-kernel plus Go-userspace lane.
 
 The live default Go lane exercises this model with `timesvc`, `diagsvc`,
-`pkgsvc`, and `shell` on the real `go_test` boot path.
+`pkgsvc`, and `shell` on the real `go_test` boot path and leaves the shell in a
+serial-backed session instead of auto-terminating at boot.
 
 ## Lifecycle states
 
@@ -130,11 +131,14 @@ Runtime-backed default-lane evidence:
 - `tests/runtime/test_service_boot_runtime_v2.py` boots `make image-go` and
   verifies manifest-driven lifecycle markers from the real TinyGo init/service
   path rather than only deterministic models.
-- The live boot path reaps exited service tasks through `sys_wait`, exercises
-  bounded restart on the default shell service before the successful run reaches
-  `ready`, and emits per-service `res=` outcome markers.
+- The live boot path reaps exited service tasks through `sys_wait`, exposes the
+  default shell as a live serial session, and emits per-service `res=` outcome
+  markers during the same shipped boot flow.
 - The same boot path launches `diagsvc`, services a live diagnostic request
   from `shell`, and performs bounded stop control on the remaining services.
+- `tests/runtime/test_process_scheduler_runtime_v2.py` drives the shell's
+  explicit `crash` command on the shipped image and verifies bounded restart on
+  that same runtime-backed session rather than on a hidden demo-only path.
 - The same boot path launches `pkgsvc` by default, serves a live package/update
-  flow when present, and treats package-service failure as optional instead of a
-  release-lane boot blocker.
+  flow through explicit shell commands when present, and treats package-service
+  failure as optional instead of a release-lane boot blocker.

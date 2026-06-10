@@ -6,9 +6,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
+import socket
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -125,6 +128,51 @@ def qemu_bin() -> str | None:
 
 def qemu_available() -> bool:
     return qemu_bin() is not None
+
+
+def _pick_serial_port() -> int:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+    finally:
+        sock.close()
+
+
+def _replace_serial_stdio(command: List[str], port: int) -> List[str]:
+    updated: List[str] = []
+    replaced = False
+    index = 0
+    while index < len(command):
+        if command[index] == "-serial" and index + 1 < len(command):
+            updated.extend(["-serial", f"tcp:127.0.0.1:{port},server=on,wait=off"])
+            index += 2
+            replaced = True
+            continue
+        updated.append(command[index])
+        index += 1
+    if not replaced:
+        updated.extend(["-serial", f"tcp:127.0.0.1:{port},server=on,wait=off"])
+    return updated
+
+
+def _connect_serial(
+    port: int,
+    process: subprocess.Popen[str],
+    timeout_seconds: float,
+) -> socket.socket:
+    start = time.monotonic()
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError("QEMU exited before the serial console became ready")
+        try:
+            conn = socket.create_connection(("127.0.0.1", port), timeout=0.5)
+            conn.settimeout(0.1)
+            return conn
+        except OSError:
+            if (time.monotonic() - start) > timeout_seconds:
+                raise TimeoutError("Timed out waiting for the QEMU serial console")
+            time.sleep(0.1)
 
 
 def parse_metric_tokens(raw: str) -> Dict[str, int | str]:
@@ -310,6 +358,7 @@ def qemu_capture_lines(
     disk_device: str = "virtio-blk-pci,drive=disk0,disable-modern=on",
     with_net: bool = False,
     net_device: str = "virtio-net-pci,netdev=n0,disable-modern=on",
+    input_text: str | None = None,
 ) -> Tuple[int, List[Dict[str, object]]]:
     qemu = qemu_bin()
     if qemu is None:
@@ -356,8 +405,16 @@ def qemu_capture_lines(
             ]
         )
 
+    use_serial_socket = input_text is not None
+    if use_serial_socket:
+        serial_port = _pick_serial_port()
+        command = _replace_serial_stdio(command, serial_port)
+
     process = subprocess.Popen(
         command,
+        stdin=subprocess.DEVNULL if use_serial_socket else (
+            subprocess.PIPE if input_text is not None else None
+        ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -365,27 +422,109 @@ def qemu_capture_lines(
     )
     assert process.stdout is not None
 
+    output_queue: "queue.Queue[str | None]" = queue.Queue()
+
+    def _pump_output() -> None:
+        try:
+            for line in iter(process.stdout.readline, ""):
+                output_queue.put(line)
+        finally:
+            process.stdout.close()
+            output_queue.put(None)
+
+    reader = threading.Thread(target=_pump_output, daemon=True)
+    reader.start()
+
+    serial = None
+    if use_serial_socket:
+        serial = _connect_serial(serial_port, process, timeout_seconds)
+
     start = time.monotonic()
     lines: List[Dict[str, object]] = []
+    input_sent = input_text is None
+    output_closed = False
+    serial_closed = not use_serial_socket
+    serial_buffer = ""
+
     while True:
-        line = process.stdout.readline()
-        if line:
-            lines.append(
-                {
-                    "ts_ms": round((time.monotonic() - start) * 1000.0, 3),
-                    "line": line.rstrip("\r\n"),
-                }
-            )
-            continue
-        if process.poll() is not None:
-            break
+        try:
+            line = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            line = None
+
+        if line is None:
+            if not output_closed and reader.is_alive():
+                line = None
+            else:
+                output_closed = True
+        else:
+            raw_line = line.rstrip("\r\n")
+            if raw_line:
+                lines.append(
+                    {
+                        "ts_ms": round((time.monotonic() - start) * 1000.0, 3),
+                        "line": raw_line,
+                    }
+                )
+            if (
+                not use_serial_socket
+                and not input_sent
+                and input_text is not None
+                and process.stdin is not None
+                and "GOSH: session ready" in raw_line
+            ):
+                process.stdin.write(input_text)
+                process.stdin.flush()
+                process.stdin.close()
+                input_sent = True
+
+        if serial is not None and not serial_closed:
+            try:
+                chunk = serial.recv(4096)
+            except socket.timeout:
+                chunk = None
+            except OSError:
+                chunk = b""
+            if chunk:
+                serial_buffer += chunk.decode("utf-8", errors="replace")
+                while "\n" in serial_buffer:
+                    raw_line, serial_buffer = serial_buffer.split("\n", 1)
+                    clean_line = raw_line.rstrip("\r")
+                    if clean_line:
+                        lines.append(
+                            {
+                                "ts_ms": round((time.monotonic() - start) * 1000.0, 3),
+                                "line": clean_line,
+                            }
+                        )
+                    if not input_sent and "GOSH: session ready" in clean_line:
+                        serial.sendall(input_text.encode("utf-8"))
+                        input_sent = True
+            elif chunk == b"":
+                serial_closed = True
+
         if (time.monotonic() - start) > timeout_seconds:
             process.kill()
+            if serial is not None:
+                serial.close()
+            reader.join(timeout=1.0)
             raise TimeoutError(
                 f"QEMU timed out after {timeout_seconds:.1f}s while booting {image_path}"
             )
-        time.sleep(0.01)
 
+        if process.poll() is not None and output_closed and serial_closed:
+            if serial_buffer:
+                lines.append(
+                    {
+                        "ts_ms": round((time.monotonic() - start) * 1000.0, 3),
+                        "line": serial_buffer.rstrip("\r"),
+                    }
+                )
+            break
+
+    if serial is not None:
+        serial.close()
+    reader.join(timeout=1.0)
     return int(process.returncode or 0), lines
 
 
@@ -790,6 +929,7 @@ def collect_booted_runtime(
                 disk_device=disk_device,
                 with_net=True,
                 net_device=net_device,
+                input_text="health\nshutdown\n",
             )
             if exit_code not in QEMU_SUCCESS_EXIT_CODES:
                 raise RuntimeError(

@@ -1,4 +1,5 @@
 import os
+import queue
 import shutil
 import socket
 import subprocess
@@ -99,34 +100,175 @@ def _resolve_qemu_bin():
 QEMU_BIN = _resolve_qemu_bin()
 
 
-def _boot_iso(iso_path, machine="q35"):
+def _pick_serial_port():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+    finally:
+        sock.close()
+
+
+def _replace_serial_stdio(cmd, port):
+    updated = []
+    replaced = False
+    index = 0
+    while index < len(cmd):
+        if cmd[index] == "-serial" and index + 1 < len(cmd):
+            updated.extend(["-serial", f"tcp:127.0.0.1:{port},server=on,wait=off"])
+            index += 2
+            replaced = True
+            continue
+        updated.append(cmd[index])
+        index += 1
+    if not replaced:
+        updated.extend(["-serial", f"tcp:127.0.0.1:{port},server=on,wait=off"])
+    return updated
+
+
+def _connect_serial(port, proc, timeout_seconds):
+    start = time.monotonic()
+    while True:
+        if proc.poll() is not None:
+            pytest.fail("QEMU exited before the serial console became ready")
+        try:
+            conn = socket.create_connection(("127.0.0.1", port), timeout=0.5)
+            conn.settimeout(0.1)
+            return conn
+        except OSError:
+            if (time.monotonic() - start) > timeout_seconds:
+                pytest.fail("Timed out waiting for the QEMU serial console")
+            time.sleep(0.1)
+
+
+def _run_qemu_capture(cmd, timeout_seconds, input_text=None):
+    use_serial_socket = input_text is not None
+    if use_serial_socket:
+        serial_port = _pick_serial_port()
+        cmd = _replace_serial_stdio(cmd, serial_port)
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL if use_serial_socket else (
+            subprocess.PIPE if input_text is not None else None
+        ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+
+    output_queue = queue.Queue()
+
+    def _pump_output():
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                output_queue.put(line)
+        finally:
+            proc.stdout.close()
+            output_queue.put(None)
+
+    reader = threading.Thread(target=_pump_output, daemon=True)
+    reader.start()
+
+    serial = _connect_serial(serial_port, proc, timeout_seconds) if use_serial_socket else None
+    start = time.monotonic()
+    stdout_lines = []
+    input_sent = input_text is None
+    output_closed = False
+    serial_closed = not use_serial_socket
+    serial_buffer = ""
+
+    while True:
+        try:
+            line = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            line = None
+
+        if line is None:
+            if not output_closed and reader.is_alive():
+                line = None
+            else:
+                output_closed = True
+        else:
+            stdout_lines.append(line)
+            if (
+                not use_serial_socket
+                and not input_sent
+                and input_text is not None
+                and proc.stdin is not None
+                and "GOSH: session ready" in line
+            ):
+                proc.stdin.write(input_text)
+                proc.stdin.flush()
+                proc.stdin.close()
+                input_sent = True
+
+        if serial is not None and not serial_closed:
+            try:
+                chunk = serial.recv(4096)
+            except socket.timeout:
+                chunk = None
+            except OSError:
+                chunk = b""
+            if chunk:
+                serial_buffer += chunk.decode("utf-8", errors="replace")
+                while "\n" in serial_buffer:
+                    raw_line, serial_buffer = serial_buffer.split("\n", 1)
+                    clean_line = raw_line.rstrip("\r")
+                    stdout_lines.append(clean_line + "\n")
+                    if not input_sent and "GOSH: session ready" in clean_line:
+                        serial.sendall(input_text.encode("utf-8"))
+                        input_sent = True
+            elif chunk == b"":
+                serial_closed = True
+
+        if (time.monotonic() - start) > timeout_seconds:
+            proc.kill()
+            if serial is not None:
+                serial.close()
+            reader.join(timeout=1.0)
+            stdout = "".join(stdout_lines)
+            pytest.fail(f"QEMU timed out ({timeout_seconds}s). Captured serial:\n{stdout}")
+
+        if proc.poll() is not None and output_closed and serial_closed:
+            if serial_buffer:
+                stdout_lines.append(serial_buffer.rstrip("\r") + "\n")
+            break
+
+    if serial is not None:
+        serial.close()
+    reader.join(timeout=1.0)
+    return subprocess.CompletedProcess(
+        args=proc.args,
+        returncode=proc.returncode,
+        stdout="".join(stdout_lines),
+        stderr="",
+    )
+
+
+def _boot_iso(iso_path, machine="q35", input_text=None):
     """Boot an ISO in QEMU headless and return the CompletedProcess."""
     assert os.path.isfile(iso_path), f"ISO not found: {iso_path}"
     if not QEMU_BIN:
         pytest.skip("qemu-system-x86_64 not found (set QEMU_BIN or install QEMU)")
 
-    try:
-        result = subprocess.run(
-            [
-                QEMU_BIN,
-                "-machine", machine,
-                "-cpu", "qemu64",
-                "-m", "128",
-                "-serial", "stdio",
-                "-display", "none",
-                "-no-reboot",
-                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
-                "-cdrom", iso_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=QEMU_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-        pytest.fail(f"QEMU timed out ({QEMU_TIMEOUT}s). Captured serial:\n{stdout}")
-
-    return result
+    return _run_qemu_capture(
+        [
+            QEMU_BIN,
+            "-machine", machine,
+            "-cpu", "qemu64",
+            "-m", "128",
+            "-serial", "stdio",
+            "-display", "none",
+            "-no-reboot",
+            "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+            "-cdrom", iso_path,
+        ],
+        QEMU_TIMEOUT,
+        input_text=input_text,
+    )
 
 
 @pytest.fixture
@@ -405,18 +547,7 @@ def _boot_iso_with_disk(
             ]
         )
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=QEMU_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-        pytest.fail(f"QEMU timed out ({QEMU_TIMEOUT}s). Captured serial:\n{stdout}")
-
-    return result
+    return _run_qemu_capture(cmd, QEMU_TIMEOUT)
 
 
 @pytest.fixture
@@ -561,6 +692,7 @@ def external_pkg_disk_img():
                 "APP: hello world\n",
             ],
             capture_output=True,
+            input=input_text,
             text=True,
             timeout=QEMU_TIMEOUT,
         )
@@ -678,6 +810,7 @@ def _boot_iso_with_disk_and_net(
     cpu="qemu64",
     block_device="virtio-blk-pci,drive=disk0,disable-modern=on",
     net_device="virtio-net-pci,netdev=n0,disable-modern=on",
+    input_text=None,
 ):
     """Boot an ISO in QEMU with both a persistent raw disk and a NIC attached."""
     assert os.path.isfile(iso_path), f"ISO not found: {iso_path}"
@@ -704,18 +837,7 @@ def _boot_iso_with_disk_and_net(
         "-device", net_device,
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=NET_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-        pytest.fail(f"QEMU timed out ({NET_TIMEOUT}s). Captured serial:\n{stdout}")
-
-    return result
+    return _run_qemu_capture(cmd, NET_TIMEOUT, input_text=input_text)
 
 
 @pytest.fixture
@@ -752,10 +874,40 @@ def qemu_serial_net_missing():
 
 @pytest.fixture
 def qemu_serial_go():
-    """Boot the G1 TinyGo user-space test OS image."""
+    """Boot the default Go userspace shell lane and drive a health/shutdown session."""
     if not os.path.isfile(ISO_GO_PATH):
         pytest.skip(f"ISO not built: {ISO_GO_PATH}")
-    return _boot_iso(ISO_GO_PATH)
+    os.makedirs(os.path.join(REPO_ROOT, "out"), exist_ok=True)
+    disk_path = os.path.join(REPO_ROOT, "out", f"go-shell-{uuid.uuid4().hex}.img")
+
+    try:
+        yield _boot_iso_with_disk_and_net(
+            ISO_GO_PATH,
+            disk_path,
+            input_text="health\nshutdown\n",
+        )
+    finally:
+        if os.path.isfile(disk_path):
+            os.remove(disk_path)
+
+
+@pytest.fixture
+def qemu_serial_go_restart():
+    """Boot the default Go userspace shell lane and drive explicit restart commands."""
+    if not os.path.isfile(ISO_GO_PATH):
+        pytest.skip(f"ISO not built: {ISO_GO_PATH}")
+    os.makedirs(os.path.join(REPO_ROOT, "out"), exist_ok=True)
+    disk_path = os.path.join(REPO_ROOT, "out", f"go-shell-restart-{uuid.uuid4().hex}.img")
+
+    try:
+        yield _boot_iso_with_disk_and_net(
+            ISO_GO_PATH,
+            disk_path,
+            input_text="crash\ncrash\nhealth\nshutdown\n",
+        )
+    finally:
+        if os.path.isfile(disk_path):
+            os.remove(disk_path)
 
 
 @pytest.fixture
@@ -775,8 +927,12 @@ def qemu_go_c4_runtime():
     os.makedirs(os.path.join(REPO_ROOT, "out"), exist_ok=True)
     disk_path = os.path.join(REPO_ROOT, "out", f"go-c4-runtime-{uuid.uuid4().hex}.img")
 
-    def _boot():
-        return _boot_iso_with_disk_and_net(ISO_GO_PATH, disk_path)
+    def _boot(commands="health\nshutdown\n"):
+        return _boot_iso_with_disk_and_net(
+            ISO_GO_PATH,
+            disk_path,
+            input_text=commands,
+        )
 
     try:
         yield _boot, disk_path
@@ -794,13 +950,14 @@ def qemu_go_c4_runtime_native():
     os.makedirs(os.path.join(REPO_ROOT, "out"), exist_ok=True)
     disk_path = os.path.join(REPO_ROOT, "out", f"go-native-c4-runtime-{uuid.uuid4().hex}.img")
 
-    def _boot():
+    def _boot(commands="health\nshutdown\n"):
         return _boot_iso_with_disk_and_net(
             ISO_GO_NATIVE_PATH,
             disk_path,
             machine="q35",
             cpu="qemu64,+x2apic",
             block_device="nvme,drive=disk0,serial=nvme0,logical_block_size=512",
+            input_text=commands,
         )
 
     try:

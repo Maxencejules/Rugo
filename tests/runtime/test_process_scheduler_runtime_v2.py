@@ -8,8 +8,8 @@ def _find_in_order(serial: str, markers: list[str]) -> None:
         assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
 
 
-def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go):
-    serial = qemu_serial_go.stdout
+def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go_restart):
+    serial = qemu_serial_go_restart.stdout
 
     _find_in_order(
         serial,
@@ -17,25 +17,30 @@ def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go):
             "SVC: shell starting",
             "GOSH: start",
             "SVC: shell running",
-            "GOSH: recycle",
+            "SVC: shell ready",
+            "GOSH: session ready",
+            "GOSH: crash",
             "SVC: shell failed",
             "GOSVCM: reap shell failed res=runtime-failed",
             "GOSVCM: restart shell",
             "SVC: shell starting",
             "GOSH: start",
             "SVC: shell running",
-            "GOSH: recycle",
+            "SVC: shell ready",
+            "GOSH: session ready",
+            "GOSH: crash",
             "SVC: shell failed",
             "GOSVCM: reap shell failed res=runtime-failed",
             "GOSVCM: restart shell",
             "SVC: shell starting",
             "GOSH: start",
             "SVC: shell running",
+            "SVC: shell ready",
+            "GOSH: session ready",
             "GOSH: lookup ok",
             "GOSH: recv deny",
             "GOSH: reg deny",
             "GOSH: spawn deny",
-            "SVC: shell ready",
             "TIMESVC: req ok",
             "TIMESVC: time ok",
             "GOSH: reply ok",
@@ -58,8 +63,8 @@ def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go):
 
     assert serial.count("SVC: shell starting") == 3
     assert serial.count("SVC: shell running") == 3
-    assert serial.count("GOSH: recycle") == 2
-    assert serial.count("SVC: shell ready") == 1
+    assert serial.count("GOSH: crash") == 2
+    assert serial.count("SVC: shell ready") == 3
     assert serial.count("SVC: shell failed") == 2
     assert serial.count("GOSVCM: restart shell") == 2
     assert serial.count("GOSVCM: reap shell") == 3

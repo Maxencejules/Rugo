@@ -14,7 +14,6 @@ var (
 	msgDiagSvcErr   = [...]byte{'D', 'I', 'A', 'G', 'S', 'V', 'C', ':', ' ', 'e', 'r', 'r', '\n'}
 
 	msgShellStart     = [...]byte{'G', 'O', 'S', 'H', ':', ' ', 's', 't', 'a', 'r', 't', '\n'}
-	msgShellRecycle   = [...]byte{'G', 'O', 'S', 'H', ':', ' ', 'r', 'e', 'c', 'y', 'c', 'l', 'e', '\n'}
 	msgShellLookup    = [...]byte{'G', 'O', 'S', 'H', ':', ' ', 'l', 'o', 'o', 'k', 'u', 'p', ' ', 'o', 'k', '\n'}
 	msgShellRecvDeny  = [...]byte{'G', 'O', 'S', 'H', ':', ' ', 'r', 'e', 'c', 'v', ' ', 'd', 'e', 'n', 'y', '\n'}
 	msgShellRegDeny   = [...]byte{'G', 'O', 'S', 'H', ':', ' ', 'r', 'e', 'g', ' ', 'd', 'e', 'n', 'y', '\n'}
@@ -173,39 +172,11 @@ func shellMain() {
 	log(msgShellStart[:])
 	setServiceState(serviceShell, stateRunning)
 
-	if shellRecycles < 2 {
-		shellRecycles++
-		log(msgShellRecycle[:])
-		markServiceFailed(serviceShell)
-		sysThreadExit()
-		fail(msgShellErr[:])
-	}
-
 	timeEP := sysSvcLookup(&nameTimeSvc[0], uintptr(len(nameTimeSvc)))
 	if timeEP == sysErr {
 		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
 	}
-	log(msgShellLookup[:])
-
-	var deny [1]byte
-	if sysIpcRecv(timeEP, &deny[0], uintptr(len(deny))) != sysErr {
-		markServiceFailed(serviceShell)
-		fail(msgShellErr[:])
-	}
-	log(msgShellRecvDeny[:])
-
-	if sysSvcRegister(&nameHijack[0], uintptr(len(nameHijack)), timeEP) != sysErr {
-		markServiceFailed(serviceShell)
-		fail(msgShellErr[:])
-	}
-	log(msgShellRegDeny[:])
-
-	if sysThreadSpawn(spawnEntry) != sysErr {
-		markServiceFailed(serviceShell)
-		fail(msgShellErr[:])
-	}
-	log(msgShellSpawnDeny[:])
 
 	replyEP := sysIpcEndpointCreate()
 	if replyEP == sysErr {
@@ -223,38 +194,9 @@ func shellMain() {
 
 	setServiceState(serviceShell, stateReady)
 
-	if !requestTime(timeEP, replyEP) {
+	if !shellSession(replyEP, timeEP, diagEP, pkgEP) {
 		markServiceFailed(serviceShell)
 		fail(msgShellErr[:])
-	}
-	log(msgShellReply[:])
-
-	if !requestDiag(diagEP, replyEP) {
-		markServiceFailed(serviceShell)
-		fail(msgShellErr[:])
-	}
-	log(msgShellDiag[:])
-
-	if !runC4Storage() || !runC4Network() {
-		markServiceFailed(serviceShell)
-		fail(msgShellErr[:])
-	}
-	if !runC5Isolation(replyEP, diagEP) || !runC5Reliability(replyEP, timeEP) {
-		markServiceFailed(serviceShell)
-		fail(msgShellErr[:])
-	}
-	if desktopProfileEnabled {
-		if !runDesktopProfile(replyEP, diagEP) {
-			markServiceFailed(serviceShell)
-			fail(msgShellErr[:])
-		}
-	}
-	if pkgEP != sysErr && pkgRuntimeAvailable() {
-		if !requestPkg(pkgEP, replyEP) {
-			markServiceFailed(serviceShell)
-			fail(msgShellErr[:])
-		}
-		log(msgShellPkg[:])
 	}
 
 	setServiceResult(serviceShell, serviceResultSessionDone)
@@ -263,14 +205,6 @@ func shellMain() {
 	setServiceState(serviceShell, stateStopped)
 	sysThreadExit()
 	fail(msgShellErr[:])
-}
-
-func pkgRuntimeAvailable() bool {
-	fd := sysOpen(&pathPkgState[0], openReadWrite, 0)
-	if fd == sysErr {
-		return false
-	}
-	return sysClose(fd) != sysErr
 }
 
 func requestServiceCommand(serviceEP uintptr, replyEP uintptr, cmd byte) bool {
