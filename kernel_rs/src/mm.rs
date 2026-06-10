@@ -156,6 +156,166 @@ pub fn free_frame(phys: u64) {
     }
 }
 
+// ---------------- kernel heap ----------------
+//
+// First-fit free-list allocator over one contiguous 4 MiB PMM window,
+// addressed through the HHDM. Allocations carry the owning block start just
+// before the payload. Free blocks are kept address-sorted and coalesced.
+
+use core::alloc::{GlobalAlloc, Layout};
+
+const HEAP_FRAMES: usize = 1024; // 4 MiB
+const MIN_BLOCK: usize = 32;
+const HEADER: usize = core::mem::size_of::<usize>() * 2;
+
+#[repr(C)]
+struct FreeBlock {
+    size: usize, // total block size including this header
+    next: *mut FreeBlock,
+}
+
+struct HeapState {
+    head: *mut FreeBlock,
+    base: u64,
+    size: usize,
+    ready: bool,
+}
+
+static mut HEAP: HeapState = HeapState {
+    head: core::ptr::null_mut(),
+    base: 0,
+    size: 0,
+    ready: false,
+};
+
+pub fn heap_init() {
+    unsafe {
+        let phys = match alloc_frames_contig(HEAP_FRAMES) {
+            Some(p) => p,
+            None => {
+                serial_write(b"MM: heap none\n");
+                return;
+            }
+        };
+        let base = phys_to_virt(phys);
+        let block = base as *mut FreeBlock;
+        (*block).size = HEAP_FRAMES * FRAME_SIZE as usize;
+        (*block).next = core::ptr::null_mut();
+        HEAP.head = block;
+        HEAP.base = base;
+        HEAP.size = HEAP_FRAMES * FRAME_SIZE as usize;
+        HEAP.ready = true;
+        serial_write(b"MM: heap ok size=0x");
+        serial_write_hex(HEAP.size as u64);
+        serial_write(b"\n");
+    }
+}
+
+unsafe fn heap_alloc(layout: Layout) -> *mut u8 {
+    if !HEAP.ready {
+        return core::ptr::null_mut();
+    }
+    let align = layout.align().max(16);
+    let need = layout.size().max(1);
+
+    let mut prev: *mut FreeBlock = core::ptr::null_mut();
+    let mut cur = HEAP.head;
+    while !cur.is_null() {
+        let block_start = cur as usize;
+        let payload = block_start + HEADER;
+        let aligned = (payload + align - 1) & !(align - 1);
+        let pad = aligned - payload;
+        let total = HEADER + pad + need;
+        let total = (total + MIN_BLOCK - 1) & !(MIN_BLOCK - 1);
+        if (*cur).size >= total {
+            let remain = (*cur).size - total;
+            let next = (*cur).next;
+            if remain >= MIN_BLOCK {
+                let rest = (block_start + total) as *mut FreeBlock;
+                (*rest).size = remain;
+                (*rest).next = next;
+                if prev.is_null() { HEAP.head = rest; } else { (*prev).next = rest; }
+                (*cur).size = total;
+            } else if prev.is_null() {
+                HEAP.head = next;
+            } else {
+                (*prev).next = next;
+            }
+            let aligned_ptr = aligned as *mut u8;
+            *(aligned_ptr.sub(core::mem::size_of::<usize>()) as *mut usize) =
+                block_start;
+            return aligned_ptr;
+        }
+        prev = cur;
+        cur = (*cur).next;
+    }
+    core::ptr::null_mut()
+}
+
+unsafe fn heap_dealloc(ptr: *mut u8) {
+    if ptr.is_null() || !HEAP.ready {
+        return;
+    }
+    let block_start =
+        *(ptr.sub(core::mem::size_of::<usize>()) as *const usize);
+    let block = block_start as *mut FreeBlock;
+
+    let mut prev: *mut FreeBlock = core::ptr::null_mut();
+    let mut cur = HEAP.head;
+    while !cur.is_null() && (cur as usize) < block_start {
+        prev = cur;
+        cur = (*cur).next;
+    }
+    (*block).next = cur;
+    if prev.is_null() { HEAP.head = block; } else { (*prev).next = block; }
+
+    if !cur.is_null() && block_start + (*block).size == cur as usize {
+        (*block).size += (*cur).size;
+        (*block).next = (*cur).next;
+    }
+    if !prev.is_null() && prev as usize + (*prev).size == block_start {
+        (*prev).size += (*block).size;
+        (*prev).next = (*block).next;
+    }
+}
+
+pub struct KernelAllocator;
+
+unsafe impl GlobalAlloc for KernelAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        heap_alloc(layout)
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        heap_dealloc(ptr)
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: KernelAllocator = KernelAllocator;
+
+/// Boot self-test: exercise alloc/dealloc/reuse through the alloc crate.
+pub fn heap_selftest() {
+    if unsafe { !HEAP.ready } {
+        return;
+    }
+    let mut v: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(4096);
+    let mut i = 0u32;
+    while i < 4096 {
+        v.push((i & 0xFF) as u8);
+        i += 1;
+    }
+    let b = alloc::boxed::Box::new(0xA5A5_5A5Au64);
+    let ok = v[4095] == 0xFF && *b == 0xA5A5_5A5Au64;
+    drop(v);
+    drop(b);
+    let again = alloc::boxed::Box::new(7u64);
+    if ok && *again == 7 {
+        serial_write(b"MM: heap selftest ok\n");
+    } else {
+        serial_write(b"MM: heap selftest err\n");
+    }
+}
+
 /// Allocate `count` physically contiguous frames (used once, by the heap).
 pub fn alloc_frames_contig(count: usize) -> Option<u64> {
     unsafe {

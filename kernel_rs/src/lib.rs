@@ -1,6 +1,8 @@
 #![no_std]
 #![allow(static_mut_refs)]
 
+extern crate alloc;
+
 use core::panic::PanicInfo;
 
 mod runtime;
@@ -4887,6 +4889,8 @@ pub extern "C" fn kmain() -> ! {
     serial_write(b"RUGO: boot ok\n");
     check_paging();
     mm::pmm_init();
+    mm::heap_init();
+    mm::heap_selftest();
 
     unsafe {
         gdt_init();
