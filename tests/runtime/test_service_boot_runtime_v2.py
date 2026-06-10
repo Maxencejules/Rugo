@@ -66,21 +66,52 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "ISOC5: cleanup ok",
             "GOSVCM: reap shell stopped res=session-done",
             "GOSVCM: phase shutdown",
+            # Stop requests are issued by the supervisor in reverse plan
+            # order; these three lines are same-task and stay ordered.
             "GOSVCM: stop pkgsvc",
-            "SVC: pkgsvc stopping",
             "GOSVCM: stop diagsvc",
-            "SVC: diagsvc stopping",
             "GOSVCM: stop timesvc",
-            "SVC: timesvc stopping",
-            "SVC: timesvc stopped",
-            "DIAGSVC: stop",
-            "SVC: diagsvc stopped",
-            "GOSVCM: reap timesvc stopped res=ordered-stop",
-            "GOSVCM: reap diagsvc stopped res=ordered-stop",
-            "GOSVCM: reap pkgsvc stopped res=ordered-stop",
             "GOINIT: result shutdown-clean",
             "GOINIT: ready",
             "RUGO: halt ok",
+        ],
+    )
+
+    # Each service's shutdown chain is causally ordered (stop request ->
+    # supervisor publishes stopping -> child acknowledges and stops ->
+    # supervisor reaps -> clean init result). The interleaving BETWEEN
+    # sibling services is scheduler-dependent under preemptive timing and
+    # is deliberately not asserted.
+    _find_in_order(
+        serial,
+        [
+            "GOSVCM: stop timesvc",
+            "SVC: timesvc stopping",
+            "SVC: timesvc stopped",
+            "GOSVCM: reap timesvc stopped res=ordered-stop",
+            "GOINIT: result shutdown-clean",
+        ],
+    )
+    _find_in_order(
+        serial,
+        [
+            "GOSVCM: stop diagsvc",
+            "SVC: diagsvc stopping",
+            "DIAGSVC: stop",
+            "SVC: diagsvc stopped",
+            "GOSVCM: reap diagsvc stopped res=ordered-stop",
+            "GOINIT: result shutdown-clean",
+        ],
+    )
+    _find_in_order(
+        serial,
+        [
+            "GOSVCM: stop pkgsvc",
+            "SVC: pkgsvc stopping",
+            "PKGSVC: stop",
+            "SVC: pkgsvc stopped",
+            "GOSVCM: reap pkgsvc stopped res=ordered-stop",
+            "GOINIT: result shutdown-clean",
         ],
     )
 

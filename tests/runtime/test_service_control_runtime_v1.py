@@ -26,9 +26,13 @@ def test_service_control_runtime_v1_exercises_diag_snapshot_and_shutdown(qemu_se
             "PROC: timesvc s=1 r=0 f=0 x=0",
             "PROC: diagsvc s=1 r=0 f=0 x=0",
             "PROC: shell s=1 r=0 f=0 x=0",
-            "TASK: timesvc tid=1 parent=0 cls=critical st=blocked",
+            # The sampled scheduler state (st=) of OTHER tasks is a point-in-
+            # time read: under preemptive timing a peer can be ready instead
+            # of blocked at snapshot instant, so only diagsvc's own state
+            # (always running while it samples itself) is pinned.
+            "TASK: timesvc tid=1 parent=0 cls=critical st=",
             "TASK: diagsvc tid=2 parent=0 cls=best-effort st=running",
-            "TASK: shell tid=4 parent=0 cls=best-effort st=blocked",
+            "TASK: shell tid=4 parent=0 cls=best-effort st=",
             "GOSH: diag ok",
             "GOSVCM: phase shutdown",
             "GOSVCM: stop diagsvc",
@@ -43,7 +47,7 @@ def test_service_control_runtime_v1_exercises_diag_snapshot_and_shutdown(qemu_se
     assert "DIAGSVC: err" not in serial, f"Unexpected diagnostic service error.\nFull output:\n{serial}"
     assert "PROC: timesvc s=1 r=0 f=0 x=0" in serial and "svc=ready res=online" in serial
     assert "PROC: pkgsvc s=1 r=0 f=0 x=0" in serial
-    assert "TASK: pkgsvc tid=3 parent=0 cls=best-effort st=blocked" in serial
+    assert "TASK: pkgsvc tid=3 parent=0 cls=best-effort st=" in serial
     assert "GOSVCM: stop pkgsvc" in serial
     assert "PKGSVC: stop" in serial
     assert "SVC: pkgsvc stopped" in serial

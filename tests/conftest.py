@@ -206,23 +206,30 @@ def _run_qemu_capture(cmd, timeout_seconds, input_text=None):
                 input_sent = True
 
         if serial is not None and not serial_closed:
-            try:
-                chunk = serial.recv(4096)
-            except socket.timeout:
-                chunk = None
-            except OSError:
-                chunk = b""
-            if chunk:
-                serial_buffer += chunk.decode("utf-8", errors="replace")
-                while "\n" in serial_buffer:
-                    raw_line, serial_buffer = serial_buffer.split("\n", 1)
-                    clean_line = raw_line.rstrip("\r")
-                    stdout_lines.append(clean_line + "\n")
-                    if not input_sent and "GOSH: session ready" in clean_line:
-                        serial.sendall(input_text.encode("utf-8"))
-                        input_sent = True
-            elif chunk == b"":
+            # Drain the socket completely each pass: on Windows an abrupt
+            # QEMU exit RSTs the connection and the OS discards anything
+            # still queued, so a slow one-chunk-per-iteration reader loses
+            # the tail of fast boots.
+            while True:
+                try:
+                    chunk = serial.recv(4096)
+                except socket.timeout:
+                    break
+                except OSError:
+                    serial_closed = True
+                    break
+                if chunk:
+                    serial_buffer += chunk.decode("utf-8", errors="replace")
+                    while "\n" in serial_buffer:
+                        raw_line, serial_buffer = serial_buffer.split("\n", 1)
+                        clean_line = raw_line.rstrip("\r")
+                        stdout_lines.append(clean_line + "\n")
+                        if not input_sent and "GOSH: session ready" in clean_line:
+                            serial.sendall(input_text.encode("utf-8"))
+                            input_sent = True
+                    continue
                 serial_closed = True
+                break
 
         if (time.monotonic() - start) > timeout_seconds:
             proc.kill()
