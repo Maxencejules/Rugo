@@ -10,7 +10,10 @@ def _read_repo_file(relpath: str) -> str:
 
 def test_security_docs_and_syscall_contract():
     syscall_doc = _read_repo_file("docs/abi/syscall_v1.md")
-    kernel_src = _read_repo_file("kernel_rs/src/lib.rs")
+    # Dispatch arms live in syscall.rs since the kernel was modularized.
+    kernel_src = _read_repo_file("kernel_rs/src/lib.rs") + _read_repo_file(
+        "kernel_rs/src/syscall.rs"
+    )
     rights_doc = _read_repo_file("docs/security/rights_capability_model_v1.md")
     filter_doc = _read_repo_file("docs/security/syscall_filtering_v1.md")
     boot_doc = _read_repo_file("docs/security/secure_boot_policy_v1.md")

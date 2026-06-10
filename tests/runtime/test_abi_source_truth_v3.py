@@ -28,7 +28,8 @@ def _parse_v3_doc_table() -> dict[int, str]:
 
 
 def _kernel_table() -> dict[int, str]:
-    source = ROOT / "kernel_rs" / "src" / "lib.rs"
+    # Dispatch arms live in syscall.rs since the kernel was modularized.
+    source = ROOT / "kernel_rs" / "src" / "syscall.rs"
     return extract_kernel_syscalls.extract_syscalls(source)
 
 
@@ -90,7 +91,7 @@ def test_extractor_finds_minimum_syscall_count():
 
 def test_kernel_extractor_report_schema():
     """The kernel JSON report has the expected schema."""
-    source = ROOT / "kernel_rs" / "src" / "lib.rs"
+    source = ROOT / "kernel_rs" / "src" / "syscall.rs"
     report = extract_kernel_syscalls.build_report(source)
     assert report["schema"] == "rugo.kernel_syscall_table.v1"
     assert isinstance(report["total_syscalls"], int)
