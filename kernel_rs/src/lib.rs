@@ -1037,17 +1037,6 @@ cfg_m3! {
         ready
     }
 
-    unsafe fn sys_fork_deferred_v1() -> u64 {
-        0xFFFF_FFFF_FFFF_FFFF
-    }
-
-    unsafe fn sys_clone_deferred_v1() -> u64 {
-        0xFFFF_FFFF_FFFF_FFFF
-    }
-
-    unsafe fn sys_epoll_deferred_v1() -> u64 {
-        0xFFFF_FFFF_FFFF_FFFF
-    }
 }
 
 #[cfg(not(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test")))]
@@ -2524,8 +2513,17 @@ cfg_r4! {
         let fd_limit = (limits & 0xFF) as u8;
         let socket_limit = ((limits >> 8) & 0xFF) as u8;
         let endpoint_limit = ((limits >> 16) & 0xFF) as u8;
-        if fd_limit as usize > M8_FD_MAX.saturating_sub(3)
-            || socket_limit as usize > net::R4_NET_SOCKET_MAX
+        // Lanes without the FD or socket layers cap those limits at zero.
+        #[cfg(feature = "go_test")]
+        let fd_cap = M8_FD_MAX.saturating_sub(3);
+        #[cfg(not(feature = "go_test"))]
+        let fd_cap = 0usize;
+        #[cfg(any(feature = "net_test", feature = "go_test"))]
+        let socket_cap = net::R4_NET_SOCKET_MAX;
+        #[cfg(not(any(feature = "net_test", feature = "go_test")))]
+        let socket_cap = 0usize;
+        if fd_limit as usize > fd_cap
+            || socket_limit as usize > socket_cap
             || endpoint_limit as usize > R4_MAX_ENDPOINTS
         {
             return None;
@@ -3258,9 +3256,12 @@ cfg_r4! {
         *pt_code.add(1) = kv2p(USER_CODE_PAGE_2.0.as_ptr() as u64) | code_flags;
         *pt_code.add(2) = kv2p(USER_CODE_PAGE_3.0.as_ptr() as u64) | code_flags;
         *pt_code.add(3) = kv2p(USER_CODE_PAGE_4.0.as_ptr() as u64) | code_flags;
-        *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
-        *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
-        *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
+        #[cfg(feature = "go_test")]
+        {
+            *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
+        }
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
         *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
@@ -4860,6 +4861,23 @@ static SHM_PRESSURE_BLOB: [u8; 264] = [
     // "PRESSURE: shm ok"
     0x50, 0x52, 0x45, 0x53, 0x53, 0x55, 0x52, 0x45, 0x3A, 0x20, 0x73, 0x68, 0x6D, 0x20, 0x6F, 0x6B,
 ];
+
+// --------------- Deferred syscall stubs (every lane) ---------------
+
+#[allow(dead_code)]
+unsafe fn sys_fork_deferred_v1() -> u64 {
+    0xFFFF_FFFF_FFFF_FFFF
+}
+
+#[allow(dead_code)]
+unsafe fn sys_clone_deferred_v1() -> u64 {
+    0xFFFF_FFFF_FFFF_FFFF
+}
+
+#[allow(dead_code)]
+unsafe fn sys_epoll_deferred_v1() -> u64 {
+    0xFFFF_FFFF_FFFF_FFFF
+}
 
 // --------------- Paging verification ---------------
 

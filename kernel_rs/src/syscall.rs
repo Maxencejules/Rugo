@@ -66,9 +66,11 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             7 => {
                 *frame.add(14) = sys_shm_map_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             15 => {
                 *frame.add(14) = net::sys_net_send(arg1, arg2);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             16 => {
                 *frame.add(14) = net::sys_net_recv(arg1, arg2);
             }
@@ -90,21 +92,26 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             12 => {
                 *frame.add(14) = sys_svc_lookup_r4(arg1, arg2);
             }
+            #[cfg(feature = "go_test")]
             18 => {
                 *frame.add(14) = sys_open_v1(arg1, arg2, arg3);
             }
+            #[cfg(feature = "go_test")]
             19 => {
                 *frame.add(14) = sys_read_v1(arg1, arg2, arg3);
             }
+            #[cfg(feature = "go_test")]
             20 => {
                 *frame.add(14) = sys_write_v1(arg1, arg2, arg3);
             }
+            #[cfg(feature = "go_test")]
             21 => {
                 *frame.add(14) = sys_close_v1(arg1);
             }
             22 => {
                 sys_wait_r4(frame, arg1, arg2, arg3);
             }
+            #[cfg(feature = "go_test")]
             23 => {
                 *frame.add(14) = sys_poll_v1(arg1, arg2, arg3);
             }
@@ -114,36 +121,47 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             29 => {
                 *frame.add(14) = sys_sched_set_r4(arg1, arg2);
             }
+            #[cfg(feature = "go_test")]
             30 => {
                 *frame.add(14) = sys_fsync_v1(arg1);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             31 => {
                 *frame.add(14) = net::sys_socket_open_r4(arg1, arg2);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             32 => {
                 *frame.add(14) = net::sys_socket_bind_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             33 => {
                 *frame.add(14) = net::sys_socket_listen_r4(arg1, arg2);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             34 => {
                 *frame.add(14) = net::sys_socket_connect_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             35 => {
                 *frame.add(14) = net::sys_socket_accept_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             36 => {
                 *frame.add(14) = net::sys_socket_send_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             37 => {
                 *frame.add(14) = net::sys_socket_recv_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             38 => {
                 *frame.add(14) = net::sys_socket_close_r4(arg1);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             39 => {
                 *frame.add(14) = net::sys_net_if_config_r4(arg1, arg2, arg3);
             }
+            #[cfg(any(feature = "net_test", feature = "go_test"))]
             40 => {
                 *frame.add(14) = net::sys_net_route_add_r4(arg1, arg2, arg3);
             }
