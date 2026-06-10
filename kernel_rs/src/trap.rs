@@ -49,6 +49,11 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             14 => {
                 let cs = *frame.add(18);
                 if cs & 3 == 3 {
+                    let demand_cr2: u64;
+                    core::arch::asm!("mov {}, cr2", out(reg) demand_cr2, options(nomem, nostack));
+                    if crate::mm::try_demand_map(demand_cr2) {
+                        return;
+                    }
                     #[cfg(feature = "go_test")]
                     {
                         let cr2: u64;

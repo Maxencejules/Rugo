@@ -354,3 +354,74 @@ pub fn alloc_frames_contig(count: usize) -> Option<u64> {
         None
     }
 }
+
+// ---------------- demand paging ----------------
+//
+// User heap window mapped on first touch. The window sits in PD slots 8..11
+// of the live user address space (PML4[0] -> PDPT[0] -> PD), far above the
+// fixed code (4 MiB) and stack (8 MiB) regions. The fault handler walks the
+// CURRENT CR3 (kernel mappings are cloned into every user PML4), allocates
+// missing page-table frames and the data frame from the PMM, and retries.
+
+pub const DEMAND_BASE: u64 = 0x0100_0000; // 16 MiB
+pub const DEMAND_END: u64 = 0x0180_0000;  // 24 MiB (8 MiB window)
+const DEMAND_MAX_FRAMES: u64 = 1024;      // 4 MiB quota for now
+
+static mut DEMAND_MAPPED: u64 = 0;
+
+const PTE_P_W_U: u64 = 0x07;
+const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+
+/// Try to satisfy a user page fault at `va` by mapping a fresh frame.
+/// Returns true when mapped (the faulting instruction must be retried).
+pub fn try_demand_map(va: u64) -> bool {
+    unsafe {
+        if !PMM.ready || va < DEMAND_BASE || va >= DEMAND_END {
+            return false;
+        }
+        if DEMAND_MAPPED >= DEMAND_MAX_FRAMES {
+            return false;
+        }
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3,
+                         options(nomem, nostack));
+        let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+        let pml4e = *pml4;
+        if pml4e & 1 == 0 {
+            return false;
+        }
+        let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+        let pdpte = *pdpt;
+        if pdpte & 1 == 0 {
+            return false;
+        }
+        let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+        let pd_idx = ((va >> 21) & 0x1FF) as usize;
+        let mut pde = *pd.add(pd_idx);
+        if pde & 1 == 0 {
+            let pt_phys = match alloc_frame() {
+                Some(p) => p,
+                None => return false,
+            };
+            *pd.add(pd_idx) = pt_phys | PTE_P_W_U;
+            pde = pt_phys | PTE_P_W_U;
+        }
+        let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+        let pt_idx = ((va >> 12) & 0x1FF) as usize;
+        if *pt.add(pt_idx) & 1 != 0 {
+            // present but faulted: protection error, not demand - let it die
+            return false;
+        }
+        let frame = match alloc_frame() {
+            Some(p) => p,
+            None => return false,
+        };
+        *pt.add(pt_idx) = frame | PTE_P_W_U;
+        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+        DEMAND_MAPPED += 1;
+        serial_write(b"MM: demand map va=0x");
+        serial_write_hex(va & !0xFFF);
+        serial_write(b"\n");
+        true
+    }
+}
