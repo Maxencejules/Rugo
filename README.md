@@ -50,6 +50,11 @@ Visible proof paths:
   Exercises the runtime-facing QEMU lane for stock-Go markers, stress syscall,
   memory pressure, thread spawn, and VM map behavior.
   Proof: `tests/runtime/test_runtime_stress_v1.py`
+- `make test-mm-foundation-v1`
+  Boots both the kernel-only and default Go images and verifies the dynamic
+  memory foundation: Limine-memmap frame allocator, kernel heap self-test,
+  and the demand-paged user heap window touched live from Go init.
+  Proof: `tests/mm/test_mm_foundation_v1.py`, contract `docs/runtime/memory_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

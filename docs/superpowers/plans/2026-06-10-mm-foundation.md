@@ -339,7 +339,7 @@ def test_heap_boot_marker_kernel_lane(qemu_serial):
     out = qemu_serial.stdout
     _find_in_order(out, [
         "MM: pmm ok frames=0x",
-        "MM: heap ok size=0x400000",
+        "MM: heap ok size=0x0000000000400000",
         "MM: heap selftest ok",
         "RUGO: halt ok",
     ])
@@ -350,7 +350,7 @@ def test_heap_boot_marker_kernel_lane(qemu_serial):
 def test_heap_boot_marker_go_lane(qemu_serial_go):
     out = qemu_serial_go.stdout
     _find_in_order(out, [
-        "MM: heap ok size=0x400000",
+        "MM: heap ok size=0x0000000000400000",
         "MM: heap selftest ok",
         "GOINIT: ready",
     ])
