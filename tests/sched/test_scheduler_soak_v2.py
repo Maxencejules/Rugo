@@ -7,7 +7,7 @@ import sys
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v2_model import run_scheduler_soak  # noqa: E402
+from sched_v2_model import run_scheduler_soak  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]

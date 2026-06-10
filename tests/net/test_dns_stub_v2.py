@@ -7,7 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v2_model import DnsStubV2Model  # noqa: E402
+from net_v2_model import DnsStubV2Model  # noqa: E402
 
 sys.path.append(str(ROOT / "tools"))
 import run_net_interop_matrix_v2 as interop  # noqa: E402

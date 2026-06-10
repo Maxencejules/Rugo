@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v1_model import RetransmissionPolicyModel  # noqa: E402
+from net_v1_model import RetransmissionPolicyModel  # noqa: E402
 
 
 def test_retransmission_backoff_and_ack_reset():

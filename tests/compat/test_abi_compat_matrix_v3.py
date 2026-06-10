@@ -32,7 +32,7 @@ def test_syscall_compat_matrix_v3_repo_baseline(tmp_path: Path):
 
     _write_json(
         kernel_report,
-        extract_kernel_syscalls.build_report(ROOT / "kernel_rs" / "src" / "lib.rs"),
+        extract_kernel_syscalls.build_report(ROOT / "kernel_rs" / "src" / "syscall.rs"),
     )
     _write_json(
         interface_report,

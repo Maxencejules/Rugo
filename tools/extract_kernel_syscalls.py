@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Extract the syscall dispatch table from the kernel Rust source.
 
-This tool parses kernel_rs/src/lib.rs to discover all syscall IDs and their
+This tool parses kernel_rs/src/syscall.rs (where the dispatch moved when the
+kernel was modularized) to discover all syscall IDs and their
 handler function names.  It produces a JSON report that downstream tools
 (check_abi_diff_v3.py, tests) can compare against the ABI docs to ensure
 the published syscall surface matches the actual kernel implementation.
@@ -19,12 +20,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
-# Matches lines like:  0  => sys_debug_write(arg1, arg2),
-# or:                   0  => { *frame.add(14) = sys_debug_write(arg1, arg2); }
-# or:                   2  => { r4_exit_and_switch(frame, 0); }
-# or:                   9  => { sys_ipc_recv_r4(frame, arg1, arg2, arg3); }
+# Matches arms like:    0  => sys_debug_write(arg1, arg2),
+# or:                    0  => { *frame.add(14) = sys_debug_write(arg1, arg2); }
+# or (multi-line):       15 => {
+#                            *frame.add(14) = net::sys_net_send(arg1, arg2);
+# Module-qualified handlers (net::...) resolve to the bare function name.
 MATCH_ARM_RE = re.compile(
-    r"^\s*(\d+)\s*=>\s*\{?\s*(?:\*frame\.add\(\d+\)\s*=\s*)?(\w+)\(",
+    r"(\d+)\s*=>\s*\{?\s*(?:\*frame\.add\(\d+\)\s*=\s*)?(?:\w+::)*(\w+)\(",
+    re.S,
 )
 
 # Canonical name mapping: strip version/dispatch suffixes to get the ABI name.
@@ -90,21 +93,12 @@ def extract_syscalls(source_path: Path) -> Dict[int, str]:
     text = source_path.read_text(encoding="utf-8")
     by_id: Dict[int, str] = {}
 
-    for line in text.splitlines():
-        # Skip wildcard arms and qemu_exit arms.
-        stripped = line.strip()
-        if stripped.startswith("_") or "qemu_exit" in stripped:
-            continue
-
-        m = MATCH_ARM_RE.match(stripped)
-        if not m:
-            continue
-
+    for m in MATCH_ARM_RE.finditer(text):
         syscall_id = int(m.group(1))
         handler = m.group(2)
 
-        # Skip internal/test-only IDs (98 = qemu_exit).
-        if syscall_id == 98:
+        # Skip internal/test-only IDs (98 = qemu_exit) and exit arms.
+        if syscall_id == 98 or handler == "qemu_exit":
             continue
 
         canonical = _normalize_handler(handler)
@@ -133,7 +127,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--source",
-        default="kernel_rs/src/lib.rs",
+        default="kernel_rs/src/syscall.rs",
         help="Path to the kernel Rust source file.",
     )
     parser.add_argument("--out", default="out/kernel-syscall-table.json")

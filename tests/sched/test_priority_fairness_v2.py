@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v2_model import (  # noqa: E402
+from sched_v2_model import (  # noqa: E402
     PRIORITY_HIGH,
     PRIORITY_LOW,
     PRIORITY_NORMAL,

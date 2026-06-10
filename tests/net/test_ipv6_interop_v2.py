@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v2_model import IPv6InteropV2Model  # noqa: E402
+from net_v2_model import IPv6InteropV2Model  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]

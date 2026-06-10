@@ -146,7 +146,7 @@ $(GO_STD_BIN) $(GO_STD_CONTRACT): tools/build_go_std_spike.sh tools/bootstrap_go
 $(RUNTIME_TOOLCHAIN_CONTRACT): tools/runtime_toolchain_contract_v1.py $(GO_STD_BIN) $(GO_STD_CONTRACT) docs/runtime/port_contract_v1.md docs/runtime/abi_stability_policy_v1.md | $(OUT)
 	$(PYTHON) tools/runtime_toolchain_contract_v1.py --out $(RUNTIME_TOOLCHAIN_CONTRACT)
 
-$(KERNEL_SYSCALL_TABLE): tools/extract_kernel_syscalls.py kernel_rs/src/lib.rs | $(OUT)
+$(KERNEL_SYSCALL_TABLE): tools/extract_kernel_syscalls.py kernel_rs/src/syscall.rs | $(OUT)
 	$(PYTHON) tools/extract_kernel_syscalls.py --out $(KERNEL_SYSCALL_TABLE)
 
 $(GO_STD_INTERFACE_REPORT): tools/extract_go_std_syscalls.py services/go_std/syscalls.asm | $(OUT)

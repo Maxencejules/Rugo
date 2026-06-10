@@ -11,7 +11,7 @@ sys.path.append(str(ROOT / "tools"))
 import storage_recover_v1 as recover  # noqa: E402
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v1_model import checksum32  # noqa: E402
+from storage_v1_model import checksum32  # noqa: E402
 
 
 def _ensure_fs_image_bytes() -> bytes:

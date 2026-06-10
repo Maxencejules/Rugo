@@ -57,7 +57,9 @@ def test_v2_docs_declare_contract_ids_and_gate_hooks():
 
 
 def test_kernel_dispatch_remains_v2_compatible_for_required_ids():
-    kernel_src = _read("kernel_rs/src/lib.rs")
+    # Dispatch arms live in syscall.rs since the kernel was modularized;
+    # loader/validation helpers remain in lib.rs.
+    kernel_src = _read("kernel_rs/src/lib.rs") + _read("kernel_rs/src/syscall.rs")
     for token in [
         "fn elf_v1_validate_image",
         "18 => sys_open_v1(arg1, arg2, arg3)",

@@ -11,7 +11,9 @@ from v1_model import FdTableModel
 def test_fd_doc_and_syscall_contract(read_repo_file):
     doc = read_repo_file("docs/abi/process_thread_model_v1.md")
     syscall_doc = read_repo_file("docs/abi/syscall_v1.md")
-    kernel_src = read_repo_file("kernel_rs/src/lib.rs")
+    kernel_src = read_repo_file("kernel_rs/src/lib.rs") + read_repo_file(
+        "kernel_rs/src/syscall.rs"
+    )
 
     assert "## File descriptor table v1" in doc
     assert "| 18 | `sys_open` |" in syscall_doc

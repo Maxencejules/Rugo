@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from v1_model import TcpConnectionModel  # noqa: E402
+from net_v1_model import TcpConnectionModel  # noqa: E402
 
 
 def test_active_open_three_way_handshake_and_data_ack():
