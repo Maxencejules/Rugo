@@ -41,9 +41,25 @@ pub(crate) unsafe fn inw(port: u16) -> u16 {
 }
 
 const DEBUG_EXIT_PORT: u16 = 0xF4;
+const COM1_LSR: u16 = 0x3FD;
 
 pub(crate) fn qemu_exit(code: u8) {
-    unsafe { outb(DEBUG_EXIT_PORT, code); }
+    unsafe {
+        // Drain the UART transmitter and give the host a moment to pull
+        // the last serial bytes off the wire: an immediate debug-exit
+        // tears the chardev socket down with data still in flight and
+        // the capture side loses the tail of the boot transcript.
+        let mut spins = 0u32;
+        while inb(COM1_LSR) & 0x40 == 0 && spins < 100_000 {
+            spins += 1;
+        }
+        let mut settle = 0u32;
+        while settle < 20_000 {
+            outb(0x80, 0);
+            settle += 1;
+        }
+        outb(DEBUG_EXIT_PORT, code);
+    }
 }
 
 #[repr(C, packed)]
@@ -133,6 +149,23 @@ cfg_user! {
             "push 0x1B",
             "push {stack}",
             "push 0x002",
+            "push 0x23",
+            "push {code}",
+            "iretq",
+            stack = in(reg) user_sp,
+            code = in(reg) code_va,
+            options(noreturn),
+        );
+    }
+
+    /// Like enter_ring3_at but with RFLAGS.IF set: the task can be
+    /// preempted by the PIT. Only safe once the PIC is remapped + masked.
+    #[cfg(feature = "go_test")]
+    pub(crate) unsafe fn enter_ring3_preemptible(code_va: u64, user_sp: u64) -> ! {
+        core::arch::asm!(
+            "push 0x1B",
+            "push {stack}",
+            "push 0x202",
             "push 0x23",
             "push {code}",
             "iretq",

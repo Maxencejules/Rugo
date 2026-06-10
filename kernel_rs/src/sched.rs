@@ -2,16 +2,18 @@
 
 use crate::{outb, qemu_exit, serial_write};
 
-#[cfg(feature = "sched_test")]
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
 const PIC1_CMD: u16 = 0x20;
-#[cfg(feature = "sched_test")]
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
 const PIC1_DATA: u16 = 0x21;
-#[cfg(feature = "sched_test")]
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
 const PIC2_CMD: u16 = 0xA0;
-#[cfg(feature = "sched_test")]
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
 const PIC2_DATA: u16 = 0xA1;
 
-#[cfg(feature = "sched_test")]
+/// Remap the 8259A PICs to vectors 32..47 and mask every line but IRQ0
+/// (the PIT). Shared by the sched_test lane and default-lane preemption.
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
 pub(crate) unsafe fn pic_init() {
     outb(PIC1_CMD, 0x11);
     outb(PIC2_CMD, 0x11);
@@ -25,15 +27,15 @@ pub(crate) unsafe fn pic_init() {
     outb(PIC2_DATA, 0xFF);
 }
 
-#[cfg(feature = "sched_test")]
-unsafe fn pic_send_eoi(irq: u8) {
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
+pub(crate) unsafe fn pic_send_eoi(irq: u8) {
     if irq >= 8 {
         outb(PIC2_CMD, 0x20);
     }
     outb(PIC1_CMD, 0x20);
 }
 
-#[cfg(feature = "sched_test")]
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
 pub(crate) unsafe fn pit_init(freq: u32) {
     let divisor = 1_193_182u32 / freq;
     outb(0x43, 0x34);

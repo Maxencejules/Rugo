@@ -419,9 +419,14 @@ pub fn try_demand_map(va: u64) -> bool {
         *pt.add(pt_idx) = frame | PTE_P_W_U;
         core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
         DEMAND_MAPPED += 1;
-        serial_write(b"MM: demand map va=0x");
-        serial_write_hex(va & !0xFFF);
-        serial_write(b"\n");
+        // Per-page markers only for the boot-probe sub-range; the TinyGo
+        // heap above 0x110_0000 maps silently so its page count (which
+        // varies with workload) never perturbs marker-count assertions.
+        if va < DEMAND_BASE + 0x1_0000 {
+            serial_write(b"MM: demand map va=0x");
+            serial_write_hex(va & !0xFFF);
+            serial_write(b"\n");
+        }
         true
     }
 }

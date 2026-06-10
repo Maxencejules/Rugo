@@ -83,6 +83,10 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             32 => {
                 crate::sched::handle_timer_irq();
             }
+            #[cfg(all(feature = "go_test", not(feature = "sched_test"), not(feature = "compat_real_test")))]
+            32 => {
+                crate::r4_timer_preempt(frame);
+            }
             #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
             64 | 65 => {
                 if runtime::native::handle_irq(int_num) {

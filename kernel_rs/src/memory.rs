@@ -118,7 +118,17 @@ pub(crate) unsafe fn user_pages_ok(ptr: u64, len: usize, required_perms: u64) ->
     let mut page = start_page;
     loop {
         if !check_page_user_perms(page, hhdm, required_perms) {
-            return false;
+            // Demand-window pages may not have faulted in yet: user code
+            // can pass freshly allocated, never-touched heap memory
+            // straight into a syscall. Pre-map them here exactly as the
+            // page-fault path would, then re-check.
+            let premapped = page >= crate::mm::DEMAND_BASE
+                && page < crate::mm::DEMAND_END
+                && crate::mm::try_demand_map(page)
+                && check_page_user_perms(page, hhdm, required_perms);
+            if !premapped {
+                return false;
+            }
         }
         if page >= end_page {
             break;

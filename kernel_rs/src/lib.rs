@@ -2255,7 +2255,15 @@ cfg_r4! {
         R4_TASKS[tid].saved_frame = [0u64; 22];
         R4_TASKS[tid].saved_frame[17] = code_va;  // RIP
         R4_TASKS[tid].saved_frame[18] = 0x23;     // CS (user code RPL=3)
-        R4_TASKS[tid].saved_frame[19] = 0x02;     // RFLAGS
+        // IF is only seeded in the pure go lane, where kmain remaps and
+        // masks the PIC before any task runs. The compat lane composes
+        // go_test+compat_real_test without programming the PIC: an IF=1
+        // task there would route stale PIT ticks to the double-fault
+        // vector.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        { R4_TASKS[tid].saved_frame[19] = 0x202; } // RFLAGS, IF set: preemptible
+        #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+        { R4_TASKS[tid].saved_frame[19] = 0x02; }  // RFLAGS
         R4_TASKS[tid].saved_frame[20] = stk_top;  // RSP
         R4_TASKS[tid].saved_frame[21] = 0x1B;     // SS (user data RPL=3)
         R4_TASKS[tid].recv_ep = 0;
@@ -2401,6 +2409,37 @@ cfg_r4! {
                 R4_TASKS[cur].state = R4State::Running;
                 *frame.add(14) = 0;
             }
+        }
+    }
+
+    #[cfg(feature = "go_test")]
+    static mut R4_PREEMPT_TICKS: u64 = 0;
+    #[cfg(feature = "go_test")]
+    static mut R4_PREEMPT_COUNT: u64 = 0;
+
+    /// PIT tick entry for the default lane: EOI first, then involuntarily
+    /// switch the interrupted ring-3 task to the next Ready task. Unlike the
+    /// yield path this preserves RAX - the saved frame is not a syscall
+    /// return.
+    #[cfg(feature = "go_test")]
+    pub(crate) unsafe fn r4_timer_preempt(frame: *mut u64) {
+        R4_PREEMPT_TICKS += 1;
+        sched::pic_send_eoi(0);
+        if *frame.add(18) & 3 != 3 {
+            return; // interrupted a kernel path - nothing to switch
+        }
+        if R4_NUM_TASKS == 0 {
+            return;
+        }
+        let cur = R4_CURRENT;
+        if let Some(tid) = r4_find_ready(cur) {
+            r4_save_frame(frame, cur);
+            R4_TASKS[cur].state = R4State::Ready;
+            R4_PREEMPT_COUNT += 1;
+            if R4_PREEMPT_COUNT == 1 {
+                serial_write(b"SCHED: preempt hit\n");
+            }
+            r4_switch_to(frame, tid);
         }
     }
 
@@ -5575,7 +5614,10 @@ pub extern "C" fn kmain() -> ! {
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         R4_TASKS[0].state = R4State::Running;
         R4_CURRENT = 0;
-        enter_ring3_at(USER_CODE_VA, USER_STACK_TOP);
+        sched::pic_init();
+        sched::pit_init(100);
+        serial_write(b"SCHED: preempt on hz=100\n");
+        arch_x86::enter_ring3_preemptible(USER_CODE_VA, USER_STACK_TOP);
     }
 
     // G2 spike: go_std_test â€” std-port candidate user program
