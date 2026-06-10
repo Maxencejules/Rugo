@@ -41,6 +41,7 @@ macro_rules! cfg_r4 {
 
 mod arch_x86;
 mod memory;
+pub(crate) mod mm;
 mod net;
 mod process;
 mod sched;
@@ -375,23 +376,23 @@ static LIMINE_REQUESTS_END: [u64; 2] = [
 // --------------- Limine HHDM request ---------------
 
 #[repr(C)]
-struct LimineHhdmResponse {
+pub(crate) struct LimineHhdmResponse {
     revision: u64,
-    offset: u64,
+    pub(crate) offset: u64,
 }
 
 #[repr(C)]
-struct LimineHhdmRequest {
+pub(crate) struct LimineHhdmRequest {
     id: [u64; 4],
     revision: u64,
-    response: *const LimineHhdmResponse,
+    pub(crate) response: *const LimineHhdmResponse,
 }
 
 unsafe impl Sync for LimineHhdmRequest {}
 
 #[used]
 #[link_section = ".limine_requests"]
-static mut HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+pub(crate) static mut HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b,
          0x48dcf1cb8ad2b852, 0x63984e959a98244b],
     revision: 0,
@@ -4885,6 +4886,7 @@ pub extern "C" fn kmain() -> ! {
     serial_init();
     serial_write(b"RUGO: boot ok\n");
     check_paging();
+    mm::pmm_init();
 
     unsafe {
         gdt_init();

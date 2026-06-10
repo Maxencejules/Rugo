@@ -1,0 +1,33 @@
+# Phase 1 acceptance: boot-verified dynamic memory foundation (PMM + heap +
+# demand paging). Live runtime evidence per SOURCE_MAP.md - serial markers only.
+
+
+def _find_in_order(serial: str, markers: list[str]) -> None:
+    pos = 0
+    for marker in markers:
+        found = serial.find(marker, pos)
+        assert found != -1, f"marker not found in order: {marker}"
+        pos = found + len(marker)
+
+
+def test_pmm_boot_marker_kernel_lane(qemu_serial):
+    out = qemu_serial.stdout
+    _find_in_order(out, [
+        "RUGO: boot ok",
+        "MM: paging=on",
+        "MM: pmm ok frames=0x",
+        "RUGO: halt ok",
+    ])
+    assert "MM: pmm none" not in out
+
+
+def test_pmm_boot_marker_go_lane(qemu_serial_go):
+    out = qemu_serial_go.stdout
+    _find_in_order(out, [
+        "RUGO: boot ok",
+        "MM: pmm ok frames=0x",
+        "GOINIT: start",
+        "GOINIT: ready",
+        "RUGO: halt ok",
+    ])
+    assert "MM: pmm none" not in out
