@@ -692,7 +692,6 @@ def external_pkg_disk_img():
                 "APP: hello world\n",
             ],
             capture_output=True,
-            input=input_text,
             text=True,
             timeout=QEMU_TIMEOUT,
         )

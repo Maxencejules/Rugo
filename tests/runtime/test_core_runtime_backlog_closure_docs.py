@@ -20,11 +20,11 @@ def test_core_runtime_backlog_closure_doc_marks_historical_backlog_closed():
         "| `M10 Security baseline v1` | `Closed` | `Runtime-backed` |",
         "| `M16 Process + Scheduler Model v2` | `Closed` | `Runtime-backed` |",
         "| `M25 Userspace Service Model + Init v2` | `Closed` | `Runtime-backed` |",
-        "| `M18 Storage reliability v2` | `Closed` | `Evidence-first` |",
-        "| `M19 Network stack v2` | `Closed` | `Evidence-first` |",
-        "| `M22 Kernel Reliability + Soak v1` | `Closed` | `Evidence-first` |",
-        "| `M42 Isolation + Namespace Baseline v1` | `Closed` | `Evidence-first` |",
-        "Treat `M12`, `M13`, `M18`, `M19`, `M22`, and `M42` as closed historical",
+        "| `M18 Storage reliability v2` | `Closed` | `Runtime-backed` |",
+        "| `M19 Network stack v2` | `Closed` | `Runtime-backed` |",
+        "| `M22 Kernel Reliability + Soak v1` | `Closed` | `Runtime-backed` |",
+        "| `M42 Isolation + Namespace Baseline v1` | `Closed` | `Runtime-backed` |",
+        "Treat `M22` and `M42` as closed historical",
     ]:
         assert token in doc
 

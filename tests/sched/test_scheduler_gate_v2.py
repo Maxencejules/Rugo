@@ -18,7 +18,7 @@ def test_process_scheduler_v2_gate_wiring_and_artifacts():
         "tests/user/test_process_wait_kill_v2.py",
         "tests/user/test_signal_delivery_v2.py",
         "tests/runtime/test_process_scheduler_runtime_v2.py",
-        "tests/sched/v2_model.py",
+        "tests/sched/sched_v2_model.py",
         "tests/sched/test_preempt_timer_quantum_v2.py",
         "tests/sched/test_priority_fairness_v2.py",
         "tests/sched/test_scheduler_soak_v2.py",

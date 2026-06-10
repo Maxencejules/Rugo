@@ -39,7 +39,7 @@ def test_abi_stability_v3_gate_wiring_and_artifacts():
     for entry in [
         "tools/check_abi_diff_v3.py --out $(OUT)/abi-diff-v3.json",
         "tools/check_syscall_compat_v3.py --diff-report $(OUT)/abi-diff-v3.json --kernel-report $(KERNEL_SYSCALL_TABLE) --interface-report $(GO_STD_INTERFACE_REPORT) --out $(OUT)/syscall-compat-v3.json",
-        "$(KERNEL_SYSCALL_TABLE): tools/extract_kernel_syscalls.py kernel_rs/src/lib.rs | $(OUT)",
+        "$(KERNEL_SYSCALL_TABLE): tools/extract_kernel_syscalls.py kernel_rs/src/syscall.rs | $(OUT)",
         "$(GO_STD_INTERFACE_REPORT): tools/extract_go_std_syscalls.py services/go_std/syscalls.asm | $(OUT)",
         "tests/runtime/test_abi_docs_v3.py",
         "tests/runtime/test_abi_window_v3.py",

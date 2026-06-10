@@ -19,7 +19,7 @@ def test_network_stack_v2_gate_wiring_and_artifacts():
         "docs/net/interop_matrix_v2.md",
         "tools/run_net_interop_matrix_v2.py",
         "tools/run_net_soak_v2.py",
-        "tests/net/v2_model.py",
+        "tests/net/net_v2_model.py",
         "tests/net/test_tcp_interop_v2.py",
         "tests/net/test_ipv6_interop_v2.py",
         "tests/net/test_dns_stub_v2.py",

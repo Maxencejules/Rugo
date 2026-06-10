@@ -91,7 +91,8 @@ def test_native_driver_contract_gate_v1_wiring_and_artifacts():
         "| **M53** Native Driver Contract Expansion v1 | n/a | done |" in status
     )
     assert "make test-native-driver-contract-v1" in readme
-    assert "M43-M53" in readme
+    # README's historical mapping row now extends through M54.
+    assert "M43-M54" in readme
 
     out = _out_path("native-driver-contract-gate-v1.json")
     assert diagnostics.main(["--seed", "20260311", "--out", str(out)]) == 0
