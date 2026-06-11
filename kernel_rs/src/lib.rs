@@ -2167,7 +2167,12 @@ cfg_r4! {
     const R4_TASK_DEFAULT_SOCKET_LIMIT: u8 = 4;
     const R4_TASK_DEFAULT_ENDPOINT_LIMIT: u8 = 4;
 
-    #[cfg(any(feature = "stress_ipc_test", feature = "go_test"))]
+    // The task table is heap-backed (Phase 1 allocator); this is the spawn
+    // cap, not a static array bound. The go lane allows dynamic process
+    // populations well past the historical 6-slot limit.
+    #[cfg(feature = "go_test")]
+    const R4_MAX_TASKS: usize = 32;
+    #[cfg(all(feature = "stress_ipc_test", not(feature = "go_test")))]
     const R4_MAX_TASKS: usize = 6;
     #[cfg(not(any(feature = "stress_ipc_test", feature = "go_test")))]
     const R4_MAX_TASKS: usize = 2;
@@ -2234,15 +2239,35 @@ cfg_r4! {
         };
     }
 
-    static mut R4_TASKS: [R4Task; R4_MAX_TASKS] = [R4Task::EMPTY; R4_MAX_TASKS];
+    // Dynamically allocated process structures (gap-analysis item 2): the
+    // table lives on the kernel heap and is pre-sized to the spawn cap at
+    // boot so every existing index site stays valid.
+    static mut R4_TASKS: alloc::vec::Vec<R4Task> = alloc::vec::Vec::new();
     static mut R4_CURRENT: usize = 0;
     static mut R4_NUM_TASKS: usize = 0;
     static mut R4_THREADS_CREATED: usize = 0;
+    static mut R4_TASKS_HIGH: usize = 0;
+
+    pub(crate) unsafe fn r4_tasks_init() {
+        R4_TASKS.clear();
+        let mut i = 0;
+        while i < R4_MAX_TASKS {
+            R4_TASKS.push(R4Task::EMPTY);
+            i += 1;
+        }
+    }
 
     #[inline(always)]
     unsafe fn r4_stack_top_for_slot(slot: usize) -> u64 {
         #[cfg(feature = "go_test")]
         {
+            // Slots 0-4 keep the historical static strides below the user
+            // stack top; higher slots get demand-paged strides whose pages
+            // arrive zeroed on first touch (guard zones enforced by mm).
+            if slot >= 5 {
+                return mm::DEMAND_STACK_BASE
+                    + ((slot as u64) - 4) * mm::DEMAND_STACK_STRIDE;
+            }
             USER_STACK_TOP - (slot as u64) * 0x2000
         }
         #[cfg(not(feature = "go_test"))]
@@ -2266,6 +2291,9 @@ cfg_r4! {
         { R4_TASKS[tid].saved_frame[19] = 0x02; }  // RFLAGS
         R4_TASKS[tid].saved_frame[20] = stk_top;  // RSP
         R4_TASKS[tid].saved_frame[21] = 0x1B;     // SS (user data RPL=3)
+        if R4_NUM_TASKS > R4_TASKS_HIGH {
+            R4_TASKS_HIGH = R4_NUM_TASKS;
+        }
         R4_TASKS[tid].recv_ep = 0;
         R4_TASKS[tid].recv_buf = 0;
         R4_TASKS[tid].recv_cap = 0;
@@ -2479,7 +2507,12 @@ cfg_r4! {
             process::compat_real_finish_current_app();
         }
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-        serial_write(b"RUGO: halt ok\n");
+        unsafe {
+            serial_write(b"SCHED: tasks high=0x");
+            serial_write_hex(R4_TASKS_HIGH as u64);
+            serial_write(b"\n");
+            serial_write(b"RUGO: halt ok\n");
+        }
         qemu_exit(0x31);
         loop { unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)); } }
     }
@@ -4949,6 +4982,13 @@ pub extern "C" fn kmain() -> ! {
     mm::pmm_init();
     mm::heap_init();
     mm::heap_selftest();
+
+    // The R4 task table lives on the kernel heap; size it to the spawn cap
+    // before any lane creates tasks.
+    #[cfg(any(feature = "ipc_test", feature = "shm_test", feature = "ipc_badptr_send_test", feature = "ipc_badptr_recv_test", feature = "ipc_badptr_svc_test", feature = "ipc_buffer_full_test", feature = "ipc_waiter_busy_test", feature = "svc_overwrite_test", feature = "svc_full_test", feature = "svc_bad_endpoint_test", feature = "stress_ipc_test", feature = "quota_endpoints_test", feature = "quota_shm_test", feature = "quota_threads_test", feature = "go_test"))]
+    unsafe {
+        r4_tasks_init();
+    }
 
     unsafe {
         gdt_init();

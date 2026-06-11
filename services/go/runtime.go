@@ -281,6 +281,7 @@ func bootRuntime() {
 
 	log(msgGoInitBootstrap[:])
 	runMemDemandProbe()
+	runSpawnStress()
 
 	var order [serviceCount]byte
 	if !buildStartPlan(&order) {
@@ -1195,6 +1196,15 @@ func goSpawnedThreadMain() {
 	// until isolation and scheduling are configured for this task.
 	serviceID := spawnServiceID
 	spawnAck = 1
+	if serviceID == serviceWorker {
+		for workerGoFlag == 0 {
+			if sysYield() != 0 {
+				return
+			}
+		}
+		workerMain()
+		return
+	}
 	for serviceGoFlag[serviceID] == 0 {
 		if sysYield() != 0 {
 			fail(msgGoInitErr[:])

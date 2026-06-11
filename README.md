@@ -60,6 +60,11 @@ Visible proof paths:
   tasks in the product lane, including the preemption-safe init protocol.
   Proof: `tests/sched/test_preempt_default_lane_v1.py`, contract
   `docs/runtime/scheduler_v1.md`
+- `make test-dynamic-tasks-v1`
+  Boots the default Go image and verifies the task population is no longer
+  fixed at build time: 9 concurrent tasks at boot on the heap-backed task
+  table with demand-paged, guard-zoned stacks.
+  Proof: `tests/runtime/test_dynamic_tasks_v1.py`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

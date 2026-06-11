@@ -364,8 +364,16 @@ pub fn alloc_frames_contig(count: usize) -> Option<u64> {
 // missing page-table frames and the data frame from the PMM, and retries.
 
 pub const DEMAND_BASE: u64 = 0x0100_0000; // 16 MiB
-pub const DEMAND_END: u64 = 0x0180_0000;  // 24 MiB (8 MiB window)
-const DEMAND_MAX_FRAMES: u64 = 1024;      // 4 MiB quota for now
+pub const DEMAND_END: u64 = 0x0200_0000;  // 32 MiB (16 MiB window)
+const DEMAND_MAX_FRAMES: u64 = 2048;      // 8 MiB quota for now
+
+// Stack area for dynamically spawned tasks (slots >= 5): 128 KiB strides
+// from DEMAND_STACK_BASE, growing down. The bottom 16 KiB of every stride
+// is a guard zone the demand mapper refuses, so a runaway stack faults
+// fatally instead of silently walking into its neighbour.
+pub const DEMAND_STACK_BASE: u64 = 0x0190_0000;
+pub const DEMAND_STACK_STRIDE: u64 = 0x2_0000;
+const DEMAND_STACK_GUARD: u64 = 0x4000;
 
 static mut DEMAND_MAPPED: u64 = 0;
 
@@ -378,6 +386,11 @@ pub fn try_demand_map(va: u64) -> bool {
     unsafe {
         if !PMM.ready || va < DEMAND_BASE || va >= DEMAND_END {
             return false;
+        }
+        if va >= DEMAND_STACK_BASE
+            && (va - DEMAND_STACK_BASE) % DEMAND_STACK_STRIDE < DEMAND_STACK_GUARD
+        {
+            return false; // stack guard zone
         }
         if DEMAND_MAPPED >= DEMAND_MAX_FRAMES {
             return false;
