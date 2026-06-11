@@ -169,6 +169,14 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 		spawnRun(appNameNxprobe, "")
 		return false, true
 	}
+	if len(cmd) > 9 && cmd[:9] == "sigprobe " {
+		// "sigprobe die" is EXPECTED to be killed by the default action.
+		spawnRun(appNameSigprobe, cmd[9:])
+		return false, true
+	}
+	if cmd == "sigprobe" {
+		return false, spawnRun(appNameSigprobe, "")
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

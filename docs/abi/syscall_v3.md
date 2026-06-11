@@ -21,6 +21,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   - `docs/runtime/deprecation_window_policy_v1.md`
 - IDs `28..47` are reserved for additive v3.x expansion and are not required in
   v3.0.
+- IDs `48..63` are reserved for additive v3.2 expansion under the same
+  rules (the `28..47` window is fully allocated). Allocated so far:
+  `48` = `sys_signal_ctl` (op 1 = register handler, op 2 = kill(tid, sig),
+  op 3 = sigreturn; contract in `docs/runtime/signals_v1.md`).
 
 ## Invocation
 

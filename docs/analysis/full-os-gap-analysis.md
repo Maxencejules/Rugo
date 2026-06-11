@@ -202,7 +202,10 @@ Parity (credible-OS tier):
     graphics stack (framebuffer → compositor → toolkit).
     — W^X on dynamic user memory **DONE** (`make test-wx-v1`; EFER.NXE +
     NX data pages, a stack-execution probe dies with the fetch-fault
-    error code); the rest of the tier is pending
+    error code); signals **DONE** (`make test-signals-v1`,
+    `docs/runtime/signals_v1.md`; `sys_signal_ctl` id 48 opens the
+    additive v3.2 window — handler delivery via frame rewrite,
+    sigreturn, default kill); the rest of the tier is pending
 
 ## 4. Honest Positioning
 

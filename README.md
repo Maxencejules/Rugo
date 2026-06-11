@@ -119,6 +119,13 @@ Visible proof paths:
   shuts down cleanly.
   Proof: `tests/runtime/test_wx_runtime_v1.py`, contract
   `docs/runtime/memory_v1.md`
+- `make test-signals-v1`
+  Boots the default Go image and proves signals: the sigprobe app
+  registers a handler and signals itself - the handler runs with the
+  signal number, sigreturn resumes the interrupted path, and a second
+  run without a handler is killed by the default action.
+  Proof: `tests/runtime/test_signals_runtime_v1.py`, contract
+  `docs/runtime/signals_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

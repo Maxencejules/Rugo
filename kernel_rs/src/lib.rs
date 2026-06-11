@@ -2569,6 +2569,12 @@ cfg_r4! {
         block_count: u64,
         ipc_send_count: u64,
         ipc_recv_count: u64,
+        // Signals (gap item 10): one registered handler, a pending
+        // bitmap, and the interrupted frame saved across delivery.
+        sig_handler: u64,
+        sig_pending: u64,
+        sig_in_handler: bool,
+        sig_saved_frame: [u64; 22],
     }
 
     impl R4Task {
@@ -2597,6 +2603,10 @@ cfg_r4! {
             block_count: 0,
             ipc_send_count: 0,
             ipc_recv_count: 0,
+            sig_handler: 0,
+            sig_pending: 0,
+            sig_in_handler: false,
+            sig_saved_frame: [0u64; 22],
         };
     }
 
@@ -2666,6 +2676,10 @@ cfg_r4! {
         R4_TASKS[tid].wait_target = R4_WAIT_NONE;
         R4_TASKS[tid].wait_status_ptr = 0;
         R4_TASKS[tid].sched_class = R4_SCHED_CLASS_BEST_EFFORT;
+        // Slot reuse must not leak signal state into the next task.
+        R4_TASKS[tid].sig_handler = 0;
+        R4_TASKS[tid].sig_pending = 0;
+        R4_TASKS[tid].sig_in_handler = false;
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -2720,6 +2734,93 @@ cfg_r4! {
         R4_TASKS[tid].state = R4State::Running;
         R4_TASKS[tid].dispatch_count += 1;
         R4_CURRENT = tid;
+        sig_deliver_if_pending(frame, tid);
+    }
+
+    // ---- signals (gap item 10) ----
+    // One registered handler per task, a pending bitmap, frame-rewrite
+    // delivery at the dispatch points (task switch and self-directed
+    // sys_signal_ctl). Signal 9 always kills; any other signal without
+    // a handler kills; sigreturn restores the interrupted frame.
+
+    const SIG_FORCED_KILL: u64 = 9;
+
+    unsafe fn sig_deliver_if_pending(frame: *mut u64, tid: usize) {
+        if R4_TASKS[tid].sig_pending == 0 || R4_TASKS[tid].sig_in_handler {
+            return;
+        }
+        let sig = R4_TASKS[tid].sig_pending.trailing_zeros() as u64;
+        R4_TASKS[tid].sig_pending &= !(1u64 << sig);
+        if sig == SIG_FORCED_KILL || R4_TASKS[tid].sig_handler == 0 {
+            serial_write(b"SIG: kill tid=0x");
+            serial_write_hex(tid as u64);
+            serial_write(b" sig=0x");
+            serial_write_hex(sig);
+            serial_write(b"\n");
+            r4_exit_and_switch(frame, 1);
+            return;
+        }
+        // Redirect to the handler: save the interrupted state, then
+        // run handler(sig) on a red-zone-clear, aligned stack.
+        for i in 0..22 {
+            R4_TASKS[tid].sig_saved_frame[i] = *frame.add(i);
+        }
+        R4_TASKS[tid].sig_in_handler = true;
+        *frame.add(17) = R4_TASKS[tid].sig_handler; // rip
+        *frame.add(9) = sig; // rdi
+        *frame.add(20) = (*frame.add(20) - 256) & !0xF; // rsp
+    }
+
+    /// sys_signal_ctl (ABI v3.2 id 48): op 1 = register handler,
+    /// op 2 = kill(tid, sig) — tid u64::MAX means self; op 3 = sigreturn.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_signal_ctl(frame: *mut u64, op: u64, a2: u64, a3: u64) {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => {
+                // Handler must be a user-space address.
+                if a2 != 0 && a2 >= 0x0000_8000_0000_0000 {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                R4_TASKS[R4_CURRENT].sig_handler = a2;
+                *frame.add(14) = 0;
+            }
+            2 => {
+                let tid = if a2 == u64::MAX { R4_CURRENT } else { a2 as usize };
+                if tid >= R4_NUM_TASKS
+                    || a3 >= 64
+                    || matches!(R4_TASKS[tid].state, R4State::Dead)
+                {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                // Only self or a direct child may be signalled.
+                if tid != R4_CURRENT && R4_TASKS[tid].parent_tid != R4_CURRENT {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                R4_TASKS[tid].sig_pending |= 1u64 << a3;
+                *frame.add(14) = 0;
+                if tid == R4_CURRENT {
+                    // Deliver on the live frame before returning to user.
+                    sig_deliver_if_pending(frame, tid);
+                }
+            }
+            3 => {
+                if !R4_TASKS[R4_CURRENT].sig_in_handler {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                R4_TASKS[R4_CURRENT].sig_in_handler = false;
+                for i in 0..22 {
+                    *frame.add(i) = R4_TASKS[R4_CURRENT].sig_saved_frame[i];
+                }
+            }
+            _ => {
+                *frame.add(14) = ERR;
+            }
+        }
     }
 
     unsafe fn r4_save_frame(frame: *mut u64, tid: usize) {
