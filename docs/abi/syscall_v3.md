@@ -24,7 +24,9 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
 - IDs `48..63` are reserved for additive v3.2 expansion under the same
   rules (the `28..47` window is fully allocated). Allocated so far:
   `48` = `sys_signal_ctl` (op 1 = register handler, op 2 = kill(tid, sig),
-  op 3 = sigreturn; contract in `docs/runtime/signals_v1.md`).
+  op 3 = sigreturn; contract in `docs/runtime/signals_v1.md`);
+  `49` = `sys_net_query` (op 1 = DHCP discover, op 2 = DNS A query,
+  op 3 = poll; contract in `docs/runtime/netcfg_v1.md`).
 
 ## Invocation
 

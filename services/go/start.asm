@@ -90,6 +90,12 @@ main.sysFsCtl:
     int  0x80
     ret
 
+global main.sysNetQuery
+main.sysNetQuery:
+    mov  eax, 49
+    int  0x80
+    ret
+
 global main.sysOpenRaw
 main.sysOpenRaw:
     mov  eax, 18

@@ -213,6 +213,9 @@ pub(crate) unsafe fn net_rx_pump() {
             if opcode == 2 {
                 let sender_ip = [arp[14], arp[15], arp[16], arp[17]];
                 crate::tcp::on_arp_reply(&sender_ip, &arp[8..14]);
+                let mut mac = [0u8; 6];
+                mac.copy_from_slice(&arp[8..14]);
+                crate::netcfg::on_arp_reply(sender_ip, &mac);
             }
             // ARP requests for the guest IP are answered by the slirp
             // gateway path only when needed; the UDP-echo lane keeps its
@@ -223,6 +226,8 @@ pub(crate) unsafe fn net_rx_pump() {
             let ip = &buf[14..n];
             if ip[9] == 6 {
                 crate::tcp::tcp_input(ip);
+            } else if ip[9] == 17 {
+                crate::netcfg::udp_input(ip);
             }
         }
     }

@@ -113,6 +113,9 @@ func sysWait(pid uintptr, status *uintptr, options uintptr) uintptr
 func sysSpawn(name *byte, n uintptr, args *byte, alen uintptr, stdinFd uintptr, stdoutFd uintptr) uintptr
 
 // sysFsCtl invokes syscall 47 (sys_fs_ctl): mkdir/unlink/stat on /data.
+// sysNetQuery invokes syscall 49 (sys_net_query): DHCP/DNS client ops.
+func sysNetQuery(op uintptr, ptr *byte, arg uintptr) uintptr
+
 func sysFsCtl(op uintptr, path *byte, arg uintptr) uintptr
 
 // sysOpenRaw invokes syscall 18 (sys_open).

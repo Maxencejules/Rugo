@@ -84,6 +84,13 @@ Visible proof paths:
   host-side listener owned by the test and round-trips a payload.
   Proof: `tests/runtime/test_tcp_runtime_v1.py`, contract
   `docs/runtime/tcp_v1.md`
+- `make test-netcfg-v1`
+  Boots the default Go image and proves the DHCP and DNS clients: a
+  real DISCOVER/OFFER exchange with QEMU's built-in DHCP server, and a
+  real A query answered by a resolver the test runs on the host side
+  of the user-mode network.
+  Proof: `tests/runtime/test_netcfg_runtime_v1.py`, contract
+  `docs/runtime/netcfg_v1.md`
 - `make test-console-v1`
   Boots the default Go image and proves the local console: a full
   health/shutdown session typed through the emulated PS/2 keyboard via

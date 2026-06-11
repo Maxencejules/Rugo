@@ -136,6 +136,12 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if len(cmd) > 9 && cmd[:9] == "tcpcheck " {
 		return false, tcpCheck(cmd[9:])
 	}
+	if cmd == "dhcpcheck" {
+		return false, dhcpCheck()
+	}
+	if len(cmd) > 9 && cmd[:9] == "dnscheck " {
+		return false, dnsCheck(cmd[9:])
+	}
 	// A single `left | right` pipeline runs both sides as external
 	// programs joined by a kernel pipe.
 	{

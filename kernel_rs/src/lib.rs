@@ -51,6 +51,8 @@ pub(crate) mod mm;
 mod net;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tcp;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod netcfg;
 #[cfg(feature = "go_test")]
 pub(crate) mod vfs;
 mod process;
@@ -2841,6 +2843,34 @@ cfg_r4! {
         *frame.add(20) = (*frame.add(20) - 256) & !0xF; // rsp
     }
 
+    /// sys_net_query (ABI v3.2 id 49): op 1 = DHCP discover, op 2 = DNS
+    /// A query (a2 = name pointer, a3 = len | port << 16), op 3 = poll —
+    /// returns u64::MAX while pending, then the IPv4 result once.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_net_query(op: u64, a2: u64, a3: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_NETWORK == 0 {
+            return ERR;
+        }
+        match op {
+            1 => netcfg::start_dhcp(),
+            2 => {
+                let len = (a3 & 0xFFFF) as usize;
+                let port = (a3 >> 16) as u16;
+                if len == 0 || len > 63 || port == 0 {
+                    return ERR;
+                }
+                let mut name = [0u8; 64];
+                if copyin_user(&mut name[..len], a2, len).is_err() {
+                    return ERR;
+                }
+                netcfg::start_dns(&name[..len], port)
+            }
+            3 => netcfg::poll_result(),
+            _ => ERR,
+        }
+    }
+
     /// sys_signal_ctl (ABI v3.2 id 48): op 1 = register handler,
     /// op 2 = kill(tid, sig) — tid u64::MAX means self; op 3 = sigreturn.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -2986,9 +3016,9 @@ cfg_r4! {
         R4_PREEMPT_TICKS += 1;
         sched::pic_send_eoi(0);
         #[cfg(not(feature = "compat_real_test"))]
-        if tcp::tcp_active() {
-            // Drive the wire TCP machine from the tick while a connection
-            // is in flight.
+        if tcp::tcp_active() || netcfg::query_active() {
+            // Drive the wire TCP machine / DHCP-DNS query from the tick
+            // while one is in flight.
             net::net_rx_pump();
         }
         if *frame.add(18) & 3 != 3 {

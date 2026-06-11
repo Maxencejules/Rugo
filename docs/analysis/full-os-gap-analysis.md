@@ -175,8 +175,11 @@ Usability (turns the demo into an operable system):
    per-task uid, enforcement on open/unlink/chmod)
 6. **TCP/IP stack** (port lwIP or smoltcp — smoltcp is Rust and fits the
    kernel) wired to the existing socket syscalls; DHCP + DNS client.
-   — wire TCP client **DONE** (`make test-tcp-v1`, `docs/runtime/tcp_v1.md`,
-   in-repo stack, no external crates); DHCP + DNS clients pending
+   — **DONE**: wire TCP client (`make test-tcp-v1`,
+   `docs/runtime/tcp_v1.md`, in-repo stack, no external crates) plus
+   DHCP and DNS clients (`make test-netcfg-v1`,
+   `docs/runtime/netcfg_v1.md`; a real DISCOVER/OFFER against QEMU's
+   DHCP server and a real A query answered by a test-owned resolver)
 7. **Keyboard input + framebuffer text console**, so the OS is usable outside
    a serial pipe.
    — **DONE** (`make test-console-v1`, `docs/runtime/console_v1.md`; a full
