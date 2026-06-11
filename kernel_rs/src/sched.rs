@@ -35,6 +35,15 @@ pub(crate) unsafe fn pic_send_eoi(irq: u8) {
     outb(PIC1_CMD, 0x20);
 }
 
+/// Unmask one master-PIC line (e.g. IRQ1 for the PS/2 keyboard).
+#[cfg(any(feature = "sched_test", feature = "go_test"))]
+pub(crate) unsafe fn pic_unmask(irq: u8) {
+    if irq < 8 {
+        let mask = crate::arch_x86::inb(PIC1_DATA);
+        outb(PIC1_DATA, mask & !(1 << irq));
+    }
+}
+
 #[cfg(any(feature = "sched_test", feature = "go_test"))]
 pub(crate) unsafe fn pit_init(freq: u32) {
     let divisor = 1_193_182u32 / freq;

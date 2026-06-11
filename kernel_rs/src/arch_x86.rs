@@ -222,6 +222,7 @@ pub(crate) unsafe fn idt_init() {
         fn isr_stub_13();
         fn isr_stub_14();
         fn isr_stub_32();
+        fn isr_stub_33();
         #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
         fn isr_stub_64();
         #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
@@ -235,6 +236,7 @@ pub(crate) unsafe fn idt_init() {
     idt_set_gate(13, isr_stub_13 as *const () as u64);
     idt_set_gate(14, isr_stub_14 as *const () as u64);
     idt_set_gate(32, isr_stub_32 as *const () as u64);
+    idt_set_gate(33, isr_stub_33 as *const () as u64);
     #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
     {
         idt_set_gate(64, isr_stub_64 as *const () as u64);

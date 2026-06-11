@@ -42,6 +42,9 @@ macro_rules! cfg_r4 {
 }
 
 mod arch_x86;
+pub(crate) mod fb;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod kbd;
 mod memory;
 pub(crate) mod mm;
 mod net;
@@ -318,6 +321,8 @@ fn serial_write(s: &[u8]) {
             outb(COM1, b);
         }
     }
+    // Mirror the transcript onto the framebuffer console (item 7).
+    fb::fb_write(s);
 }
 
 fn serial_can_read() -> bool {
@@ -328,6 +333,24 @@ fn serial_read_byte() -> u8 {
     unsafe {
         while inb(COM1 + 5) & 0x01 == 0 {}
         inb(COM1)
+    }
+}
+
+/// Console input: PS/2 keyboard bytes win, serial is the fallback. The
+/// wait loop polls the i8042 directly because IRQ1 cannot fire while the
+/// kernel spins here with interrupts masked.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+fn console_read_byte() -> u8 {
+    unsafe {
+        loop {
+            if let Some(b) = kbd::kbd_pop() {
+                return b;
+            }
+            kbd::kbd_poll();
+            if serial_can_read() {
+                return inb(COM1);
+            }
+        }
     }
 }
 
@@ -726,7 +749,14 @@ cfg_m3! {
                 let mut kbuf = [0u8; 256];
                 let mut read = 0usize;
                 while read < n {
-                    kbuf[read] = serial_read_byte();
+                    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                    {
+                        kbuf[read] = console_read_byte();
+                    }
+                    #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+                    {
+                        kbuf[read] = serial_read_byte();
+                    }
                     read += 1;
                 }
                 if copyout_user(buf, &kbuf[..read], read).is_err() {
@@ -5403,6 +5433,17 @@ extern "C" fn thread_b() { loop { serial_write(b"B\n"); } }
 pub extern "C" fn kmain() -> ! {
     serial_init();
     serial_write(b"RUGO: boot ok\n");
+    fb::fb_init();
+    if fb::fb_ready() {
+        let (w, h) = fb::fb_size();
+        serial_write(b"FB: console on 0x");
+        serial_write_hex(w);
+        serial_write(b" x 0x");
+        serial_write_hex(h);
+        serial_write(b"\n");
+    } else {
+        serial_write(b"FB: none\n");
+    }
     check_paging();
     mm::pmm_init();
     mm::heap_init();
@@ -6083,6 +6124,8 @@ pub extern "C" fn kmain() -> ! {
         sched::pic_init();
         sched::pit_init(100);
         serial_write(b"SCHED: preempt on hz=100\n");
+        sched::pic_unmask(1);
+        serial_write(b"KBD: on\n");
         arch_x86::enter_ring3_preemptible(USER_CODE_VA, USER_STACK_TOP);
     }
 

@@ -178,6 +178,9 @@ Usability (turns the demo into an operable system):
    in-repo stack, no external crates); DHCP + DNS clients pending
 7. **Keyboard input + framebuffer text console**, so the OS is usable outside
    a serial pipe.
+   — **DONE** (`make test-console-v1`, `docs/runtime/console_v1.md`; a full
+   session typed via emulated PS/2, transcript rendered as framebuffer
+   pixels and verified by screendump)
 8. Shell that **executes external programs** with arguments, plus a first
    coreutils set (ls, cat, echo, ps); pipes need pipe IPC in the kernel.
    — partially: external program execution exists (item 4); arguments,

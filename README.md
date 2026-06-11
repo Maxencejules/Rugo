@@ -84,6 +84,13 @@ Visible proof paths:
   host-side listener owned by the test and round-trips a payload.
   Proof: `tests/runtime/test_tcp_runtime_v1.py`, contract
   `docs/runtime/tcp_v1.md`
+- `make test-console-v1`
+  Boots the default Go image and proves the local console: a full
+  health/shutdown session typed through the emulated PS/2 keyboard via
+  QMP send-key, with the boot transcript rendered to the framebuffer and
+  verified as pixels by a QMP screendump.
+  Proof: `tests/runtime/test_console_runtime_v1.py`, contract
+  `docs/runtime/console_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

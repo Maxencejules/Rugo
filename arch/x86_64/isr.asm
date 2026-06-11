@@ -32,6 +32,7 @@ ISR_ERR   14               ; #PF  Page Fault
 
 ; --- IRQ stubs (remapped by PIC to vectors 32+) ---
 ISR_NOERR 32               ; IRQ0  PIT timer
+ISR_NOERR 33               ; IRQ1  PS/2 keyboard
 ISR_NOERR 64               ; Native-driver MSI/MSI-X
 ISR_NOERR 65               ; Local APIC spurious vector
 

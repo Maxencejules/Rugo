@@ -87,6 +87,11 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             32 => {
                 crate::r4_timer_preempt(frame);
             }
+            #[cfg(all(feature = "go_test", not(feature = "sched_test"), not(feature = "compat_real_test")))]
+            33 => {
+                crate::kbd::kbd_irq();
+                crate::sched::pic_send_eoi(1);
+            }
             #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
             64 | 65 => {
                 if runtime::native::handle_irq(int_num) {
