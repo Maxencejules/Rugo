@@ -321,7 +321,11 @@ fn serial_write(s: &[u8]) {
             outb(COM1, b);
         }
     }
-    // Mirror the transcript onto the framebuffer console (item 7).
+    // Mirror the transcript onto the framebuffer console (item 7). The
+    // sched_test lane is excluded: its kernel threads run with IF=1 and
+    // can be preempted mid-draw, racing the cursor/scroll state. Every
+    // other lane writes from IF=0 kernel context, where this is atomic.
+    #[cfg(not(feature = "sched_test"))]
     fb::fb_write(s);
 }
 
