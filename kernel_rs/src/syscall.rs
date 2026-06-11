@@ -180,7 +180,9 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             46 => {
                 let arg4 = *frame.add(5); // r10
-                *frame.add(14) = sys_spawn_v1(arg1, arg2, arg3, arg4);
+                let arg5 = *frame.add(7); // r8
+                let arg6 = *frame.add(6); // r9
+                *frame.add(14) = sys_spawn_v1(arg1, arg2, arg3, arg4, arg5, arg6);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             47 => {

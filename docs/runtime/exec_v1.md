@@ -22,19 +22,34 @@ fork).
 - the kernel copies the argument string, NUL terminated, to the args page
   at `0x017F_F000` (last page of the app window) and hands the child
   `rdi` = args pointer, `rsi` = args length
-- the child gets the storage capability (fd limit 2) so file utilities
+- the child gets the storage capability (fd limit 4) so file utilities
   can read the `/data` tree, but no network, spawn, or IPC surface;
   isolation domain 5, demand-paged stack stride; reaped with `sys_wait`
 
 ## Coreutils
 
-`ls`, `cat`, `echo`, and `ps` (`apps/coreutils/*.asm`) ship in the app
-region and run as real external programs: the shell's `ls`/`cat`/`echo`/
-`ps` commands spawn the on-disk ELF with the command's argument string
-and reap it — every output line comes from the program itself (`ps`
-enumerates live kernel tasks through `sys_proc_info`). Pipes are the
-documented remaining sub-item of gap item 8 (they need kernel pipe
-objects and fd inheritance).
+`ls`, `cat`, `echo`, `ps`, and `wc` (`apps/coreutils/*.asm`) ship in the
+app region and run as real external programs: the shell's `ls`/`cat`/
+`echo`/`ps` commands spawn the on-disk ELF with the command's argument
+string and reap it — every output line comes from the program itself
+(`ps` enumerates live kernel tasks through `sys_proc_info`).
+
+## Pipes
+
+`sys_fs_ctl` op 4 creates a kernel pipe — a 512-byte in-kernel ring with
+reader/writer refcounts — and returns `rfd << 8 | wfd`. Read on an empty
+pipe returns -1 while a writer exists (callers yield and retry) and 0
+once every writer is gone (EOF). `sys_spawn` takes optional stdin
+(`r8`) and stdout (`r9`) pipe fds (`u64::MAX` = none): ownership moves
+to the child, so its exit — clean or faulting — releases the end and
+propagates EOF; the child sees them in `rdx`/`rcx`.
+
+The shell's `left | right` pipeline joins two external programs this
+way (`cat /data/etc/motd | wc`). v1 pipelines run sequentially — left
+to completion, then right — bounded by the pipe's ring; concurrent
+pipeline stages need per-process address spaces (the exec window is
+single-occupancy), which is the documented next architectural step.
+Proof: `make test-pipes-v1`, `tests/runtime/test_pipes_runtime_v1.py`.
 
 ## On-disk app region
 

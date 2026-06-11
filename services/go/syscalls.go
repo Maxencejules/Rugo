@@ -28,6 +28,7 @@ const (
 	fsCtlMkdir = 1
 	fsCtlUnlink = 2
 	fsCtlStat = 3
+	fsCtlPipe = 4
 )
 
 const (
@@ -108,7 +109,7 @@ func sysWait(pid uintptr, status *uintptr, options uintptr) uintptr
 
 // sysSpawn invokes syscall 46 (sys_spawn): run a named app from the
 // package store on disk as a child task.
-func sysSpawn(name *byte, n uintptr, args *byte, alen uintptr) uintptr
+func sysSpawn(name *byte, n uintptr, args *byte, alen uintptr, stdinFd uintptr, stdoutFd uintptr) uintptr
 
 // sysFsCtl invokes syscall 47 (sys_fs_ctl): mkdir/unlink/stat on /data.
 func sysFsCtl(op uintptr, path *byte, arg uintptr) uintptr

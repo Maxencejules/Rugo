@@ -127,6 +127,20 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if len(cmd) > 9 && cmd[:9] == "tcpcheck " {
 		return false, tcpCheck(cmd[9:])
 	}
+	// A single `left | right` pipeline runs both sides as external
+	// programs joined by a kernel pipe.
+	{
+		var bar int = -1
+		for i := 0; i+2 < len(cmd); i++ {
+			if cmd[i] == ' ' && cmd[i+1] == '|' && cmd[i+2] == ' ' {
+				bar = i
+				break
+			}
+		}
+		if bar > 0 {
+			return false, runPipeline(cmd[:bar], cmd[bar+3:])
+		}
+	}
 	// Coreutils run as real external programs from the package store.
 	if len(cmd) > 5 && cmd[:5] == "echo " {
 		return false, spawnRun(appNameEcho, cmd[5:])
@@ -294,7 +308,7 @@ func runInstalledApp(name string) bool {
 		}
 		// Real execution: load the app ELF from the package store on
 		// disk, run it as a child task, and reap it.
-		tid := sysSpawn(&appNameBaseShell[0], uintptr(len(appNameBaseShell)), nil, 0)
+		tid := sysSpawn(&appNameBaseShell[0], uintptr(len(appNameBaseShell)), nil, 0, noFd, noFd)
 		if tid == sysErr {
 			log(msgShellAppExecErr)
 			return false

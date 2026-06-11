@@ -1,14 +1,15 @@
 // SimpleFS v2: a writable on-disk file tree with directories.
 //
-// Region layout on the boot disk (base sector 128, clear of the runtime
-// state sectors 8..11 and the exec app region at 64+):
-//   128:      superblock  magic "VFS2" u32 | version u32 | node_used u32
-//   129..132: node table, 64 entries x 32 bytes:
+// Region layout on the boot disk (base sector 512, clear of the runtime
+// state sectors 8..11 and leaving the exec app region at 64+ room to
+// grow to its full 16-app table):
+//   512:      superblock  magic "VFS2" u32 | version u32 | node_used u32
+//   513..516: node table, 64 entries x 32 bytes:
 //             name[20] | parent u8 (0xFE = root) | kind u8 (0 free,
 //             1 file, 2 dir) | mode u8 (reserved) | pad | start_block u32
 //             | size u32
-//   133:      block allocation bitmap (1 bit per data block)
-//   134..:    512-byte data blocks (block i lives at sector 134 + i)
+//   517:      block allocation bitmap (1 bit per data block)
+//   518..:    512-byte data blocks (block i lives at sector 518 + i)
 //
 // Files are contiguously allocated in v1; growth past the current run
 // reallocates and copies. Mutations are write-through: the cached node
@@ -20,10 +21,10 @@
 use crate::{serial_write, serial_write_hex};
 
 pub(crate) const VFS_MAGIC: u32 = 0x32534656; // "VFS2"
-const BASE_SECTOR: u64 = 128;
+const BASE_SECTOR: u64 = 512;
 const NODE_SECTORS: u64 = 4;
-const BITMAP_SECTOR: u64 = BASE_SECTOR + 1 + NODE_SECTORS; // 133
-const DATA_SECTOR: u64 = BITMAP_SECTOR + 1; // 134
+const BITMAP_SECTOR: u64 = BASE_SECTOR + 1 + NODE_SECTORS; // 517
+const DATA_SECTOR: u64 = BITMAP_SECTOR + 1; // 518
 pub(crate) const MAX_NODES: usize = 64;
 const NODE_SIZE: usize = 32;
 const NAME_MAX: usize = 20;

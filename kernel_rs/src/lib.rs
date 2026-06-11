@@ -891,6 +891,31 @@ cfg_m3! {
             }
             #[cfg(all(feature = "go_test", feature = "compat_real_test"))]
             M8FdKind::VfsFile | M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
+            #[cfg(feature = "go_test")]
+            M8FdKind::PipeR => {
+                let p = M8_FD_PIPE[idx] as usize;
+                if p >= PIPE_MAX || !PIPES[p].active {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let avail = PIPES[p].len;
+                if avail == 0 {
+                    if PIPES[p].writers == 0 {
+                        return 0; // EOF: every writer is gone
+                    }
+                    return 0xFFFF_FFFF_FFFF_FFFF; // empty, retry later
+                }
+                let n = avail.min(len as usize).min(PIPE_CAP);
+                let mut kbuf = [0u8; PIPE_CAP];
+                kbuf[..n].copy_from_slice(&PIPES[p].buf[..n]);
+                if copyout_user(buf, &kbuf[..n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                PIPES[p].buf.copy_within(n..avail, 0);
+                PIPES[p].len = avail - n;
+                n as u64
+            }
+            #[cfg(feature = "go_test")]
+            M8FdKind::PipeW => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -982,6 +1007,27 @@ cfg_m3! {
             M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(all(feature = "go_test", feature = "compat_real_test"))]
             M8FdKind::VfsFile | M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
+            #[cfg(feature = "go_test")]
+            M8FdKind::PipeW => {
+                let p = M8_FD_PIPE[idx] as usize;
+                if p >= PIPE_MAX || !PIPES[p].active || PIPES[p].readers == 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let n = len as usize;
+                if PIPES[p].len + n > PIPE_CAP {
+                    return 0xFFFF_FFFF_FFFF_FFFF; // full, retry later
+                }
+                let mut kbuf = [0u8; 256];
+                if copyin_user(&mut kbuf[..n], buf, n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let off = PIPES[p].len;
+                PIPES[p].buf[off..off + n].copy_from_slice(&kbuf[..n]);
+                PIPES[p].len += n;
+                len
+            }
+            #[cfg(feature = "go_test")]
+            M8FdKind::PipeR => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -989,12 +1035,43 @@ cfg_m3! {
 
     /// sys_fs_ctl (ABI v3.x id 47): namespace mutations and stat for the
     /// /data tree. op 1 = mkdir, 2 = unlink, 3 = stat (returns
-    /// kind << 32 | size).
+    /// kind << 32 | size). op 4 = pipe create (returns rfd << 8 | wfd).
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_fs_ctl_v1(op: u64, path_ptr: u64, _arg: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if !r4_current_has_cap(R4_TASK_CAP_STORAGE) || !vfs::vfs_ready() {
             return ERR;
+        }
+        if op == 4 {
+            // pipe create: ignore the path, allocate a ring + two fds.
+            let mut p = 0usize;
+            while p < PIPE_MAX && PIPES[p].active {
+                p += 1;
+            }
+            if p == PIPE_MAX {
+                return ERR;
+            }
+            let rfd = m8_alloc_fd(M8FdKind::PipeR);
+            if rfd == ERR {
+                return ERR;
+            }
+            let wfd = m8_alloc_fd(M8FdKind::PipeW);
+            if wfd == ERR {
+                M8_FD_TABLE[rfd as usize] = M8FdEntry::EMPTY;
+                if R4_TASKS[R4_CURRENT].fd_count != 0 {
+                    R4_TASKS[R4_CURRENT].fd_count -= 1;
+                }
+                return ERR;
+            }
+            PIPES[p] = PipeObj::EMPTY;
+            PIPES[p].active = true;
+            PIPES[p].readers = 1;
+            PIPES[p].writers = 1;
+            M8_FD_PIPE[rfd as usize] = p as u8;
+            M8_FD_PIPE[wfd as usize] = p as u8;
+            M8_FD_TABLE[rfd as usize].rights = M10_RIGHT_READ | M10_RIGHT_POLL;
+            M8_FD_TABLE[wfd as usize].rights = M10_RIGHT_WRITE | M10_RIGHT_POLL;
+            return (rfd << 8) | wfd;
         }
         let path = match copyinstr_user(path_ptr, 128) {
             Ok(v) => v,
@@ -1065,6 +1142,7 @@ cfg_m3! {
             if owner_tid < R4_NUM_TASKS && R4_TASKS[owner_tid].fd_count != 0 {
                 R4_TASKS[owner_tid].fd_count -= 1;
             }
+            pipe_drop_end(idx);
         }
         M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
         0
@@ -1202,6 +1280,28 @@ cfg_m3! {
                                 revents |= POLLIN;
                             }
                             if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
+                                revents |= POLLOUT;
+                            }
+                        }
+                        #[cfg(feature = "go_test")]
+                        M8FdKind::PipeR => {
+                            let p = M8_FD_PIPE[idx] as usize;
+                            if events & POLLIN != 0
+                                && rights & M10_RIGHT_READ != 0
+                                && p < PIPE_MAX
+                                && PIPES[p].len > 0
+                            {
+                                revents |= POLLIN;
+                            }
+                        }
+                        #[cfg(feature = "go_test")]
+                        M8FdKind::PipeW => {
+                            let p = M8_FD_PIPE[idx] as usize;
+                            if events & POLLOUT != 0
+                                && rights & M10_RIGHT_WRITE != 0
+                                && p < PIPE_MAX
+                                && PIPES[p].len < PIPE_CAP
+                            {
                                 revents |= POLLOUT;
                             }
                         }
@@ -1421,11 +1521,68 @@ cfg_m3! {
         PlatformFile,
         VfsFile,
         VfsDir,
+        PipeR,
+        PipeW,
     }
 
     // VFS node index per fd (parallel to M8_FD_TABLE; the fd's offset
     // field doubles as the read cursor for both files and directories).
     static mut M8_FD_VFS_NODE: [u8; M8_FD_MAX] = [0; M8_FD_MAX];
+
+    // ---- pipes (gap item 8: pipe IPC) ----
+    // A pipe is a 512-byte in-kernel ring with reader/writer refcounts;
+    // fds reference it through M8_FD_PIPE. Read on an empty pipe returns
+    // -1 while a writer exists (the caller yields and retries) and 0 once
+    // every writer is gone (EOF). The fds are transferable to spawned
+    // children as stdin/stdout.
+    const PIPE_MAX: usize = 4;
+    const PIPE_CAP: usize = 512;
+
+    #[derive(Clone, Copy)]
+    struct PipeObj {
+        active: bool,
+        len: usize,
+        readers: u8,
+        writers: u8,
+        buf: [u8; PIPE_CAP],
+    }
+
+    impl PipeObj {
+        const EMPTY: Self = Self {
+            active: false,
+            len: 0,
+            readers: 0,
+            writers: 0,
+            buf: [0; PIPE_CAP],
+        };
+    }
+
+    static mut PIPES: [PipeObj; PIPE_MAX] = [PipeObj::EMPTY; PIPE_MAX];
+    static mut M8_FD_PIPE: [u8; M8_FD_MAX] = [0; M8_FD_MAX];
+
+    /// Drop one end's reference; recycle the pipe when both sides are gone.
+    unsafe fn pipe_drop_end(fd_idx: usize) {
+        let p = M8_FD_PIPE[fd_idx] as usize;
+        if p >= PIPE_MAX || !PIPES[p].active {
+            return;
+        }
+        match M8_FD_TABLE[fd_idx].kind {
+            M8FdKind::PipeR => {
+                if PIPES[p].readers > 0 {
+                    PIPES[p].readers -= 1;
+                }
+            }
+            M8FdKind::PipeW => {
+                if PIPES[p].writers > 0 {
+                    PIPES[p].writers -= 1;
+                }
+            }
+            _ => return,
+        }
+        if PIPES[p].readers == 0 && PIPES[p].writers == 0 {
+            PIPES[p] = PipeObj::EMPTY;
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct M8FdEntry {
@@ -1628,6 +1785,8 @@ cfg_m3! {
             }
             M8FdKind::VfsFile => M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL,
             M8FdKind::VfsDir => M10_RIGHT_READ | M10_RIGHT_POLL,
+            M8FdKind::PipeR => M10_RIGHT_READ | M10_RIGHT_POLL,
+            M8FdKind::PipeW => M10_RIGHT_WRITE | M10_RIGHT_POLL,
         }
     }
 
@@ -1757,6 +1916,7 @@ cfg_m3! {
             if M8_FD_TABLE[idx].kind != M8FdKind::Free
                 && M8_FD_TABLE[idx].owner_tid == owner_tid
             {
+                pipe_drop_end(idx);
                 M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
             }
         }
@@ -2836,7 +2996,28 @@ cfg_r4! {
     const EXEC_ARGS_MAX: usize = 256;
 
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_spawn_v1(name_ptr: u64, name_len: u64, args_ptr: u64, args_len: u64) -> u64 {
+    /// Validate a pipe fd the caller wants to hand to the child as
+    /// stdin/stdout. u64::MAX means "none".
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn spawn_stdio_ok(fd: u64, want: M8FdKind) -> bool {
+        if fd == u64::MAX {
+            return true;
+        }
+        let idx = fd as usize;
+        idx >= 3
+            && idx < M8_FD_MAX
+            && M8_FD_TABLE[idx].kind == want
+            && M8_FD_TABLE[idx].owner_tid == R4_CURRENT
+    }
+
+    unsafe fn sys_spawn_v1(
+        name_ptr: u64,
+        name_len: u64,
+        args_ptr: u64,
+        args_len: u64,
+        stdin_fd: u64,
+        stdout_fd: u64,
+    ) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_STORAGE == 0 {
             return ERR;
@@ -2978,18 +3159,39 @@ cfg_r4! {
             exec_log(name, b"badargs");
             return ERR;
         }
+        if !spawn_stdio_ok(stdin_fd, M8FdKind::PipeR)
+            || !spawn_stdio_ok(stdout_fd, M8FdKind::PipeW)
+        {
+            exec_log(name, b"badfd");
+            return ERR;
+        }
         r4_init_task(tid, entry, r4_stack_top_for_slot(tid), parent);
         // External apps get read access to the file tree (storage) but no
         // network, spawn, or IPC surface.
         R4_TASKS[tid].can_spawn = false;
         R4_TASKS[tid].cap_flags = R4_TASK_CAP_STORAGE;
-        R4_TASKS[tid].fd_limit = 2;
+        R4_TASKS[tid].fd_limit = 4;
         R4_TASKS[tid].socket_limit = 0;
         R4_TASKS[tid].endpoint_limit = 0;
         R4_TASKS[tid].isolation_domain = 5;
-        // Argument convention: RDI = args pointer, RSI = args length.
+        // Hand over the pipe ends: ownership moves to the child so its
+        // exit (or fault) releases them and EOF propagates.
+        for fdv in [stdin_fd, stdout_fd] {
+            if fdv != u64::MAX {
+                let idx = fdv as usize;
+                M8_FD_TABLE[idx].owner_tid = tid;
+                if R4_TASKS[R4_CURRENT].fd_count != 0 {
+                    R4_TASKS[R4_CURRENT].fd_count -= 1;
+                }
+                R4_TASKS[tid].fd_count += 1;
+            }
+        }
+        // Argument convention: RDI = args pointer, RSI = args length,
+        // RDX = stdin fd (u64::MAX = none), RCX = stdout fd.
         R4_TASKS[tid].saved_frame[9] = EXEC_ARGS_VA;
         R4_TASKS[tid].saved_frame[10] = args_n as u64;
+        R4_TASKS[tid].saved_frame[11] = stdin_fd;
+        R4_TASKS[tid].saved_frame[12] = stdout_fd;
         R4_TASKS[tid].state = R4State::Ready;
         R4_THREADS_CREATED += 1;
         EXEC_APP_TID = tid as i32;

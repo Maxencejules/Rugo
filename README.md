@@ -98,6 +98,13 @@ Visible proof paths:
   spawned program itself.
   Proof: `tests/runtime/test_coreutils_runtime_v1.py`, contract
   `docs/runtime/exec_v1.md`
+- `make test-pipes-v1`
+  Boots the default Go image and proves pipe IPC: `cat file | wc` joins
+  two real external programs through a 512-byte kernel pipe with fd
+  handoff at spawn; the byte count only comes out right if the bytes
+  crossed the ring.
+  Proof: `tests/runtime/test_pipes_runtime_v1.py`, contract
+  `docs/runtime/exec_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

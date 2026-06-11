@@ -9,14 +9,14 @@ Closes gap-analysis build-list item 5: create/stat/list arbitrary files
 with directories over a real on-disk filesystem. The shell sees a writable
 tree under `/data`, not a fixed-path routing table.
 
-## On-disk layout (boot disk, base sector 128)
+## On-disk layout (boot disk, base sector 512 - clear of the runtime-state sectors 8-11 and the exec app region at 64+, which can grow to its full 16-app table)
 
 | Sectors | Content |
 |---|---|
-| 128 | superblock: magic `VFS2`, version, node count |
-| 129–132 | node table: 64 × 32-byte entries — name[20], parent u8 (0xFE = root), kind u8 (1 file, 2 dir), mode u8 (reserved for permissions), start_block u32, size u32 |
-| 133 | block allocation bitmap |
-| 134+ | 512-byte data blocks |
+| 512 | superblock: magic `VFS2`, version, node count |
+| 513–516 | node table: 64 × 32-byte entries — name[20], parent u8 (0xFE = root), kind u8 (1 file, 2 dir), mode u8 (reserved for permissions), start_block u32, size u32 |
+| 517 | block allocation bitmap |
+| 518+ | 512-byte data blocks |
 
 Files are contiguously allocated (grow = realloc + copy; 8 KiB max in v1).
 Mutations are write-through. First boot formats the region in place
