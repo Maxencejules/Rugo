@@ -36,9 +36,9 @@ while honoring Rugo's philosophy.
 | 5 | §3.5 VFS + directories over SimpleFS | `2026-06-10-vfs-directories.md` | done (`make test-vfs-v1`; writable /data tree, dirs, reboot persistence, sys_fs_ctl id 47) |
 | 6 | §3.6 TCP/IP wired to socket syscalls, DHCP + DNS | (worktree phase6-tcp, merged) | wire TCP done (`make test-tcp-v1`); DHCP + DNS clients pending |
 | 7 | §3.7 keyboard input + framebuffer text console | (worktree phase7-console, merged) | done (`make test-console-v1`) |
-| 8 | §3.8 shell executes external programs; coreutils; pipes | (worktrees phase4-exec + phase8-coreutils, merged) | exec+args+coreutils done (`make test-coreutils-v1`); pipes pending |
-| 9 | §3.9 libc-equivalent POSIX-ish layer | TBD | pending |
-| 10 | §3.10 parity tier: signals, users/permissions, ASLR + W^X, SMP | TBD | pending |
+| 8 | §3.8 shell executes external programs; coreutils; pipes | (worktrees phase4-exec, phase8-coreutils, phase8b-pipes, merged) | done (`make test-coreutils-v1`, `make test-pipes-v1`) |
+| 9 | §3.9 libc-equivalent POSIX-ish layer | (worktree phase9-libc, merged) | done (`make test-libc-v1`; rlibc + gcc-compiled C program from the package store) |
+| 10 | §3.10 parity tier: signals, users/permissions, ASLR + W^X, SMP | in progress | W^X done (`make test-wx-v1`); signals, users/permissions, SMP, DHCP/DNS pending |
 
 Each phase ends with: new `tests/**` runtime tests green, a `test-*-v1`
 Makefile target, existing gate suites still green, docs updated
