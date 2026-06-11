@@ -219,14 +219,41 @@ Parity (credible-OS tier):
 
 ## 4. Honest Positioning
 
-Rugo today is an **xv6-class teaching/demo kernel** (~12.5k LOC of real runtime
-code) with unusually strong test, ABI, and release discipline — but it is below
-xv6 on process model (no fork/exec, no real FS directories, no pipes) while
-being ahead of it on service supervision, IPC design, NVMe, and validation
-infrastructure. The distance to "fully functioning OS" in the
-SerenityOS/Haiku/Redox sense is dominated by five absences: dynamic memory
-management, dynamic process creation, a real filesystem, TCP/IP, and any form
-of local input/output beyond the serial port. The 54-milestone ledger should be
-read as ~8 runtime milestones plus ~46 qualification-scaffolding milestones;
-the repo's own `SOURCE_MAP.md` says as much, and this analysis confirms it at
-the source level.
+*(Original audit, 2026-06-10:)* Rugo was an **xv6-class teaching/demo
+kernel** (~12.5k LOC of real runtime code) with unusually strong test, ABI,
+and release discipline — but below xv6 on process model (no fork/exec, no
+real FS directories, no pipes) while ahead of it on service supervision,
+IPC design, NVMe, and validation infrastructure. The distance to "fully
+functioning OS" was dominated by five absences: dynamic memory management,
+dynamic process creation, a real filesystem, TCP/IP, and any form of local
+input/output beyond the serial port.
+
+*(Updated 2026-06-11, after the build list closed:)* All five of those
+absences are now filled with boot-verified runtime code, each behind its
+own `make test-*-v1` QEMU gate: demand-paged dynamic memory, spawn/wait
+process creation from an on-disk package store, a writable directory tree
+with users and permissions, wire TCP plus DHCP/DNS clients, and a
+keyboard/framebuffer local console. On top of those sit the things they
+unblocked: preemptive scheduling in the product lane, coreutils as real
+external programs with arguments and pipes, a libc-equivalent that runs
+gcc-compiled C programs, W^X, signals, and SMP bring-up.
+
+Rugo today is honestly an **early-Serenity-class hobby OS**: past xv6 on
+every axis the original audit measured, but not yet a "fully functioning
+OS" in the SerenityOS/Haiku/Redox sense. The remaining distance is
+dominated by four structural absences — **per-process address spaces**
+(everything shares one; the exec window is single-occupancy, so pipelines
+run sequentially), **per-CPU scheduling and kernel locking** (APs are
+brought up and parked; the kernel is single-CPU throughout), **dynamic
+linking**, and **a graphics stack beyond the text console** — plus the
+deliberate v1 boundaries each contract doc records (no TCP retransmission
+or listeners, DISCOVER/OFFER-only DHCP, no FS journaling, no errno/FILE*
+in rlibc, no signal masks, no USB/HID, no ASLR, no installer). No
+third-party C program has been ported yet; that port is the real test of
+the libc claim.
+
+The qualification-scaffolding caveat from the original audit still
+applies to the historical milestone ledger, but the gap-closure work is
+the other kind: every claim above is a live serial-marker assertion
+against a booted image, enumerated in `SOURCE_MAP.md` with its proof
+target and contract doc.
