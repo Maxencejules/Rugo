@@ -32,8 +32,8 @@ while honoring Rugo's philosophy.
 | 1 | §3.1 frame allocator + kernel heap + demand paging | `2026-06-10-mm-foundation.md` | done (`make test-mm-foundation-v1`) |
 | 2 | §3.3 preemptive timer scheduling in default lane | `2026-06-10-preemptive-default-lane.md` | done (`make test-sched-preempt-v1`; preemption-safe init protocol, atomic TinyGo allocator, causal test assertions) |
 | 3 | §3.2 lift static task limit, dynamic process structures | `2026-06-10-dynamic-tasks.md` | done (`make test-dynamic-tasks-v1`; heap-backed task table, 9 concurrent tasks proven, guard-zoned demand stacks) |
-| 4 | §3.4 exec-from-filesystem (spawn+wait) | `2026-06-10-exec-from-filesystem.md` | next |
-| 5 | §3.5 VFS + directories over SimpleFS | TBD | pending |
+| 4 | §3.4 exec-from-filesystem (spawn+wait) | `2026-06-10-exec-from-filesystem.md` | done (`make test-exec-v1`; sys_spawn id 46, SHA-256-verified app loading, shell runs real programs) |
+| 5 | §3.5 VFS + directories over SimpleFS | `2026-06-10-vfs-directories.md` | done (`make test-vfs-v1`; writable /data tree, dirs, reboot persistence, sys_fs_ctl id 47) |
 | 6 | §3.6 TCP/IP wired to socket syscalls, DHCP + DNS | TBD | pending |
 | 7 | §3.7 keyboard input + framebuffer text console | TBD | pending |
 | 8 | §3.8 shell executes external programs; coreutils; pipes | TBD | pending |
