@@ -29,10 +29,10 @@ while honoring Rugo's philosophy.
 
 | Phase | Gap item | Plan doc | Status |
 |---|---|---|---|
-| 1 | §3.1 frame allocator + kernel heap + demand paging | `2026-06-10-mm-foundation.md` | in progress |
-| 2 | §3.3 preemptive timer scheduling in default lane | `2026-06-10-preemptive-default-lane.md` | pending |
-| 3 | §3.2 lift static task limit, dynamic process structures | TBD after phase 2 | pending |
-| 4 | §3.4 exec-from-filesystem (spawn+wait) | TBD | pending |
+| 1 | §3.1 frame allocator + kernel heap + demand paging | `2026-06-10-mm-foundation.md` | done (`make test-mm-foundation-v1`) |
+| 2 | §3.3 preemptive timer scheduling in default lane | `2026-06-10-preemptive-default-lane.md` | done (`make test-sched-preempt-v1`; preemption-safe init protocol, atomic TinyGo allocator, causal test assertions) |
+| 3 | §3.2 lift static task limit, dynamic process structures | `2026-06-10-dynamic-tasks.md` | done (`make test-dynamic-tasks-v1`; heap-backed task table, 9 concurrent tasks proven, guard-zoned demand stacks) |
+| 4 | §3.4 exec-from-filesystem (spawn+wait) | `2026-06-10-exec-from-filesystem.md` | next |
 | 5 | §3.5 VFS + directories over SimpleFS | TBD | pending |
 | 6 | §3.6 TCP/IP wired to socket syscalls, DHCP + DNS | TBD | pending |
 | 7 | §3.7 keyboard input + framebuffer text console | TBD | pending |
