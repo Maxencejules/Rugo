@@ -1059,13 +1059,13 @@ unsafe fn sys_thread_exit_m3(frame: *mut u64) {
     trap::m3_return_to_kernel_halt(frame);
 }
 
-#[cfg(feature = "fs_test")]
+#[cfg(any(feature = "fs_test", feature = "go_test"))]
 #[inline(always)]
 fn sha256_rotr(x: u32, n: u32) -> u32 {
     (x >> n) | (x << (32 - n))
 }
 
-#[cfg(feature = "fs_test")]
+#[cfg(any(feature = "fs_test", feature = "go_test"))]
 fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
@@ -1146,7 +1146,7 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
     state[7] = state[7].wrapping_add(h);
 }
 
-#[cfg(feature = "fs_test")]
+#[cfg(any(feature = "fs_test", feature = "go_test"))]
 fn sha256_digest(data: &[u8]) -> [u8; 32] {
     let mut state = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -2475,6 +2475,14 @@ cfg_r4! {
         let cur = R4_CURRENT;
         let parent = R4_TASKS[cur].parent_tid;
         r4_cleanup_task_resources(cur);
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            // Release the single-occupancy exec app window on any exit
+            // path, including fault containment.
+            if EXEC_APP_TID == cur as i32 {
+                EXEC_APP_TID = -1;
+            }
+        }
         R4_TASKS[cur].exit_status = exit_status;
         R4_TASKS[cur].state = R4State::Exited;
         if parent != cur
@@ -2515,6 +2523,245 @@ cfg_r4! {
         }
         qemu_exit(0x31);
         loop { unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)); } }
+    }
+
+    // ---- exec-from-filesystem (sys_spawn, ABI v3.x id 46) ----
+    //
+    // Loads a PKG v1-framed ELF from the SimpleFS app region on the boot
+    // disk (superblock at sector 64) into the exec app window of the
+    // demand-paged region and runs it as a child task. v1 semantics: the
+    // window is single-occupancy; a spawn while an app is resident fails.
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_APP_BASE: u64 = 0x0140_0000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_APP_END: u64 = 0x0180_0000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_APP_REGION_SECTOR: u64 = 64;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_APP_MAX_BYTES: usize = 16384;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut EXEC_APP_TID: i32 = -1;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn exec_log(name: &[u8], what: &[u8]) {
+        serial_write(b"EXEC: ");
+        serial_write(name);
+        serial_write(b" ");
+        serial_write(what);
+        serial_write(b"\n");
+    }
+
+    /// Validate and copy an ET_EXEC ELF64 whose segments live entirely in
+    /// the exec app window. Returns the entry point. The destination pages
+    /// are demand-paged; copyout_user pre-maps them.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn exec_load_app(image: &[u8]) -> Option<u64> {
+        if image.len() < 64 {
+            return None;
+        }
+        if &image[0..4] != b"\x7FELF" || image[4] != 2 || image[5] != 1 {
+            return None;
+        }
+        let e_type = u16::from_le_bytes([image[16], image[17]]);
+        if e_type != 2 {
+            return None;
+        }
+        let e_entry = u64::from_le_bytes(image[24..32].try_into().ok()?);
+        if e_entry < EXEC_APP_BASE || e_entry >= EXEC_APP_END {
+            return None;
+        }
+        let e_phoff = u64::from_le_bytes(image[32..40].try_into().ok()?) as usize;
+        let e_phentsize = u16::from_le_bytes([image[54], image[55]]) as usize;
+        let e_phnum = u16::from_le_bytes([image[56], image[57]]) as usize;
+        if e_phentsize < 56 || e_phnum == 0 || e_phnum > 8 {
+            return None;
+        }
+        let zeros = [0u8; 512];
+        let mut i = 0usize;
+        while i < e_phnum {
+            let ph = e_phoff + i * e_phentsize;
+            if ph + 56 > image.len() {
+                return None;
+            }
+            let p_type = u32::from_le_bytes(image[ph..ph + 4].try_into().ok()?);
+            if p_type == 1 {
+                let p_offset =
+                    u64::from_le_bytes(image[ph + 8..ph + 16].try_into().ok()?) as usize;
+                let p_vaddr = u64::from_le_bytes(image[ph + 16..ph + 24].try_into().ok()?);
+                let p_filesz =
+                    u64::from_le_bytes(image[ph + 32..ph + 40].try_into().ok()?) as usize;
+                let p_memsz =
+                    u64::from_le_bytes(image[ph + 40..ph + 48].try_into().ok()?) as usize;
+                if p_filesz > p_memsz
+                    || p_offset + p_filesz > image.len()
+                    || p_vaddr < EXEC_APP_BASE
+                    || p_vaddr + p_memsz as u64 > EXEC_APP_END
+                {
+                    return None;
+                }
+                if copyout_user(p_vaddr, &image[p_offset..p_offset + p_filesz], p_filesz)
+                    .is_err()
+                {
+                    return None;
+                }
+                let mut z = p_filesz;
+                while z < p_memsz {
+                    let chunk = core::cmp::min(zeros.len(), p_memsz - z);
+                    if copyout_user(p_vaddr + z as u64, &zeros[..chunk], chunk).is_err() {
+                        return None;
+                    }
+                    z += chunk;
+                }
+            }
+            i += 1;
+        }
+        Some(e_entry)
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_spawn_v1(name_ptr: u64, name_len: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_STORAGE == 0 {
+            return ERR;
+        }
+        if name_len == 0 || name_len > 24 {
+            return ERR;
+        }
+        let mut name_buf = [0u8; 24];
+        let n = name_len as usize;
+        if copyin_user(&mut name_buf[..n], name_ptr, n).is_err() {
+            return ERR;
+        }
+        let name = &name_buf[..n];
+        if EXEC_APP_TID >= 0 {
+            exec_log(name, b"busy");
+            return ERR;
+        }
+        if !storage::r4_storage_available() {
+            exec_log(name, b"nodisk");
+            return ERR;
+        }
+
+        if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR, 512, false) {
+            exec_log(name, b"ioerr");
+            return ERR;
+        }
+        let magic = u32::from_le_bytes([
+            BLK_DATA_PAGE.0[0],
+            BLK_DATA_PAGE.0[1],
+            BLK_DATA_PAGE.0[2],
+            BLK_DATA_PAGE.0[3],
+        ]);
+        if magic != runtime::storage::SIMPLEFS_MAGIC {
+            exec_log(name, b"noregion");
+            return ERR;
+        }
+        let file_count = u32::from_le_bytes([
+            BLK_DATA_PAGE.0[4],
+            BLK_DATA_PAGE.0[5],
+            BLK_DATA_PAGE.0[6],
+            BLK_DATA_PAGE.0[7],
+        ]) as usize;
+
+        if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR + 1, 512, false) {
+            exec_log(name, b"ioerr");
+            return ERR;
+        }
+        let mut table = [0u8; 512];
+        core::ptr::copy_nonoverlapping(BLK_DATA_PAGE.0.as_ptr(), table.as_mut_ptr(), 512);
+
+        let fc = core::cmp::min(file_count, 16);
+        let mut file_sector = 0u64;
+        let mut file_size = 0usize;
+        let mut found = false;
+        let mut fi = 0usize;
+        while fi < fc {
+            let base = fi * 32;
+            let entry_name = &table[base..base + 24];
+            if &entry_name[..n] == name && (n == 24 || entry_name[n] == 0) {
+                file_sector = match table[base + 24..base + 28].try_into() {
+                    Ok(b) => u32::from_le_bytes(b) as u64,
+                    Err(_) => return ERR,
+                };
+                file_size = match table[base + 28..base + 32].try_into() {
+                    Ok(b) => u32::from_le_bytes(b) as usize,
+                    Err(_) => return ERR,
+                };
+                found = true;
+                break;
+            }
+            fi += 1;
+        }
+        if !found {
+            exec_log(name, b"missing");
+            return ERR;
+        }
+        if file_size < 64 || file_size > EXEC_APP_MAX_BYTES {
+            exec_log(name, b"badsize");
+            return ERR;
+        }
+
+        let mut pkg: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let sectors = (file_size + 511) / 512;
+        let mut s = 0u64;
+        while s < sectors as u64 {
+            if !block_io_dispatch(false, file_sector + s, 512, false) {
+                exec_log(name, b"ioerr");
+                return ERR;
+            }
+            pkg.extend_from_slice(&BLK_DATA_PAGE.0[..512]);
+            s += 1;
+        }
+        let pkg = &pkg[..file_size];
+
+        let pkg_magic = u32::from_le_bytes([pkg[0], pkg[1], pkg[2], pkg[3]]);
+        if pkg_magic != runtime::storage::PKG_MAGIC_V1 {
+            exec_log(name, b"badpkg");
+            return ERR;
+        }
+        let bin_size = u32::from_le_bytes([pkg[4], pkg[5], pkg[6], pkg[7]]) as usize;
+        if bin_size == 0 || 64 + bin_size > file_size {
+            exec_log(name, b"badsize");
+            return ERR;
+        }
+        let elf = &pkg[64..64 + bin_size];
+        let digest = sha256_digest(elf);
+        if digest != pkg[32..64] {
+            exec_log(name, b"badhash");
+            return ERR;
+        }
+
+        let entry = match exec_load_app(elf) {
+            Some(e) => e,
+            None => {
+                exec_log(name, b"badelf");
+                return ERR;
+            }
+        };
+
+        let parent = R4_CURRENT;
+        let tid = match r4_find_spawn_slot() {
+            Some(t) => t,
+            None => {
+                exec_log(name, b"full");
+                return ERR;
+            }
+        };
+        r4_init_task(tid, entry, r4_stack_top_for_slot(tid), parent);
+        // External apps start with no capabilities and no object quotas.
+        R4_TASKS[tid].can_spawn = false;
+        R4_TASKS[tid].cap_flags = 0;
+        R4_TASKS[tid].fd_limit = 0;
+        R4_TASKS[tid].socket_limit = 0;
+        R4_TASKS[tid].endpoint_limit = 0;
+        R4_TASKS[tid].isolation_domain = 5;
+        R4_TASKS[tid].state = R4State::Ready;
+        R4_THREADS_CREATED += 1;
+        EXEC_APP_TID = tid as i32;
+        exec_log(name, b"ok");
+        tid as u64
     }
 
     unsafe fn r4_find_spawn_slot() -> Option<usize> {

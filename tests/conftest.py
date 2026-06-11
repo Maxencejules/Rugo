@@ -878,6 +878,34 @@ def qemu_serial_net_missing():
     return _boot_iso(ISO_NET_PATH, machine="q35")
 
 
+APP_DISK_V1_TOOL = os.path.join(REPO_ROOT, "tools", "app_disk_v1.py")
+APP_BASE_SHELL_ELF = os.path.join(REPO_ROOT, "out", "app-base-shell.elf")
+
+
+def _ensure_app_region(disk_path):
+    """Write the exec app region (sector 64+) onto a go-lane boot disk."""
+    if not os.path.isfile(disk_path):
+        with open(disk_path, "wb") as f:
+            f.write(b"\x00" * (1024 * 1024))
+    if not os.path.isfile(APP_BASE_SHELL_ELF):
+        pytest.skip(f"app ELF not built: {APP_BASE_SHELL_ELF}")
+    subprocess.run(
+        [
+            sys.executable,
+            APP_DISK_V1_TOOL,
+            "--disk",
+            disk_path,
+            "--elf",
+            APP_BASE_SHELL_ELF,
+            "--name",
+            "base-shell",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.fixture
 def qemu_serial_go():
     """Boot the default Go userspace shell lane and drive a health/shutdown session."""
@@ -887,6 +915,7 @@ def qemu_serial_go():
     disk_path = os.path.join(REPO_ROOT, "out", f"go-shell-{uuid.uuid4().hex}.img")
 
     try:
+        _ensure_app_region(disk_path)
         yield _boot_iso_with_disk_and_net(
             ISO_GO_PATH,
             disk_path,
@@ -906,6 +935,7 @@ def qemu_serial_go_restart():
     disk_path = os.path.join(REPO_ROOT, "out", f"go-shell-restart-{uuid.uuid4().hex}.img")
 
     try:
+        _ensure_app_region(disk_path)
         yield _boot_iso_with_disk_and_net(
             ISO_GO_PATH,
             disk_path,
@@ -934,6 +964,7 @@ def qemu_go_c4_runtime():
     disk_path = os.path.join(REPO_ROOT, "out", f"go-c4-runtime-{uuid.uuid4().hex}.img")
 
     def _boot(commands="health\nshutdown\n"):
+        _ensure_app_region(disk_path)
         return _boot_iso_with_disk_and_net(
             ISO_GO_PATH,
             disk_path,
@@ -957,6 +988,7 @@ def qemu_go_c4_runtime_native():
     disk_path = os.path.join(REPO_ROOT, "out", f"go-native-c4-runtime-{uuid.uuid4().hex}.img")
 
     def _boot(commands="health\nshutdown\n"):
+        _ensure_app_region(disk_path)
         return _boot_iso_with_disk_and_net(
             ISO_GO_NATIVE_PATH,
             disk_path,

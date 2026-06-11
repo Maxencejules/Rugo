@@ -97,6 +97,10 @@ func sysTimeNow() uintptr
 // sysWait invokes syscall 22 (sys_wait).
 func sysWait(pid uintptr, status *uintptr, options uintptr) uintptr
 
+// sysSpawn invokes syscall 46 (sys_spawn): run a named app from the
+// package store on disk as a child task.
+func sysSpawn(name *byte, n uintptr) uintptr
+
 // sysOpenRaw invokes syscall 18 (sys_open).
 func sysOpenRaw(path *byte, flags uintptr, mode uintptr) uintptr
 

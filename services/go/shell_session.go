@@ -19,7 +19,9 @@ var (
 	msgShellAppBaseMiss   = []byte("APP: base-shell missing\n")
 	msgShellAppNetMiss    = []byte("APP: net-tools missing\n")
 	msgShellAppMediaMiss  = []byte("APP: media-suite missing\n")
+	msgShellAppExecErr    = []byte("APP: base-shell exec err\n")
 	msgShellAppBaseOK     = []byte("APP: base-shell ok\n")
+	appNameBaseShell      = []byte("base-shell")
 	msgShellAppNetOK      = []byte("APP: net-tools ok\n")
 	msgShellAppMediaOK    = []byte("APP: media-suite ok\n")
 	msgShellBackspaceEcho = []byte{8, ' ', 8}
@@ -254,6 +256,17 @@ func runInstalledApp(name string) bool {
 		if state.InstalledMask&pkgInstallBaseShell == 0 {
 			log(msgShellAppBaseMiss)
 			return true
+		}
+		// Real execution: load the app ELF from the package store on
+		// disk, run it as a child task, and reap it.
+		tid := sysSpawn(&appNameBaseShell[0], uintptr(len(appNameBaseShell)))
+		if tid == sysErr {
+			log(msgShellAppExecErr)
+			return false
+		}
+		if sysWait(tid, nil, 0) == sysErr {
+			log(msgShellAppExecErr)
+			return false
 		}
 		log(msgShellAppBaseOK)
 		return true

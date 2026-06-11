@@ -177,6 +177,10 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             45 => {
                 *frame.add(14) = sys_epoll_deferred_v1();
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            46 => {
+                *frame.add(14) = sys_spawn_v1(arg1, arg2);
+            }
             _ => {
                 *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
             }

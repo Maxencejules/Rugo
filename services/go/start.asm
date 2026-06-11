@@ -77,6 +77,12 @@ main.sysWait:
     int  0x80
     ret
 
+global main.sysSpawn
+main.sysSpawn:
+    mov  eax, 46
+    int  0x80
+    ret
+
 global main.sysOpenRaw
 main.sysOpenRaw:
     mov  eax, 18

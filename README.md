@@ -65,6 +65,13 @@ Visible proof paths:
   fixed at build time: 9 concurrent tasks at boot on the heap-backed task
   table with demand-paged, guard-zoned stacks.
   Proof: `tests/runtime/test_dynamic_tasks_v1.py`
+- `make test-exec-v1`
+  Boots the default Go image and verifies the shell executes a real
+  external program: `run base-shell` loads a SHA-256-verified ELF from the
+  package store on disk via `sys_spawn` (id 46), runs it as a child task,
+  and reaps it.
+  Proof: `tests/runtime/test_exec_from_fs_v1.py`, contract
+  `docs/runtime/exec_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.
