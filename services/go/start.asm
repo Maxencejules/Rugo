@@ -83,6 +83,12 @@ main.sysSpawn:
     int  0x80
     ret
 
+global main.sysFsCtl
+main.sysFsCtl:
+    mov  eax, 47
+    int  0x80
+    ret
+
 global main.sysOpenRaw
 main.sysOpenRaw:
     mov  eax, 18

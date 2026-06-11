@@ -1,5 +1,5 @@
 pub const GO_IMAGE_PAGE_SIZE: usize = 4096;
-pub const GO_IMAGE_MAX_PAGES: usize = 7;
+pub const GO_IMAGE_MAX_PAGES: usize = 8;
 pub const GO_IMAGE_MAX_BYTES: usize = GO_IMAGE_PAGE_SIZE * GO_IMAGE_MAX_PAGES;
 
 pub fn go_image_chunk(blob: &[u8], page_idx: usize) -> &[u8] {

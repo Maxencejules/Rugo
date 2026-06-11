@@ -415,5 +415,7 @@ pub(crate) unsafe fn r4_storage_boot_probe() {
         r4_storage_boot_recover();
         r4_storage_runtime_load(R4StorageRuntimeFile::PkgState);
         r4_storage_runtime_load(R4StorageRuntimeFile::Platform);
+        #[cfg(not(feature = "compat_real_test"))]
+        crate::vfs::vfs_mount();
     }
 }

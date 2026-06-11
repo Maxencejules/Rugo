@@ -21,6 +21,15 @@ const (
 	openReadWrite
 )
 
+// openCreate ORs into the open flags: create the /data file when absent.
+const openCreate = 0x4
+
+const (
+	fsCtlMkdir = 1
+	fsCtlUnlink = 2
+	fsCtlStat = 3
+)
+
 const (
 	netFamilyInet  = 2
 	netFamilyInet6 = 10
@@ -100,6 +109,9 @@ func sysWait(pid uintptr, status *uintptr, options uintptr) uintptr
 // sysSpawn invokes syscall 46 (sys_spawn): run a named app from the
 // package store on disk as a child task.
 func sysSpawn(name *byte, n uintptr) uintptr
+
+// sysFsCtl invokes syscall 47 (sys_fs_ctl): mkdir/unlink/stat on /data.
+func sysFsCtl(op uintptr, path *byte, arg uintptr) uintptr
 
 // sysOpenRaw invokes syscall 18 (sys_open).
 func sysOpenRaw(path *byte, flags uintptr, mode uintptr) uintptr

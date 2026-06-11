@@ -72,6 +72,12 @@ Visible proof paths:
   and reaps it.
   Proof: `tests/runtime/test_exec_from_fs_v1.py`, contract
   `docs/runtime/exec_v1.md`
+- `make test-vfs-v1`
+  Boots the default Go image and verifies a writable on-disk file tree
+  with directories under `/data`: create, write, read back, list, unlink,
+  and persistence across a reboot on the same disk.
+  Proof: `tests/runtime/test_vfs_runtime_v1.py`, contract
+  `docs/runtime/vfs_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

@@ -108,6 +108,22 @@ func consoleReadLine(buf []byte) (uintptr, bool) {
 }
 
 func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uintptr, pkgEP uintptr) (bool, bool) {
+	// File-tree builtins take arguments; dispatch on prefix.
+	if len(cmd) > 8 && cmd[:8] == "fswrite " {
+		return false, fshWrite(cmd[8:])
+	}
+	if len(cmd) > 6 && cmd[:6] == "fscat " {
+		return false, fshCat(cmd[6:])
+	}
+	if len(cmd) > 5 && cmd[:5] == "fsls " {
+		return false, fshLs(cmd[5:])
+	}
+	if len(cmd) > 5 && cmd[:5] == "fsmk " {
+		return false, fshCtl(fsCtlMkdir, cmd[5:], msgFshMkOK)
+	}
+	if len(cmd) > 5 && cmd[:5] == "fsrm " {
+		return false, fshCtl(fsCtlUnlink, cmd[5:], msgFshRmOK)
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

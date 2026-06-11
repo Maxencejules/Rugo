@@ -10,7 +10,7 @@ OUT_ELF="$OUT/gousr.elf"
 OUT_BIN="$OUT/gousr.bin"
 TARGET_JSON="$OUT/rugo-target.json"
 BUILD_TAGS=()
-MAX_BIN_BYTES=28672
+MAX_BIN_BYTES=32768
 
 while [ "$#" -gt 0 ]; do
     case "$1" in

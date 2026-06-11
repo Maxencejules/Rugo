@@ -55,7 +55,7 @@ endif
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
-       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
+       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-connected-runtime-c4 test-reliable-isolated-runtime-c5 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
@@ -815,6 +815,9 @@ test-dynamic-tasks-v1: image-go
 
 test-exec-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_exec_from_fs_v1.py -v --junitxml=$(OUT)/pytest-exec-v1.xml
+
+test-vfs-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_vfs_runtime_v1.py -v --junitxml=$(OUT)/pytest-vfs-v1.xml
 
 test-connected-runtime-c4: image-go
 	$(PYTHON) -m pytest tests/runtime/test_connected_runtime_c4.py tests/runtime/test_c4_status_docs.py -v --junitxml=$(OUT)/pytest-connected-runtime-c4.xml

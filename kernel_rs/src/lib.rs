@@ -45,6 +45,8 @@ mod arch_x86;
 mod memory;
 pub(crate) mod mm;
 mod net;
+#[cfg(feature = "go_test")]
+pub(crate) mod vfs;
 mod process;
 mod sched;
 mod storage;
@@ -548,6 +550,53 @@ cfg_m3! {
         if !m10_profile_path_allowed(bytes) {
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
+        // Writable file tree under /data (SimpleFS v2, gap-analysis item 5).
+        // Handled before the generic rights parse: /data opens carry the
+        // create bit, which the fixed-path mode mask rejects.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if bytes.len() >= 6 && &bytes[..5] == b"/data" && bytes[bytes.len() - 1] == 0 {
+                if !r4_current_has_cap(R4_TASK_CAP_STORAGE) {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                if !vfs::vfs_ready() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let rel = &bytes[5..bytes.len() - 1];
+                let create = flags & M10_OPEN_CREATE != 0;
+                let requested =
+                    match m10_open_requested_rights(flags & M10_OPEN_MODE_MASK) {
+                        Some(v) => v,
+                        None => return 0xFFFF_FFFF_FFFF_FFFF,
+                    };
+                let node = match vfs::vfs_open(rel, create) {
+                    Some(n) => n,
+                    None => {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                };
+                let kind = if node == vfs::ROOT as usize
+                    || vfs::node_kind(node) == vfs::KIND_DIR
+                {
+                    M8FdKind::VfsDir
+                } else {
+                    M8FdKind::VfsFile
+                };
+                let max = m10_rights_for_kind(kind);
+                let effective = requested | M10_RIGHT_POLL;
+                if effective & !max != 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let fd = m8_alloc_fd(kind);
+                if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                    return fd;
+                }
+                M8_FD_TABLE[fd as usize].rights = effective;
+                M8_FD_TABLE[fd as usize].offset = 0;
+                M8_FD_VFS_NODE[fd as usize] = node as u8;
+                return fd;
+            }
+        }
         let requested = match m10_open_requested_rights(flags) {
             Some(v) => v,
             None => return 0xFFFF_FFFF_FFFF_FFFF,
@@ -767,6 +816,45 @@ cfg_m3! {
                 M8_FD_TABLE[idx].offset += n;
                 n as u64
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::VfsFile => {
+                let node = M8_FD_VFS_NODE[idx] as usize;
+                let off = M8_FD_TABLE[idx].offset;
+                let req = (len as usize).min(4096);
+                let mut kbuf = [0u8; 512];
+                let mut done = 0usize;
+                while done < req {
+                    let n = (req - done).min(kbuf.len());
+                    let got = vfs::vfs_read(node, off + done, &mut kbuf[..n]);
+                    if got == 0 {
+                        break;
+                    }
+                    if copyout_user(buf + done as u64, &kbuf[..got], got).is_err() {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    done += got;
+                    if got < n {
+                        break;
+                    }
+                }
+                M8_FD_TABLE[idx].offset += done;
+                done as u64
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::VfsDir => {
+                let node = M8_FD_VFS_NODE[idx] as usize;
+                let req = (len as usize).min(512);
+                let mut kbuf = [0u8; 512];
+                let cursor = M8_FD_TABLE[idx].offset;
+                let (written, next) = vfs::vfs_readdir(node, cursor, &mut kbuf[..req]);
+                if written > 0 && copyout_user(buf, &kbuf[..written], written).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset = next;
+                written as u64
+            }
+            #[cfg(all(feature = "go_test", feature = "compat_real_test"))]
+            M8FdKind::VfsFile | M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -838,8 +926,61 @@ cfg_m3! {
                 M8_FD_TABLE[idx].offset = n;
                 len
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::VfsFile => {
+                let n = len as usize;
+                let mut kbuf = [0u8; 256];
+                if copyin_user(&mut kbuf[..n], buf, n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let node = M8_FD_VFS_NODE[idx] as usize;
+                let off = M8_FD_TABLE[idx].offset;
+                let done = vfs::vfs_write(node, off, &kbuf[..n]);
+                if done == 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset += done;
+                done as u64
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
+            #[cfg(all(feature = "go_test", feature = "compat_real_test"))]
+            M8FdKind::VfsFile | M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
+        }
+    }
+
+    /// sys_fs_ctl (ABI v3.x id 47): namespace mutations and stat for the
+    /// /data tree. op 1 = mkdir, 2 = unlink, 3 = stat (returns
+    /// kind << 32 | size).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_fs_ctl_v1(op: u64, path_ptr: u64, _arg: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        if !r4_current_has_cap(R4_TASK_CAP_STORAGE) || !vfs::vfs_ready() {
+            return ERR;
+        }
+        let path = match copyinstr_user(path_ptr, 128) {
+            Ok(v) => v,
+            Err(_) => return ERR,
+        };
+        let bytes: &[u8] = &path;
+        if bytes.len() <= 6 || &bytes[..5] != b"/data" || bytes[bytes.len() - 1] != 0 {
+            return ERR;
+        }
+        let rel = &bytes[5..bytes.len() - 1];
+        match op {
+            1 => {
+                if vfs::vfs_mkdir(rel) { 0 } else { ERR }
+            }
+            2 => {
+                if vfs::vfs_unlink(rel) { 0 } else { ERR }
+            }
+            3 => match vfs::vfs_stat(rel) {
+                Some((kind, size)) => ((kind as u64) << 32) | size as u64,
+                None => ERR,
+            },
+            _ => ERR,
         }
     }
 
@@ -1013,6 +1154,15 @@ cfg_m3! {
                                 && M8_FD_TABLE[idx].offset
                                     < storage::r4_storage_runtime_len(storage::R4StorageRuntimeFile::Platform)
                             {
+                                revents |= POLLIN;
+                            }
+                            if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
+                                revents |= POLLOUT;
+                            }
+                        }
+                        #[cfg(feature = "go_test")]
+                        M8FdKind::VfsFile | M8FdKind::VfsDir => {
+                            if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 {
                                 revents |= POLLIN;
                             }
                             if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
@@ -1221,6 +1371,8 @@ cfg_m3! {
     const M10_OPEN_RDONLY: u64 = 0;
     const M10_OPEN_WRONLY: u64 = 1;
     const M10_OPEN_RDWR: u64 = 2;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const M10_OPEN_CREATE: u64 = 0x4;
 
     #[derive(Clone, Copy, PartialEq)]
     enum M8FdKind {
@@ -1231,7 +1383,13 @@ cfg_m3! {
         StateFile,
         PkgStateFile,
         PlatformFile,
+        VfsFile,
+        VfsDir,
     }
+
+    // VFS node index per fd (parallel to M8_FD_TABLE; the fd's offset
+    // field doubles as the read cursor for both files and directories).
+    static mut M8_FD_VFS_NODE: [u8; M8_FD_MAX] = [0; M8_FD_MAX];
 
     #[derive(Clone, Copy)]
     struct M8FdEntry {
@@ -1432,6 +1590,8 @@ cfg_m3! {
             M8FdKind::PkgStateFile | M8FdKind::PlatformFile => {
                 M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL
             }
+            M8FdKind::VfsFile => M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL,
+            M8FdKind::VfsDir => M10_RIGHT_READ | M10_RIGHT_POLL,
         }
     }
 
@@ -1664,6 +1824,8 @@ cfg_m3! {
             5 => Some(USER_CODE_PAGE_6.0.as_mut_ptr()),
             #[cfg(feature = "go_test")]
             6 => Some(USER_CODE_PAGE_7.0.as_mut_ptr()),
+            #[cfg(feature = "go_test")]
+            7 => Some(USER_CODE_PAGE_8.0.as_mut_ptr()),
             _ => None,
         }
     }
@@ -1817,6 +1979,7 @@ cfg_m3! {
             *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
             *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
             *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(7) = kv2p(USER_CODE_PAGE_8.0.as_ptr() as u64) | code_flags;
         }
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
@@ -2104,6 +2267,8 @@ cfg_r4! {
     static mut USER_CODE_PAGE_6:  Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
     static mut USER_CODE_PAGE_7:  Page = Page([0; 4096]);
+    #[cfg(feature = "go_test")]
+    static mut USER_CODE_PAGE_8:  Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
     static mut USER_STACK_PAGE_5: Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
@@ -3580,6 +3745,7 @@ cfg_r4! {
             *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
             *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
             *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(7) = kv2p(USER_CODE_PAGE_8.0.as_ptr() as u64) | code_flags;
         }
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
@@ -3643,6 +3809,7 @@ cfg_r4! {
         *pt_code.add(4) = kv2p(USER_CODE_PAGE_5.0.as_ptr() as u64) | code_flags;
         *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
         *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(7) = kv2p(USER_CODE_PAGE_8.0.as_ptr() as u64) | code_flags;
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
         *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
@@ -3667,6 +3834,7 @@ cfg_r4! {
         core::ptr::write_bytes(USER_CODE_PAGE_5.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
         core::ptr::write_bytes(USER_CODE_PAGE_6.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
         core::ptr::write_bytes(USER_CODE_PAGE_7.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_8.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
 
         let chunks = [
             runtime::process::go_image_chunk(blob, 0),
@@ -3676,6 +3844,7 @@ cfg_r4! {
             runtime::process::go_image_chunk(blob, 4),
             runtime::process::go_image_chunk(blob, 5),
             runtime::process::go_image_chunk(blob, 6),
+            runtime::process::go_image_chunk(blob, 7),
         ];
         let pages = [
             USER_CODE_PAGE.0.as_mut_ptr(),
@@ -3685,6 +3854,7 @@ cfg_r4! {
             USER_CODE_PAGE_5.0.as_mut_ptr(),
             USER_CODE_PAGE_6.0.as_mut_ptr(),
             USER_CODE_PAGE_7.0.as_mut_ptr(),
+            USER_CODE_PAGE_8.0.as_mut_ptr(),
         ];
         for i in 0..runtime::process::GO_IMAGE_MAX_PAGES {
             if chunks[i].is_empty() {
