@@ -124,6 +124,9 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if len(cmd) > 5 && cmd[:5] == "fsrm " {
 		return false, fshCtl(fsCtlUnlink, cmd[5:], msgFshRmOK)
 	}
+	if len(cmd) > 9 && cmd[:9] == "tcpcheck " {
+		return false, tcpCheck(cmd[9:])
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

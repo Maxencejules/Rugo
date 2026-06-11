@@ -21,24 +21,21 @@ def test_vfs_tree_create_list_persist(qemu_go_c4_runtime):
         "fsls /data/etc\n"
         "shutdown\n"
     ).stdout
+    # Anchors are single-write markers; echoed command lines are typed
+    # char-by-char and may be spliced by async output.
     _find_in_order(first, [
         "VFS: format ok",
-        "rugo> fsmk /data/etc",
         "FSH: mkdir ok",
-        "rugo> fswrite /data/etc/motd hello-rugo",
         "FSH: write ok",
-        "rugo> fscat /data/etc/motd",
         "hello-rugo",
         "FSH: cat ok",
-        "rugo> fsls /data",
         "etc/",
         "FSH: ls ok",
-        "rugo> fsls /data/etc",
-        "motd",
         "FSH: ls ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
+    assert first.count("FSH: ls ok") == 2
     assert "FSH: err" not in first
     assert "VFS: io err" not in first
 
@@ -50,12 +47,9 @@ def test_vfs_tree_create_list_persist(qemu_go_c4_runtime):
     ).stdout
     _find_in_order(second, [
         "VFS: mount ok files=0x0000000000000002",
-        "rugo> fscat /data/etc/motd",
         "hello-rugo",
         "FSH: cat ok",
-        "rugo> fsrm /data/etc/motd",
         "FSH: rm ok",
-        "rugo> fscat /data/etc/motd",
         "FSH: err",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

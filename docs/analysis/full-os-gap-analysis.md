@@ -146,26 +146,42 @@ step) are absent here.
 
 ## 3. Priority-Ordered Build List
 
+Implementation status (kept current as items close; details and proof
+paths in `docs/superpowers/plans/2026-06-10-full-os-gap-roadmap.md`):
+
 Foundations (everything else is blocked on these):
 1. Kernel **physical frame allocator + kernel heap**, then demand paging with a
    real page-fault handler.
+   — **DONE** (`make test-mm-foundation-v1`, `docs/runtime/memory_v1.md`)
 2. **Unify the M3/R4 feature lanes** into one kernel binary; lift the 6-task
    static limit with dynamically allocated process structures.
+   — task-limit lift **DONE** (`make test-dynamic-tasks-v1`); lane
+   unification proceeds incrementally — every new subsystem (mm, vfs, tcp)
+   lands unconditionally or in the product lane, not behind new test lanes
 3. **Preemptive timer scheduling in the default lane** (move the PIT/APIC path
    out of `sched_test`).
+   — **DONE** (`make test-sched-preempt-v1`, `docs/runtime/scheduler_v1.md`)
 4. **exec-from-filesystem**: load and run an ELF named by path, parent/child
    lifecycle (spawn+wait is fine; full fork optional — Redox/Fuchsia-style
    spawn is a defensible design).
+   — **DONE** (`make test-exec-v1`, `docs/runtime/exec_v1.md`; `sys_spawn`
+   id 46, shell `run base-shell` executes a hash-verified on-disk ELF)
 
 Usability (turns the demo into an operable system):
 5. **Real VFS + directories** over SimpleFS: create/stat/list arbitrary files;
    then file permissions.
+   — create/write/read/list/unlink/dirs/persistence **DONE**
+   (`make test-vfs-v1`, `docs/runtime/vfs_v1.md`); permissions pending
 6. **TCP/IP stack** (port lwIP or smoltcp — smoltcp is Rust and fits the
    kernel) wired to the existing socket syscalls; DHCP + DNS client.
+   — wire TCP client **DONE** (`make test-tcp-v1`, `docs/runtime/tcp_v1.md`,
+   in-repo stack, no external crates); DHCP + DNS clients pending
 7. **Keyboard input + framebuffer text console**, so the OS is usable outside
    a serial pipe.
 8. Shell that **executes external programs** with arguments, plus a first
    coreutils set (ls, cat, echo, ps); pipes need pipe IPC in the kernel.
+   — partially: external program execution exists (item 4); arguments,
+   coreutils, and pipes pending
 9. A **libc-equivalent** (POSIX-ish syscall layer) — prerequisite for porting
    any existing software, which is how every hobby OS bootstraps an ecosystem.
 

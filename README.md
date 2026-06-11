@@ -78,6 +78,12 @@ Visible proof paths:
   and persistence across a reboot on the same disk.
   Proof: `tests/runtime/test_vfs_runtime_v1.py`, contract
   `docs/runtime/vfs_v1.md`
+- `make test-tcp-v1`
+  Boots the default Go image and proves real wire TCP: the guest's kernel
+  TCP machine handshakes through QEMU's user-mode network with a
+  host-side listener owned by the test and round-trips a payload.
+  Proof: `tests/runtime/test_tcp_runtime_v1.py`, contract
+  `docs/runtime/tcp_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

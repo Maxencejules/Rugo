@@ -45,6 +45,8 @@ mod arch_x86;
 mod memory;
 pub(crate) mod mm;
 mod net;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod tcp;
 #[cfg(feature = "go_test")]
 pub(crate) mod vfs;
 mod process;
@@ -2618,6 +2620,12 @@ cfg_r4! {
     pub(crate) unsafe fn r4_timer_preempt(frame: *mut u64) {
         R4_PREEMPT_TICKS += 1;
         sched::pic_send_eoi(0);
+        #[cfg(not(feature = "compat_real_test"))]
+        if tcp::tcp_active() {
+            // Drive the wire TCP machine from the tick while a connection
+            // is in flight.
+            net::net_rx_pump();
+        }
         if *frame.add(18) & 3 != 3 {
             return; // interrupted a kernel path - nothing to switch
         }

@@ -177,6 +177,57 @@ pub(crate) unsafe fn virtio_net_recv(buf: &mut [u8]) -> usize {
     copy_len
 }
 
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn net_mac() -> [u8; 6] {
+    NET_MAC
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn wire_send(frame: &[u8]) -> bool {
+    virtio_net_send(frame)
+}
+
+/// PIT-tick RX pump for the default lane: answer ARP for the guest IP,
+/// hand ARP replies and IPv4/TCP packets to the TCP machine, drop the
+/// rest. Runs in interrupt context (single core, IF=0 in kernel).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn net_rx_pump() {
+    if !R4_NET_NIC_READY {
+        return;
+    }
+    let mut budget = 8;
+    let mut buf = [0u8; 1514];
+    while budget > 0 {
+        budget -= 1;
+        let n = virtio_net_recv(&mut buf);
+        if n == 0 {
+            break;
+        }
+        if n < 14 {
+            continue;
+        }
+        let ethertype = u16::from_be_bytes([buf[12], buf[13]]);
+        if ethertype == 0x0806 && n >= 42 {
+            let arp = &buf[14..];
+            let opcode = u16::from_be_bytes([arp[6], arp[7]]);
+            if opcode == 2 {
+                let sender_ip = [arp[14], arp[15], arp[16], arp[17]];
+                crate::tcp::on_arp_reply(&sender_ip, &arp[8..14]);
+            }
+            // ARP requests for the guest IP are answered by the slirp
+            // gateway path only when needed; the UDP-echo lane keeps its
+            // own responder.
+            continue;
+        }
+        if ethertype == 0x0800 && n >= 34 {
+            let ip = &buf[14..n];
+            if ip[9] == 6 {
+                crate::tcp::tcp_input(ip);
+            }
+        }
+    }
+}
+
 #[cfg(any(feature = "net_test", feature = "go_test"))]
 unsafe fn virtio_net_send(frame: &[u8]) -> bool {
     let total_len = VIRTIO_NET_HDR_SIZE + frame.len();
@@ -872,6 +923,25 @@ pub(crate) unsafe fn sys_socket_connect_r4(socket_id: u64, addr_ptr: u64, addr_l
     if R4_SOCKETS[sid].domain != family || R4_SOCKETS[sid].kind as u64 != R4_NET_SOCK_STREAM {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
+    // AF_INET stream connects go to the wire TCP machine (gap item 6);
+    // the loopback rendezvous below stays the AF_INET6 test surface.
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if family as u64 == R4_NET_AF_INET {
+            if !R4_NET_NIC_READY {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            let dst = [addr[0], addr[1], addr[2], addr[3]];
+            if !crate::tcp::tcp_connect(dst, port) {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            R4_SOCKETS[sid].state = 8;
+            R4_SOCKETS[sid].remote_port = port;
+            R4_SOCKETS[sid].remote_addr[..4].copy_from_slice(&dst);
+            net_rx_pump();
+            return 0;
+        }
+    }
     let route_idx = match r4_net_find_route(family, &addr) {
         Some(idx) => idx,
         None => return 0xFFFF_FFFF_FFFF_FFFF,
@@ -965,7 +1035,32 @@ pub(crate) unsafe fn sys_socket_accept_r4(
 #[cfg(feature = "go_test")]
 pub(crate) unsafe fn sys_socket_send_r4(socket_id: u64, buf: u64, len: u64) -> u64 {
     let sid = socket_id as usize;
-    if sid >= R4_NET_SOCKET_MAX || !R4_SOCKETS[sid].active || R4_SOCKETS[sid].state != 4 {
+    if sid >= R4_NET_SOCKET_MAX || !R4_SOCKETS[sid].active {
+        return 0xFFFF_FFFF_FFFF_FFFF;
+    }
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if R4_SOCKETS[sid].state == 8 {
+            if !r4_socket_owner_ok(sid) {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            net_rx_pump();
+            let n = len as usize;
+            if n == 0 || n > 512 {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            let mut kbuf = [0u8; 512];
+            if copyin_user(&mut kbuf[..n], buf, n).is_err() {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            let sent = crate::tcp::tcp_send(&kbuf[..n]);
+            if sent == 0 {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            return sent as u64;
+        }
+    }
+    if R4_SOCKETS[sid].state != 4 {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     if !r4_socket_owner_ok(sid) {
@@ -993,7 +1088,29 @@ pub(crate) unsafe fn sys_socket_send_r4(socket_id: u64, buf: u64, len: u64) -> u
 #[cfg(feature = "go_test")]
 pub(crate) unsafe fn sys_socket_recv_r4(socket_id: u64, buf: u64, len: u64) -> u64 {
     let sid = socket_id as usize;
-    if sid >= R4_NET_SOCKET_MAX || !R4_SOCKETS[sid].active || R4_SOCKETS[sid].state != 4 {
+    if sid >= R4_NET_SOCKET_MAX || !R4_SOCKETS[sid].active {
+        return 0xFFFF_FFFF_FFFF_FFFF;
+    }
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if R4_SOCKETS[sid].state == 8 {
+            if !r4_socket_owner_ok(sid) {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            net_rx_pump();
+            let cap = (len as usize).min(512);
+            let mut kbuf = [0u8; 512];
+            let n = crate::tcp::tcp_recv(&mut kbuf[..cap]);
+            if n == 0 {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            if copyout_user(buf, &kbuf[..n], n).is_err() {
+                return 0xFFFF_FFFF_FFFF_FFFF;
+            }
+            return n as u64;
+        }
+    }
+    if R4_SOCKETS[sid].state != 4 {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     if !r4_socket_owner_ok(sid) {
@@ -1018,6 +1135,12 @@ pub(crate) unsafe fn sys_socket_close_r4(socket_id: u64) -> u64 {
     }
     if !r4_socket_owner_ok(sid) {
         return 0xFFFF_FFFF_FFFF_FFFF;
+    }
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if R4_SOCKETS[sid].state == 8 {
+            crate::tcp::tcp_close();
+        }
     }
     r4_release_socket(sid);
     0

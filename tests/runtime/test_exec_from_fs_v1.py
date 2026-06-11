@@ -15,9 +15,10 @@ def test_shell_executes_app_from_disk(qemu_go_c4_runtime):
 
     out = boot("pkg\nrun base-shell\nrun base-shell\nshutdown\n").stdout
 
+    # Anchors are single-write markers; echoed command lines are typed
+    # char-by-char and may be spliced by async output.
     _find_in_order(out, [
         "GOSH: pkg ok",
-        "rugo> run base-shell",
         "EXEC: base-shell ok",
         "BASESH: hello from disk",
         "APP: base-shell ok",
