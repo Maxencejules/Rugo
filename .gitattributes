@@ -1,0 +1,8 @@
+# Language statistics: the OS is the Rust/Go/asm/C source. The Python
+# tree is host-side lab equipment (QEMU test harness + build tooling)
+# and the legacy tree is the archival pre-Rust baseline; exclude them
+# from GitHub's language bar so the repo classifies by what it ships.
+tests/** linguist-vendored
+tools/** linguist-vendored
+legacy/** linguist-vendored
+docs/** linguist-documentation

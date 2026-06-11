@@ -4,16 +4,9 @@
 # Live runtime evidence - serial markers from a normal Go-lane boot.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_dynamic_task_table_lifts_static_limit(qemu_serial_go):
+def test_dynamic_task_table_lifts_static_limit(qemu_serial_go, find_in_order):
     out = qemu_serial_go.stdout
-    _find_in_order(out, [
+    find_in_order(out, [
         "GOINIT: bootstrap",
         "GOINIT: spawn stress ok n=8",
         "GOINIT: svcmgr up",

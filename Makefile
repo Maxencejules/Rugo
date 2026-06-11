@@ -13,7 +13,7 @@ BASH := bash
 SHELL := bash
 endif
 
-.PHONY: build image build-panic image-panic build-pf image-pf build-idt image-idt \
+.PHONY: lint-py build image build-panic image-panic build-pf image-pf build-idt image-idt \
        build-sched image-sched \
        build-user-hello image-user-hello build-syscall image-syscall \
        build-thread-exit image-thread-exit \
@@ -747,8 +747,15 @@ gate-all: test-qemu
 
 validate: gate-all
 
+# Static checks for the host-side Python (harness + tools): the
+# bug-catching rules only - undefined names, redefinitions, syntax.
+lint-py:
+	$(PYTHON) -m ruff check --select F821,F811,E9 tests tools
+
 test-qemu: image image-panic image-pf image-idt image-sched image-user-hello image-syscall image-thread-exit image-thread-spawn image-vm-map image-syscall-invalid image-stress-syscall image-stress-ipc image-stress-blk image-pressure-shm image-yield image-user-fault image-ipc image-ipc-badptr-send image-ipc-badptr-recv image-svc-badptr image-ipc-buffer-full image-ipc-waiter-busy image-ipc-svc-overwrite image-svc-full image-svc-bad-endpoint image-shm image-quota-endpoints image-quota-shm image-quota-threads image-blk image-blk-badlen image-blk-badptr image-blk-invariants image-blk-init-fail image-fs image-fs-badmagic image-pkg-hash image-net image-go image-go-std
 	$(PYTHON) -m pytest tests/ -v
+
+test-qemu: lint-py
 
 test-hw-matrix: image-blk image-blk-badlen image-blk-badptr image-net
 	$(PYTHON) -m pytest tests/hw/test_hardware_matrix_v1.py tests/hw/test_probe_negative_paths_v1.py tests/hw/test_dma_safety_v1.py -v

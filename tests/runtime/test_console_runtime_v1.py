@@ -25,13 +25,6 @@ KEYMAP = {
 }
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 def _qmp_connect(port, deadline):
     while time.monotonic() < deadline:
         try:
@@ -82,7 +75,7 @@ def _count_lit_pixels(ppm_path):
     return lit, width, height
 
 
-def test_keyboard_session_and_framebuffer_pixels(tmp_path):
+def test_keyboard_session_and_framebuffer_pixels(tmp_path, find_in_order):
     iso = os.path.join(conftest.REPO_ROOT, "out", "os-go.iso")
     if not os.path.isfile(iso):
         import pytest
@@ -162,7 +155,7 @@ def test_keyboard_session_and_framebuffer_pixels(tmp_path):
                 time.sleep(0.25)
 
     assert dumped, f"never reached the screendump point.\n{transcript}"
-    _find_in_order(transcript, [
+    find_in_order(transcript, [
         "FB: console on",
         "KBD: on",
         "GOSH: session ready",

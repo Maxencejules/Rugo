@@ -1,18 +1,11 @@
 """Default shell Alpha check: package sync exposes runnable bundled apps."""
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_default_shell_runtime_exposes_installed_apps_across_reboot(qemu_go_c4_runtime):
+def test_default_shell_runtime_exposes_installed_apps_across_reboot(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     first = boot("pkg\napps\nrun base-shell\nshutdown\n").stdout
-    _find_in_order(
+    find_in_order(
         first,
         [
             "PKGSVC: ready",
@@ -28,7 +21,7 @@ def test_default_shell_runtime_exposes_installed_apps_across_reboot(qemu_go_c4_r
     )
 
     second = boot("pkg\napps\nrun media-suite\nshutdown\n").stdout
-    _find_in_order(
+    find_in_order(
         second,
         [
             "UPD3: rotate ok",

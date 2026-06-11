@@ -7,13 +7,6 @@ import socket
 import threading
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 def _echo_listener(server: socket.socket, result: dict) -> None:
     try:
         server.settimeout(20)
@@ -39,7 +32,7 @@ def _echo_listener(server: socket.socket, result: dict) -> None:
         server.close()
 
 
-def test_wire_tcp_round_trip(qemu_go_c4_runtime):
+def test_wire_tcp_round_trip(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -59,7 +52,7 @@ def test_wire_tcp_round_trip(qemu_go_c4_runtime):
     )
     # Anchors are single-write kernel/shell markers: the echoed command
     # line is typed char-by-char and may be spliced by async output.
-    _find_in_order(out, [
+    find_in_order(out, [
         "GOSH: session ready",
         "TCP: syn sent",
         "TCP: established",

@@ -1,17 +1,10 @@
 """M25 runtime-backed acceptance: real boot path consumes the service model."""
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
+def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go, find_in_order):
     serial = qemu_serial_go.stdout
 
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "RUGO: boot ok",
@@ -82,7 +75,7 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
     # supervisor reaps -> clean init result). The interleaving BETWEEN
     # sibling services is scheduler-dependent under preemptive timing and
     # is deliberately not asserted.
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "GOSVCM: stop timesvc",
@@ -92,7 +85,7 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "GOINIT: result shutdown-clean",
         ],
     )
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "GOSVCM: stop diagsvc",
@@ -103,7 +96,7 @@ def test_userspace_model_v2_boots_manifest_driven_go_runtime(qemu_serial_go):
             "GOINIT: result shutdown-clean",
         ],
     )
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "GOSVCM: stop pkgsvc",

@@ -3,14 +3,7 @@
 # a reboot on the same disk.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_vfs_tree_create_list_persist(qemu_go_c4_runtime):
+def test_vfs_tree_create_list_persist(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     first = boot(
@@ -23,7 +16,7 @@ def test_vfs_tree_create_list_persist(qemu_go_c4_runtime):
     ).stdout
     # Anchors are single-write markers; echoed command lines are typed
     # char-by-char and may be spliced by async output.
-    _find_in_order(first, [
+    find_in_order(first, [
         "VFS: format ok",
         "FSH: mkdir ok",
         "FSH: write ok",
@@ -45,7 +38,7 @@ def test_vfs_tree_create_list_persist(qemu_go_c4_runtime):
         "fscat /data/etc/motd\n"
         "shutdown\n"
     ).stdout
-    _find_in_order(second, [
+    find_in_order(second, [
         "VFS: mount ok files=0x0000000000000002",
         "hello-rugo",
         "FSH: cat ok",

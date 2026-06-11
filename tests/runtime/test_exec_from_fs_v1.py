@@ -3,21 +3,14 @@
 # evidence - the app's own marker can only come from its ELF payload.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_shell_executes_app_from_disk(qemu_go_c4_runtime):
+def test_shell_executes_app_from_disk(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     out = boot("pkg\nrun base-shell\nrun base-shell\nshutdown\n").stdout
 
     # Anchors are single-write markers; echoed command lines are typed
     # char-by-char and may be spliced by async output.
-    _find_in_order(out, [
+    find_in_order(out, [
         "GOSH: pkg ok",
         "EXEC: base-shell ok",
         "BASESH: hello from disk",

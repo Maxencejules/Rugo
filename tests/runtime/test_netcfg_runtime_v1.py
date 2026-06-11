@@ -10,13 +10,6 @@ import struct
 import threading
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 class _DnsResponder:
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -59,7 +52,7 @@ class _DnsResponder:
         self.sock.close()
 
 
-def test_dhcp_offer_and_dns_resolution(qemu_go_c4_runtime):
+def test_dhcp_offer_and_dns_resolution(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     responder = _DnsResponder()
@@ -73,7 +66,7 @@ def test_dhcp_offer_and_dns_resolution(qemu_go_c4_runtime):
         responder.stop()
 
     assert responder.queries, "the host-side DNS responder never saw a query"
-    _find_in_order(out, [
+    find_in_order(out, [
         # slirp offers the guest its canonical address
         "DHCP: offer ip=0x000000000A00020F",
         "NETD: dhcp ok",

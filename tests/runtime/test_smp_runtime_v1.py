@@ -15,13 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import conftest  # noqa: E402
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 def _boot_smp(iso, smp, input_text=None, with_devices=False, timeout=30):
     serial_port = conftest._pick_serial_port()
     cmd = [
@@ -87,14 +80,14 @@ def _boot_smp(iso, smp, input_text=None, with_devices=False, timeout=30):
     return transcript
 
 
-def test_aps_check_in_on_quad_core():
+def test_aps_check_in_on_quad_core(find_in_order):
     iso = os.path.join(conftest.REPO_ROOT, "out", "os.iso")
     if not os.path.isfile(iso):
         import pytest
 
         pytest.skip(f"ISO not built: {iso}")
     out = _boot_smp(iso, 4)
-    _find_in_order(out, [
+    find_in_order(out, [
         "RUGO: boot ok",
         "SMP: cpus=0x0000000000000004",
         "SMP: aps online=0x0000000000000003",
@@ -102,14 +95,14 @@ def test_aps_check_in_on_quad_core():
     ])
 
 
-def test_default_lane_boots_clean_on_multicore():
+def test_default_lane_boots_clean_on_multicore(find_in_order):
     iso = os.path.join(conftest.REPO_ROOT, "out", "os-go.iso")
     if not os.path.isfile(iso):
         import pytest
 
         pytest.skip(f"ISO not built: {iso}")
     out = _boot_smp(iso, 2, input_text="shutdown\n", with_devices=True, timeout=40)
-    _find_in_order(out, [
+    find_in_order(out, [
         "SMP: cpus=0x0000000000000002",
         "SMP: aps online=0x0000000000000001",
         "GOSH: session ready",

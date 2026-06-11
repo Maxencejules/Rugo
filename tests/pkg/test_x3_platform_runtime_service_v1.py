@@ -17,13 +17,6 @@ XATTR_PAYLOAD_V1 = "channel=stable"
 XATTR_PAYLOAD_V2 = "channel=stable-v2"
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 def _read_sector(disk_path: str, sector: int) -> bytes:
     image = Path(disk_path).read_bytes()
     start = sector * 512
@@ -47,11 +40,12 @@ def _prefix(payload: str) -> bytes:
 
 def test_x3_runtime_service_exercises_signed_updates_and_platform_features(
     qemu_go_c4_runtime,
+    find_in_order,
 ):
     boot, disk_path = qemu_go_c4_runtime
 
     first = boot().stdout
-    _find_in_order(
+    find_in_order(
         first,
         [
             "PKGSVC: start",
@@ -109,7 +103,7 @@ def test_x3_runtime_service_exercises_signed_updates_and_platform_features(
     assert platform_payload[18:26] == _prefix(XATTR_PAYLOAD_V1)
 
     second = boot().stdout
-    _find_in_order(
+    find_in_order(
         second,
         [
             "PKGSVC: start",

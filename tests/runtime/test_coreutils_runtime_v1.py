@@ -3,14 +3,7 @@
 # output line below is produced by the spawned program's own ELF.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_coreutils_run_as_external_programs(qemu_go_c4_runtime):
+def test_coreutils_run_as_external_programs(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     out = boot(
@@ -25,7 +18,7 @@ def test_coreutils_run_as_external_programs(qemu_go_c4_runtime):
 
     # Anchors are single-write markers from the kernel and the spawned
     # programs themselves.
-    _find_in_order(out, [
+    find_in_order(out, [
         "FSH: write ok",
         "EXEC: echo ok",
         "hello-from-exec",

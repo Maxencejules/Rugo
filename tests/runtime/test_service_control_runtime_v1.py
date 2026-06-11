@@ -1,17 +1,10 @@
 """Core runtime acceptance: the default Go lane exposes control/diagnostic flow."""
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_service_control_runtime_v1_exercises_diag_snapshot_and_shutdown(qemu_serial_go):
+def test_service_control_runtime_v1_exercises_diag_snapshot_and_shutdown(qemu_serial_go, find_in_order):
     serial = qemu_serial_go.stdout
 
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "SVC: diagsvc declared",

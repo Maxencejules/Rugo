@@ -1,13 +1,6 @@
 """C5 runtime acceptance: reliability and isolation are exercised on image-go."""
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 def _has_task_line(serial: str, service: str, tokens: list[str]) -> bool:
     prefix = f"TASK: {service} "
     for line in serial.splitlines():
@@ -20,11 +13,12 @@ def _has_task_line(serial: str, service: str, tokens: list[str]) -> bool:
 
 def test_reliable_isolated_runtime_c5_runs_boot_backed_isolation_and_soak(
     qemu_go_c4_runtime,
+    find_in_order,
 ):
     boot, _disk_path = qemu_go_c4_runtime
 
     first = boot().stdout
-    _find_in_order(
+    find_in_order(
         first,
         [
             "GOSH: diag ok",
@@ -44,7 +38,7 @@ def test_reliable_isolated_runtime_c5_runs_boot_backed_isolation_and_soak(
     assert _has_task_line(first, "shell", ["dom=3", "cap=3", "fd=0", "sock=0"])
 
     second = boot().stdout
-    _find_in_order(
+    find_in_order(
         second,
         [
             "RECOV: replay ok",

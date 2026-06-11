@@ -4,14 +4,7 @@
 # go through the POSIX-ish layer over the int 0x80 ABI.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_c_program_runs_against_rlibc(qemu_go_c4_runtime):
+def test_c_program_runs_against_rlibc(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     out = boot(
@@ -21,7 +14,7 @@ def test_c_program_runs_against_rlibc(qemu_go_c4_runtime):
         "shutdown\n"
     ).stdout
 
-    _find_in_order(out, [
+    find_in_order(out, [
         "FSH: write ok",
         "EXEC: hello ok",
         "HELLOC: printf d=42 x=0xff s=works",

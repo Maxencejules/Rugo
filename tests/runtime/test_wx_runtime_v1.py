@@ -5,19 +5,12 @@
 # while the system carries on to a clean shutdown.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_stack_execution_is_blocked(qemu_go_c4_runtime):
+def test_stack_execution_is_blocked(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     out = boot("nxprobe\nshutdown\n").stdout
 
-    _find_in_order(out, [
+    find_in_order(out, [
         "MM: nx on",
         "EXEC: nxprobe ok",
         "NXPROBE: jumping to stack",

@@ -5,19 +5,12 @@
 # terminate the task - while the shell carries on.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_signal_delivery_and_default_kill(qemu_go_c4_runtime):
+def test_signal_delivery_and_default_kill(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     out = boot("sigprobe\nsigprobe die\nshutdown\n").stdout
 
-    _find_in_order(out, [
+    find_in_order(out, [
         "EXEC: sigprobe ok",
         "SIGPROBE: handler sig=15",
         "SIGPROBE: resumed after handler",

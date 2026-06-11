@@ -9,13 +9,6 @@ R4_STORAGE_JOURNAL_SECTOR = 8
 R4_STORAGE_STATE_SECTOR = 9
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
 def _read_sector(disk_path: str, sector: int) -> bytes:
     image = Path(disk_path).read_bytes()
     start = sector * 512
@@ -34,11 +27,12 @@ def _parse_record(record: bytes) -> dict[str, int | bytes]:
 
 def test_connected_runtime_c4_replays_storage_and_exercises_ipv6_sockets(
     qemu_go_c4_runtime,
+    find_in_order,
 ):
     boot, disk_path = qemu_go_c4_runtime
 
     first = boot().stdout
-    _find_in_order(
+    find_in_order(
         first,
         [
             "STORC4: block ready",
@@ -69,7 +63,7 @@ def test_connected_runtime_c4_replays_storage_and_exercises_ipv6_sockets(
     assert first_state["magic"] == 0
 
     second = boot().stdout
-    _find_in_order(
+    find_in_order(
         second,
         [
             "STORC4: block ready",

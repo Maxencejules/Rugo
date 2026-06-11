@@ -1,17 +1,10 @@
 """M16 runtime-backed acceptance: the default Go lane reaps and restarts services."""
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go_restart):
+def test_process_scheduler_runtime_v2_waits_reaps_and_restarts(qemu_serial_go_restart, find_in_order):
     serial = qemu_serial_go_restart.stdout
 
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "SVC: shell starting",

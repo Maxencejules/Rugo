@@ -5,14 +5,7 @@
 # actually crossed the kernel ring.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
-
-
-def test_pipe_joins_two_external_programs(qemu_go_c4_runtime):
+def test_pipe_joins_two_external_programs(qemu_go_c4_runtime, find_in_order):
     boot, _disk_path = qemu_go_c4_runtime
 
     # payload: 16 bytes -> WC: 0x10
@@ -23,7 +16,7 @@ def test_pipe_joins_two_external_programs(qemu_go_c4_runtime):
         "shutdown\n"
     ).stdout
 
-    _find_in_order(out, [
+    find_in_order(out, [
         "FSH: write ok",
         "EXEC: cat ok",
         "EXEC: wc ok",

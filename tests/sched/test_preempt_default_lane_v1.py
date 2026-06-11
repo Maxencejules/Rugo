@@ -2,17 +2,9 @@
 # Live runtime evidence - serial markers from a normal Go-lane boot.
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = 0
-    for marker in markers:
-        found = serial.find(marker, pos)
-        assert found != -1, f"marker not found in order: {marker}"
-        pos = found + len(marker)
-
-
-def test_default_lane_preempts(qemu_serial_go):
+def test_default_lane_preempts(qemu_serial_go, find_in_order):
     out = qemu_serial_go.stdout
-    _find_in_order(out, [
+    find_in_order(out, [
         "SCHED: preempt on hz=100",
         "GOINIT: start",
         "SCHED: preempt hit",

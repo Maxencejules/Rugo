@@ -100,6 +100,22 @@ def _resolve_qemu_bin():
 QEMU_BIN = _resolve_qemu_bin()
 
 
+def assert_markers_in_order(serial, markers):
+    """Assert each marker appears in the serial transcript, in order."""
+    pos = -1
+    for marker in markers:
+        pos = serial.find(marker, pos + 1)
+        assert pos != -1, (
+            f"Missing '{marker}' in serial output.\nFull output:\n{serial}"
+        )
+
+
+@pytest.fixture
+def find_in_order():
+    """Shared ordered-marker assertion (one copy, not one per test file)."""
+    return assert_markers_in_order
+
+
 def _pick_serial_port():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:

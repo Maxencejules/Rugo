@@ -1,21 +1,11 @@
 """G1 acceptance test: canonical Go userspace bootstrap path."""
 
 
-def _find_in_order(serial: str, markers: list[str]) -> None:
-    pos = -1
-    for marker in markers:
-        pos = serial.find(marker, pos + 1)
-        assert pos != -1, (
-            f"Expected '{marker}' in serial output.\n"
-            f"Full output:\n{serial}"
-        )
-
-
-def test_go_userspace_bootstrap(qemu_serial_go):
+def test_go_userspace_bootstrap(qemu_serial_go, find_in_order):
     """Kernel boot must reach the default shell session and explicit health flow."""
     serial = qemu_serial_go.stdout
 
-    _find_in_order(
+    find_in_order(
         serial,
         [
             "RUGO: boot ok",
