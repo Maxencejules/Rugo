@@ -51,6 +51,20 @@ kernel heap, and demand paging.
     the demand mapper refuses — a runaway stack faults fatally instead of
     silently corrupting its neighbour.
 
+## W^X on dynamic user memory
+
+- `EFER.NXE` is enabled at boot in every lane (marker `MM: nx on`).
+- Demand-mapped pages carry PTE bit 63 (NX) except inside the exec app
+  window `[0x0140_0000, 0x0180_0000)`, where ELF segments load through
+  the same path. The TinyGo heap and all dynamic task stacks are
+  therefore non-executable: executing from them faults with error bit 4
+  (instruction fetch) and the task is killed.
+- Proof: `make test-wx-v1` - the `nxprobe` app calls into its own
+  stack and must die at `USERPF ... err=0x...15` while the system
+  shuts down cleanly.
+- Carry-forward: read-only user code pages, NX for the static service
+  stack region, ASLR.
+
 ## Marker contract
 
 | Marker | Meaning |
@@ -60,6 +74,7 @@ kernel heap, and demand paging.
 | `MM: heap ok size=0x<16-digit hex>` | kernel heap window reserved |
 | `MM: heap none` | contiguous heap window unavailable |
 | `MM: heap selftest ok` / `... err` | boot-time Box/Vec alloc-free-reuse check |
+| `MM: nx on` | EFER.NXE enabled; NX honored on user data pages |
 | `MM: demand map va=0x<page>` | one probe-range page mapped on first touch (heap pages above `0x0110_0000` map silently so workload-dependent counts never perturb marker assertions) |
 | `GOINIT: mem demand ok` / `... err` | Go init touched 16 window pages successfully |
 

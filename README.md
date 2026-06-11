@@ -112,6 +112,13 @@ Visible proof paths:
   `/data` tree all go through the POSIX-ish layer.
   Proof: `tests/runtime/test_libc_runtime_v1.py`, contract
   `docs/runtime/libc_v1.md`
+- `make test-wx-v1`
+  Boots the default Go image and proves W^X on dynamic user memory: the
+  nxprobe app copies a `ret` onto its demand-paged stack and calls it -
+  the fetch faults (NX) and the kernel kills the probe while the system
+  shuts down cleanly.
+  Proof: `tests/runtime/test_wx_runtime_v1.py`, contract
+  `docs/runtime/memory_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

@@ -378,7 +378,38 @@ const DEMAND_STACK_GUARD: u64 = 0x4000;
 static mut DEMAND_MAPPED: u64 = 0;
 
 const PTE_P_W_U: u64 = 0x07;
+const PTE_NX: u64 = 1 << 63;
 const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+
+// Exec app window: ELF segments load through the same demand path, so
+// these pages stay executable. Everything else in the window is data
+// (TinyGo heap, task stacks) and gets NX - W^X for dynamic user memory.
+const EXEC_WINDOW_BASE: u64 = 0x0140_0000;
+const EXEC_WINDOW_END: u64 = 0x0180_0000;
+
+/// Enable EFER.NXE so PTE bit 63 (no-execute) is honored. Called once
+/// at boot in every lane, before the first demand mapping.
+pub fn enable_nx() {
+    unsafe {
+        let (mut lo, hi): (u32, u32);
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") 0xC000_0080u32,
+            out("eax") lo,
+            out("edx") hi,
+            options(nomem, nostack),
+        );
+        lo |= 1 << 11;
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") 0xC000_0080u32,
+            in("eax") lo,
+            in("edx") hi,
+            options(nomem, nostack),
+        );
+    }
+    crate::serial_write(b"MM: nx on\n");
+}
 
 /// Try to satisfy a user page fault at `va` by mapping a fresh frame.
 /// Returns true when mapped (the faulting instruction must be retried).
@@ -429,7 +460,12 @@ pub fn try_demand_map(va: u64) -> bool {
             Some(p) => p,
             None => return false,
         };
-        *pt.add(pt_idx) = frame | PTE_P_W_U;
+        let nx = if va >= EXEC_WINDOW_BASE && va < EXEC_WINDOW_END {
+            0
+        } else {
+            PTE_NX
+        };
+        *pt.add(pt_idx) = frame | PTE_P_W_U | nx;
         core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
         DEMAND_MAPPED += 1;
         // Per-page markers only for the boot-probe sub-range; the TinyGo

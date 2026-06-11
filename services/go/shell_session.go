@@ -163,6 +163,12 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if cmd == "hello" {
 		return false, spawnRun(appNameHello, "")
 	}
+	if cmd == "nxprobe" {
+		// The probe is EXPECTED to be killed by W^X; report spawn+reap
+		// success regardless of the child's fate.
+		spawnRun(appNameNxprobe, "")
+		return false, true
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

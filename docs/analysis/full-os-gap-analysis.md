@@ -200,6 +200,9 @@ Parity (credible-OS tier):
 10. SMP bring-up + kernel locking; signals; users/permissions; dynamic linking;
     USB/HID; ASLR + W^X; a real installer; then — and only then — an honest
     graphics stack (framebuffer → compositor → toolkit).
+    — W^X on dynamic user memory **DONE** (`make test-wx-v1`; EFER.NXE +
+    NX data pages, a stack-execution probe dies with the fetch-fault
+    error code); the rest of the tier is pending
 
 ## 4. Honest Positioning
 

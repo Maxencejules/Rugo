@@ -5681,6 +5681,7 @@ pub extern "C" fn kmain() -> ! {
         serial_write(b"FB: none\n");
     }
     check_paging();
+    mm::enable_nx();
     mm::pmm_init();
     mm::heap_init();
     mm::heap_selftest();
