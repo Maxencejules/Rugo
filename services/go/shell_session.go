@@ -157,6 +157,12 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if cmd == "ps" {
 		return false, spawnRun(appNamePs, "")
 	}
+	if len(cmd) > 6 && cmd[:6] == "hello " {
+		return false, spawnRun(appNameHello, cmd[6:])
+	}
+	if cmd == "hello" {
+		return false, spawnRun(appNameHello, "")
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

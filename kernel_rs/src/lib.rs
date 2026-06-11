@@ -2905,8 +2905,11 @@ cfg_r4! {
     const EXEC_APP_END: u64 = 0x0180_0000;
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     const EXEC_APP_REGION_SECTOR: u64 = 64;
+    // 64 KiB: C programs against rlibc are bigger than the asm
+    // coreutils; the package read path is heap-backed, so the cap is
+    // policy, not a buffer size.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    const EXEC_APP_MAX_BYTES: usize = 16384;
+    const EXEC_APP_MAX_BYTES: usize = 65536;
 
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut EXEC_APP_TID: i32 = -1;

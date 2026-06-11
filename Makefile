@@ -55,7 +55,7 @@ endif
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
-       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-tcp-v1 test-console-v1 test-coreutils-v1 test-pipes-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
+       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-tcp-v1 test-console-v1 test-coreutils-v1 test-pipes-v1 test-libc-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-connected-runtime-c4 test-reliable-isolated-runtime-c5 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
@@ -87,8 +87,10 @@ CARGO   ?= /c/Users/$(USERNAME)/.cargo/bin/cargo.exe
 PYTHON  := /c/Users/$(USERNAME)/AppData/Local/Programs/Python/Python312/python.exe
 CC      := /c/mingw64/mingw64/bin/gcc.exe
 LD      := /c/Users/$(USERNAME)/.rustup/toolchains/$(RUSTUP_TOOLCHAIN)/lib/rustlib/x86_64-pc-windows-gnu/bin/rust-lld.exe -flavor gnu -m elf_x86_64
+OBJCOPY := /c/mingw64/mingw64/bin/objcopy.exe
 else
 CARGO   ?= cargo
+OBJCOPY ?= objcopy
 endif
 
 export CC XORRISO
@@ -186,7 +188,7 @@ $(X1_PROC_SOCK_ELF): $(OUT)/x1-proc-sock.o services/compat/linker.ld | $(OUT)
 
 APP_BASE_SHELL_ELF = $(OUT)/app-base-shell.elf
 COREUTILS_ELFS = $(OUT)/app-echo.elf $(OUT)/app-cat.elf $(OUT)/app-ls.elf $(OUT)/app-ps.elf $(OUT)/app-wc.elf
-APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS)
+APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf
 
 $(OUT)/app-base-shell.o: apps/base-shell/base_shell.asm | $(OUT)
 	$(NASM) $(NASMFLAGS) $< -o $@
@@ -199,6 +201,33 @@ $(OUT)/app-%.o: apps/coreutils/%.asm | $(OUT)
 
 $(OUT)/app-%.elf: $(OUT)/app-%.o apps/base-shell/linker.ld | $(OUT)
 	$(LD) -nostdlib -static -T apps/base-shell/linker.ld -o $@ $<
+
+# --- rlibc: C programs, linked in PE then rewrapped as ELF -------------------
+# The host gcc/ld only target PE-COFF, and objcopy mistranslates PE
+# REL32 relocations into ELF (the implicit -4 addend is lost). So the
+# link happens entirely in PE - no cross-format relocations exist - and
+# tools/pe_to_elf_v1.py rewraps the fully resolved image as a
+# one-segment ET_EXEC ELF for the package store. -mabi=sysv keeps the
+# calling convention the kernel ABI uses.
+
+RLIBC_CFLAGS = -ffreestanding -nostdlib -mabi=sysv -mno-red-zone \
+               -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx \
+               -fno-asynchronous-unwind-tables -fno-unwind-tables \
+               -fno-builtin -Ilibc/include -Wall -Wextra -O2 -c
+MINGW_LD = /c/mingw64/mingw64/bin/ld.exe
+
+$(OUT)/rlibc-crt0-pe.o: libc/crt0.asm | $(OUT)
+	$(NASM) -f win64 $< -o $@
+
+$(OUT)/rlibc-pe.o: libc/rlibc.c libc/include/rugo/libc.h | $(OUT)
+	$(CC) $(RLIBC_CFLAGS) $< -o $@
+
+$(OUT)/app-hello-main-pe.o: apps/hello-c/hello.c libc/include/rugo/libc.h | $(OUT)
+	$(CC) $(RLIBC_CFLAGS) $< -o $@
+
+$(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
+	$(MINGW_LD) -m i386pep --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
+	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-hello.pe $@
 
 # --- Rust kernel --------------------------------------------------------------
 
@@ -829,6 +858,9 @@ test-vfs-v1: image-go
 
 test-tcp-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_runtime_v1.py -v --junitxml=$(OUT)/pytest-tcp-v1.xml
+
+test-libc-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_libc_runtime_v1.py -v --junitxml=$(OUT)/pytest-libc-v1.xml
 
 test-console-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_console_runtime_v1.py -v --junitxml=$(OUT)/pytest-console-v1.xml

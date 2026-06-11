@@ -16,6 +16,7 @@ var (
 	appNameLs      = []byte("ls")
 	appNamePs      = []byte("ps")
 	appNameWc      = []byte("wc")
+	appNameHello   = []byte("hello")
 	msgShellRunErr = []byte("APP: run err\n")
 	msgShellPipeOK = []byte("GOSH: pipe ok\n")
 	defaultLsPath  = "/data"
@@ -63,6 +64,8 @@ func appByName(name string) ([]byte, bool) {
 		return appNamePs, true
 	case "wc":
 		return appNameWc, true
+	case "hello":
+		return appNameHello, true
 	}
 	return nil, false
 }

@@ -60,7 +60,7 @@ the runtime-state sectors 8–11):
 - sector 65: file table, 16 × 32-byte entries (name[24], start sector u32,
   size u32)
 - data sectors: PKG v1 frame per file — magic u32, bin_size u32, name[24],
-  sha256[32], then the ELF payload (max 16 KiB)
+  sha256[32], then the ELF payload (max 64 KiB)
 
 The kernel verifies the SHA-256 of the payload before loading; a mismatch
 is `EXEC: <name> badhash` and the spawn fails.

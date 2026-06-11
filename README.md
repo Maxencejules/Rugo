@@ -105,6 +105,13 @@ Visible proof paths:
   crossed the ring.
   Proof: `tests/runtime/test_pipes_runtime_v1.py`, contract
   `docs/runtime/exec_v1.md`
+- `make test-libc-v1`
+  Boots the default Go image and proves the libc-equivalent: `hello` is
+  a real C program compiled with the host gcc against rlibc (`libc/`),
+  running from the package store - printf, malloc, and open/read on the
+  `/data` tree all go through the POSIX-ish layer.
+  Proof: `tests/runtime/test_libc_runtime_v1.py`, contract
+  `docs/runtime/libc_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

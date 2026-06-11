@@ -190,6 +190,11 @@ Usability (turns the demo into an operable system):
    sequentially until per-process address spaces land)
 9. A **libc-equivalent** (POSIX-ish syscall layer) — prerequisite for porting
    any existing software, which is how every hobby OS bootstraps an ecosystem.
+   — rlibc v1 **DONE** (`make test-libc-v1`, `docs/runtime/libc_v1.md`;
+   `libc/` provides crt0 + open/read/write/close/mkdir/unlink/stat/
+   pipe/spawn/wait/malloc/strings/printf, and `hello` — a real C
+   program compiled with the host gcc — runs from the package store);
+   errno/FILE*/lseek and a third-party port are the carry-forward
 
 Parity (credible-OS tier):
 10. SMP bring-up + kernel locking; signals; users/permissions; dynamic linking;
