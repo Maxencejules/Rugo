@@ -598,12 +598,31 @@ cfg_m3! {
                         Some(v) => v,
                         None => return 0xFFFF_FFFF_FFFF_FFFF,
                     };
+                let uid = R4_TASKS[R4_CURRENT].uid;
+                let existing = vfs::vfs_lookup(rel);
                 let node = match vfs::vfs_open(rel, create) {
                     Some(n) => n,
                     None => {
                         return 0xFFFF_FFFF_FFFF_FFFF;
                     }
                 };
+                if existing.is_none() && node != vfs::ROOT as usize {
+                    // Freshly created: the caller owns it.
+                    vfs::set_node_owner(node, uid);
+                } else if node != vfs::ROOT as usize && uid != 0 {
+                    // Owner/other mode bits gate the requested rights.
+                    let mode = vfs::node_mode(node);
+                    let (r_ok, w_ok) = if vfs::node_owner(node) == uid {
+                        (mode & vfs::MODE_OWNER_R != 0, mode & vfs::MODE_OWNER_W != 0)
+                    } else {
+                        (mode & vfs::MODE_OTHER_R != 0, mode & vfs::MODE_OTHER_W != 0)
+                    };
+                    if (requested & M10_RIGHT_READ != 0 && !r_ok)
+                        || (requested & M10_RIGHT_WRITE != 0 && !w_ok)
+                    {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                }
                 let kind = if node == vfs::ROOT as usize
                     || vfs::node_kind(node) == vfs::KIND_DIR
                 {
@@ -1036,8 +1055,9 @@ cfg_m3! {
     /// sys_fs_ctl (ABI v3.x id 47): namespace mutations and stat for the
     /// /data tree. op 1 = mkdir, 2 = unlink, 3 = stat (returns
     /// kind << 32 | size). op 4 = pipe create (returns rfd << 8 | wfd).
+    /// op 5 = chmod (arg = mode bits, owner or root only).
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_fs_ctl_v1(op: u64, path_ptr: u64, _arg: u64) -> u64 {
+    unsafe fn sys_fs_ctl_v1(op: u64, path_ptr: u64, arg: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if !r4_current_has_cap(R4_TASK_CAP_STORAGE) || !vfs::vfs_ready() {
             return ERR;
@@ -1082,17 +1102,56 @@ cfg_m3! {
             return ERR;
         }
         let rel = &bytes[5..bytes.len() - 1];
+        let uid = R4_TASKS[R4_CURRENT].uid;
         match op {
             1 => {
-                if vfs::vfs_mkdir(rel) { 0 } else { ERR }
+                if vfs::vfs_mkdir(rel) {
+                    if let Some(n) = vfs::vfs_lookup(rel) {
+                        if n != vfs::ROOT as usize {
+                            vfs::set_node_owner(n, uid);
+                        }
+                    }
+                    0
+                } else {
+                    ERR
+                }
             }
             2 => {
+                // Unlink: root, the owner, or anyone the mode grants
+                // other-write (v1 simplification of directory perms).
+                if uid != 0 {
+                    match vfs::vfs_lookup(rel) {
+                        Some(n) if n != vfs::ROOT as usize => {
+                            let allowed = vfs::node_owner(n) == uid
+                                || vfs::node_mode(n) & vfs::MODE_OTHER_W != 0;
+                            if !allowed {
+                                return ERR;
+                            }
+                        }
+                        _ => return ERR,
+                    }
+                }
                 if vfs::vfs_unlink(rel) { 0 } else { ERR }
             }
             3 => match vfs::vfs_stat(rel) {
                 Some((kind, size)) => ((kind as u64) << 32) | size as u64,
                 None => ERR,
             },
+            5 => {
+                // chmod: root or the owner; mode is the low 4 bits.
+                if arg > 0xF {
+                    return ERR;
+                }
+                match vfs::vfs_lookup(rel) {
+                    Some(n) if n != vfs::ROOT as usize => {
+                        if uid != 0 && vfs::node_owner(n) != uid {
+                            return ERR;
+                        }
+                        if vfs::set_node_mode(n, arg as u8) { 0 } else { ERR }
+                    }
+                    _ => ERR,
+                }
+            }
             _ => ERR,
         }
     }
@@ -2575,6 +2634,9 @@ cfg_r4! {
         sig_pending: u64,
         sig_in_handler: bool,
         sig_saved_frame: [u64; 22],
+        // User id (gap item 10): 0 = root (boot services), spawned
+        // external apps run as uid 100.
+        uid: u8,
     }
 
     impl R4Task {
@@ -2607,6 +2669,7 @@ cfg_r4! {
             sig_pending: 0,
             sig_in_handler: false,
             sig_saved_frame: [0u64; 22],
+            uid: 0,
         };
     }
 
@@ -2680,6 +2743,12 @@ cfg_r4! {
         R4_TASKS[tid].sig_handler = 0;
         R4_TASKS[tid].sig_pending = 0;
         R4_TASKS[tid].sig_in_handler = false;
+        // Threads inherit the spawner's uid; boot tasks are root.
+        R4_TASKS[tid].uid = if tid == parent_tid {
+            0
+        } else {
+            R4_TASKS[parent_tid].uid
+        };
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -3279,6 +3348,8 @@ cfg_r4! {
         R4_TASKS[tid].socket_limit = 0;
         R4_TASKS[tid].endpoint_limit = 0;
         R4_TASKS[tid].isolation_domain = 5;
+        // External apps run unprivileged.
+        R4_TASKS[tid].uid = 100;
         // Hand over the pipe ends: ownership moves to the child so its
         // exit (or fault) releases them and EOF propagates.
         for fdv in [stdin_fd, stdout_fd] {

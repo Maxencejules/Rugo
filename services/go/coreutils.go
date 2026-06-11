@@ -19,6 +19,7 @@ var (
 	appNameHello   = []byte("hello")
 	appNameNxprobe = []byte("nxprobe")
 	appNameSigprobe = []byte("sigprobe")
+	appNameFsperm  = []byte("fsperm")
 	msgShellRunErr = []byte("APP: run err\n")
 	msgShellPipeOK = []byte("GOSH: pipe ok\n")
 	defaultLsPath  = "/data"

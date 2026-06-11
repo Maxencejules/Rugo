@@ -126,6 +126,13 @@ Visible proof paths:
   run without a handler is killed by the default action.
   Proof: `tests/runtime/test_signals_runtime_v1.py`, contract
   `docs/runtime/signals_v1.md`
+- `make test-users-v1`
+  Boots the default Go image and proves users/permissions: an
+  unprivileged (uid 100) program is denied write and unlink on a
+  root-owned file but may read it; after a root `fschmod` it may do all
+  three.
+  Proof: `tests/runtime/test_users_runtime_v1.py`, contract
+  `docs/runtime/vfs_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

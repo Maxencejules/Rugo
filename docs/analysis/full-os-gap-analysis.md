@@ -170,8 +170,9 @@ Foundations (everything else is blocked on these):
 Usability (turns the demo into an operable system):
 5. **Real VFS + directories** over SimpleFS: create/stat/list arbitrary files;
    then file permissions.
-   — create/write/read/list/unlink/dirs/persistence **DONE**
-   (`make test-vfs-v1`, `docs/runtime/vfs_v1.md`); permissions pending
+   — **DONE** including permissions (`make test-vfs-v1`,
+   `make test-users-v1`, `docs/runtime/vfs_v1.md`; per-node owner+mode,
+   per-task uid, enforcement on open/unlink/chmod)
 6. **TCP/IP stack** (port lwIP or smoltcp — smoltcp is Rust and fits the
    kernel) wired to the existing socket syscalls; DHCP + DNS client.
    — wire TCP client **DONE** (`make test-tcp-v1`, `docs/runtime/tcp_v1.md`,
@@ -205,7 +206,10 @@ Parity (credible-OS tier):
     error code); signals **DONE** (`make test-signals-v1`,
     `docs/runtime/signals_v1.md`; `sys_signal_ctl` id 48 opens the
     additive v3.2 window — handler delivery via frame rewrite,
-    sigreturn, default kill); the rest of the tier is pending
+    sigreturn, default kill); users/permissions **DONE**
+    (`make test-users-v1`; per-task uid — root services, uid-100 apps —
+    gating file open/unlink/chmod by owner+mode); SMP, dynamic linking,
+    USB/HID, ASLR, installer, and graphics are pending
 
 ## 4. Honest Positioning
 

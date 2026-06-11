@@ -124,6 +124,15 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if len(cmd) > 5 && cmd[:5] == "fsrm " {
 		return false, fshCtl(fsCtlUnlink, cmd[5:], msgFshRmOK)
 	}
+	if len(cmd) > 8 && cmd[:8] == "fschmod " {
+		return false, fshChmod(cmd[8:])
+	}
+	if len(cmd) > 7 && cmd[:7] == "fsperm " {
+		// Negative outcomes are the point; the probe's own markers
+		// carry the verdict.
+		spawnRun(appNameFsperm, cmd[7:])
+		return false, true
+	}
 	if len(cmd) > 9 && cmd[:9] == "tcpcheck " {
 		return false, tcpCheck(cmd[9:])
 	}

@@ -14,15 +14,32 @@ tree under `/data`, not a fixed-path routing table.
 | Sectors | Content |
 |---|---|
 | 512 | superblock: magic `VFS2`, version, node count |
-| 513–516 | node table: 64 × 32-byte entries — name[20], parent u8 (0xFE = root), kind u8 (1 file, 2 dir), mode u8 (reserved for permissions), start_block u32, size u32 |
+| 513–516 | node table: 64 × 32-byte entries — name[20], parent u8 (0xFE = root), kind u8 (1 file, 2 dir), mode u8 (permission bits), owner u8 (uid), start_block u32, size u32 |
 | 517 | block allocation bitmap |
 | 518+ | 512-byte data blocks |
 
 Files are contiguously allocated (grow = realloc + copy; 8 KiB max in v1).
 Mutations are write-through. First boot formats the region in place
 (`VFS: format ok`); later boots remount (`VFS: mount ok files=0x<n>`).
-Crash journaling and per-file permissions (the reserved mode byte) are the
-documented next steps.
+Crash journaling is the documented next step.
+
+## Users and permissions
+
+- Every task carries a uid: boot services are root (uid 0), spawned
+  external apps run as uid 100; thread spawns inherit.
+- Node mode bits: `1` owner-read, `2` owner-write, `4` other-read,
+  `8` other-write. Creation stamps the caller as owner with the default
+  mode (owner rw, other r); mode 0 on pre-permission images reads as
+  the default.
+- Enforcement: `/data` opens check requested read/write rights against
+  the mode (root bypasses); unlink needs root, the owner, or
+  other-write; chmod (`sys_fs_ctl` op 5, shell `fschmod <path> <mode>`)
+  needs root or the owner.
+- Proof: `make test-users-v1` — the `fsperm` probe (uid 100) is denied
+  write and unlink on a root-owned file, allowed read, and allowed all
+  three after a root `fschmod 15`.
+- Carry-forward: directory-execute semantics, group bits, setuid-like
+  transitions, uid surfacing in `ps`.
 
 ## Syscall surface
 

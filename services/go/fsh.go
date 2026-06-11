@@ -8,6 +8,7 @@ var (
 	msgFshLsOK    = []byte("FSH: ls ok\n")
 	msgFshMkOK    = []byte("FSH: mkdir ok\n")
 	msgFshRmOK    = []byte("FSH: rm ok\n")
+	msgFshChmodOK = []byte("FSH: chmod ok\n")
 	msgFshErr     = []byte("FSH: err\n")
 	msgFshDirMark = []byte("/")
 )
@@ -148,5 +149,43 @@ func fshCtl(op uintptr, args string, okMsg []byte) bool {
 		return false
 	}
 	log(okMsg)
+	return true
+}
+
+// fshChmod handles "fschmod <path> <mode 0..15>".
+func fshChmod(args string) bool {
+	sp := -1
+	var i int
+	for i = 0; i < len(args); i++ {
+		if args[i] == ' ' {
+			sp = i
+		}
+	}
+	if sp <= 0 || sp+1 >= len(args) {
+		log(msgFshErr)
+		return false
+	}
+	mode := 0
+	for i = sp + 1; i < len(args); i++ {
+		if args[i] < '0' || args[i] > '9' {
+			log(msgFshErr)
+			return false
+		}
+		mode = mode*10 + int(args[i]-'0')
+	}
+	if mode > 15 {
+		log(msgFshErr)
+		return false
+	}
+	var path [96]byte
+	if !fshPath(args[:sp], path[:]) {
+		log(msgFshErr)
+		return false
+	}
+	if sysFsCtl(fsCtlChmod, &path[0], uintptr(mode)) == sysErr {
+		log(msgFshErr)
+		return false
+	}
+	log(msgFshChmodOK)
 	return true
 }

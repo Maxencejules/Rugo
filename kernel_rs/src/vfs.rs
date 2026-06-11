@@ -115,6 +115,40 @@ unsafe fn node_parent(idx: usize) -> u8 {
     VFS.nodes[idx * NODE_SIZE + 20]
 }
 
+// Permissions (gap item 10 / item 5 remainder): the node's mode byte
+// (offset 22) holds owner/other rw bits; the pad byte (offset 23)
+// holds the owner uid. mode 0 is legacy (pre-permission images) and
+// reads as the default.
+pub(crate) const MODE_OWNER_R: u8 = 0b0001;
+pub(crate) const MODE_OWNER_W: u8 = 0b0010;
+pub(crate) const MODE_OTHER_R: u8 = 0b0100;
+pub(crate) const MODE_OTHER_W: u8 = 0b1000;
+pub(crate) const MODE_DEFAULT: u8 = MODE_OWNER_R | MODE_OWNER_W | MODE_OTHER_R;
+
+pub(crate) unsafe fn node_mode(idx: usize) -> u8 {
+    let m = VFS.nodes[idx * NODE_SIZE + 22];
+    if m == 0 { MODE_DEFAULT } else { m }
+}
+
+pub(crate) unsafe fn node_owner(idx: usize) -> u8 {
+    VFS.nodes[idx * NODE_SIZE + 23]
+}
+
+pub(crate) unsafe fn set_node_owner(idx: usize, owner: u8) -> bool {
+    VFS.nodes[idx * NODE_SIZE + 23] = owner;
+    flush_node_sector(idx)
+}
+
+pub(crate) unsafe fn set_node_mode(idx: usize, mode: u8) -> bool {
+    VFS.nodes[idx * NODE_SIZE + 22] = mode;
+    flush_node_sector(idx)
+}
+
+/// Resolve a path to its node index without creating anything.
+pub(crate) unsafe fn vfs_lookup(path: &[u8]) -> Option<usize> {
+    vfs_open(path, false)
+}
+
 unsafe fn node_start(idx: usize) -> usize {
     let b = idx * NODE_SIZE + 24;
     u32::from_le_bytes([VFS.nodes[b], VFS.nodes[b + 1], VFS.nodes[b + 2], VFS.nodes[b + 3]])

@@ -29,6 +29,7 @@ const (
 	fsCtlUnlink = 2
 	fsCtlStat = 3
 	fsCtlPipe = 4
+	fsCtlChmod = 5
 )
 
 const (
