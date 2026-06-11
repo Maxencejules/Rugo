@@ -3010,6 +3010,7 @@ cfg_r4! {
             && M8_FD_TABLE[idx].owner_tid == R4_CURRENT
     }
 
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_spawn_v1(
         name_ptr: u64,
         name_len: u64,
