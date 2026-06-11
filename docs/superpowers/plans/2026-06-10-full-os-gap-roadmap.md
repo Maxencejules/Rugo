@@ -35,8 +35,8 @@ while honoring Rugo's philosophy.
 | 4 | §3.4 exec-from-filesystem (spawn+wait) | `2026-06-10-exec-from-filesystem.md` | done (`make test-exec-v1`; sys_spawn id 46, SHA-256-verified app loading, shell runs real programs) |
 | 5 | §3.5 VFS + directories over SimpleFS | `2026-06-10-vfs-directories.md` | done (`make test-vfs-v1`; writable /data tree, dirs, reboot persistence, sys_fs_ctl id 47) |
 | 6 | §3.6 TCP/IP wired to socket syscalls, DHCP + DNS | (worktree phase6-tcp, merged) | wire TCP done (`make test-tcp-v1`); DHCP + DNS clients pending |
-| 7 | §3.7 keyboard input + framebuffer text console | TBD | pending |
-| 8 | §3.8 shell executes external programs; coreutils; pipes | TBD | pending |
+| 7 | §3.7 keyboard input + framebuffer text console | (worktree phase7-console, merged) | done (`make test-console-v1`) |
+| 8 | §3.8 shell executes external programs; coreutils; pipes | (worktrees phase4-exec + phase8-coreutils, merged) | exec+args+coreutils done (`make test-coreutils-v1`); pipes pending |
 | 9 | §3.9 libc-equivalent POSIX-ish layer | TBD | pending |
 | 10 | §3.10 parity tier: signals, users/permissions, ASLR + W^X, SMP | TBD | pending |
 
