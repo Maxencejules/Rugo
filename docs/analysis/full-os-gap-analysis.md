@@ -208,8 +208,11 @@ Parity (credible-OS tier):
     additive v3.2 window — handler delivery via frame rewrite,
     sigreturn, default kill); users/permissions **DONE**
     (`make test-users-v1`; per-task uid — root services, uid-100 apps —
-    gating file open/unlink/chmod by owner+mode); SMP, dynamic linking,
-    USB/HID, ASLR, installer, and graphics are pending
+    gating file open/unlink/chmod by owner+mode); SMP bring-up
+    groundwork **DONE** (`make test-smp-v1`, `docs/runtime/smp_v1.md`;
+    every AP runs kernel code and parks, the default lane boots clean
+    on multicore — per-CPU scheduling and kernel locking remain);
+    dynamic linking, USB/HID, ASLR, installer, and graphics are pending
 
 ## 4. Honest Positioning
 

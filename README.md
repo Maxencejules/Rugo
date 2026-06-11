@@ -133,6 +133,12 @@ Visible proof paths:
   three.
   Proof: `tests/runtime/test_users_runtime_v1.py`, contract
   `docs/runtime/vfs_v1.md`
+- `make test-smp-v1`
+  Boots with -smp 4 and proves SMP groundwork: every application
+  processor runs kernel code (atomic check-in) and parks, and the
+  default Go lane boots and shuts down cleanly on multicore.
+  Proof: `tests/runtime/test_smp_runtime_v1.py`, contract
+  `docs/runtime/smp_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

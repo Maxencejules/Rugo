@@ -43,6 +43,7 @@ macro_rules! cfg_r4 {
 
 mod arch_x86;
 pub(crate) mod fb;
+pub(crate) mod smp;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod kbd;
 mod memory;
@@ -5854,6 +5855,7 @@ pub extern "C" fn kmain() -> ! {
     }
     check_paging();
     mm::enable_nx();
+    smp::smp_init();
     mm::pmm_init();
     mm::heap_init();
     mm::heap_selftest();

@@ -557,8 +557,13 @@ func launchService(serviceID uintptr) bool {
 			serviceGoFlag[serviceID] = 1
 		}
 
+		// stateStopped is terminal-success too: with buffered input a
+		// session service can sprint ready->stopping->stopped between
+		// manager polls (multicore scheduling makes the manager miss
+		// the transient ready that single-CPU interleaving always
+		// observed); the reap path handles the rest.
 		budget := uintptr(serviceManifest[serviceID].startBudget)
-		for serviceStates[serviceID] != stateReady && serviceStates[serviceID] != stateFailed && bootFailed == 0 {
+		for serviceStates[serviceID] != stateReady && serviceStates[serviceID] != stateFailed && serviceStates[serviceID] != stateStopped && bootFailed == 0 {
 			if budget == 0 {
 				logServiceAction(msgSvcMgrWedge[:], serviceID)
 				setServiceResult(serviceID, serviceResultWedge)
@@ -572,7 +577,7 @@ func launchService(serviceID uintptr) bool {
 		}
 
 		switch serviceStates[serviceID] {
-		case stateReady:
+		case stateReady, stateStopped:
 			return true
 		case stateFailed:
 			if serviceTasks[serviceID] != taskUnset {
