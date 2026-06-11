@@ -127,6 +127,22 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if len(cmd) > 9 && cmd[:9] == "tcpcheck " {
 		return false, tcpCheck(cmd[9:])
 	}
+	// Coreutils run as real external programs from the package store.
+	if len(cmd) > 5 && cmd[:5] == "echo " {
+		return false, spawnRun(appNameEcho, cmd[5:])
+	}
+	if len(cmd) > 4 && cmd[:4] == "cat " {
+		return false, spawnRun(appNameCat, cmd[4:])
+	}
+	if len(cmd) > 3 && cmd[:3] == "ls " {
+		return false, spawnRun(appNameLs, cmd[3:])
+	}
+	if cmd == "ls" {
+		return false, spawnRun(appNameLs, defaultLsPath)
+	}
+	if cmd == "ps" {
+		return false, spawnRun(appNamePs, "")
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)
@@ -278,7 +294,7 @@ func runInstalledApp(name string) bool {
 		}
 		// Real execution: load the app ELF from the package store on
 		// disk, run it as a child task, and reap it.
-		tid := sysSpawn(&appNameBaseShell[0], uintptr(len(appNameBaseShell)))
+		tid := sysSpawn(&appNameBaseShell[0], uintptr(len(appNameBaseShell)), nil, 0)
 		if tid == sysErr {
 			log(msgShellAppExecErr)
 			return false

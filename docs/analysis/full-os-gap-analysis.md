@@ -183,8 +183,10 @@ Usability (turns the demo into an operable system):
    pixels and verified by screendump)
 8. Shell that **executes external programs** with arguments, plus a first
    coreutils set (ls, cat, echo, ps); pipes need pipe IPC in the kernel.
-   — partially: external program execution exists (item 4); arguments,
-   coreutils, and pipes pending
+   — execution, arguments, and the ls/cat/echo/ps coreutils **DONE**
+   (`make test-coreutils-v1`; the utilities are real on-disk ELFs in
+   `apps/coreutils/`, spawned with the command's argument string); pipes
+   pending (kernel pipe objects + fd inheritance)
 9. A **libc-equivalent** (POSIX-ish syscall layer) — prerequisite for porting
    any existing software, which is how every hobby OS bootstraps an ecosystem.
 

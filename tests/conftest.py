@@ -879,7 +879,7 @@ def qemu_serial_net_missing():
 
 
 APP_DISK_V1_TOOL = os.path.join(REPO_ROOT, "tools", "app_disk_v1.py")
-APP_BASE_SHELL_ELF = os.path.join(REPO_ROOT, "out", "app-base-shell.elf")
+APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps"]
 
 
 def _ensure_app_region(disk_path):
@@ -887,23 +887,13 @@ def _ensure_app_region(disk_path):
     if not os.path.isfile(disk_path):
         with open(disk_path, "wb") as f:
             f.write(b"\x00" * (1024 * 1024))
-    if not os.path.isfile(APP_BASE_SHELL_ELF):
-        pytest.skip(f"app ELF not built: {APP_BASE_SHELL_ELF}")
-    subprocess.run(
-        [
-            sys.executable,
-            APP_DISK_V1_TOOL,
-            "--disk",
-            disk_path,
-            "--elf",
-            APP_BASE_SHELL_ELF,
-            "--name",
-            "base-shell",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    cmd = [sys.executable, APP_DISK_V1_TOOL, "--disk", disk_path]
+    for name in APP_REGION_APPS:
+        elf = os.path.join(REPO_ROOT, "out", f"app-{name}.elf")
+        if not os.path.isfile(elf):
+            pytest.skip(f"app ELF not built: {elf}")
+        cmd += ["--app", f"{name}={elf}"]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
 @pytest.fixture

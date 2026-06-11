@@ -91,6 +91,13 @@ Visible proof paths:
   verified as pixels by a QMP screendump.
   Proof: `tests/runtime/test_console_runtime_v1.py`, contract
   `docs/runtime/console_v1.md`
+- `make test-coreutils-v1`
+  Boots the default Go image and proves a first coreutils set: the
+  shell's ls/cat/echo/ps commands spawn real on-disk ELF programs with
+  the command's argument string; every output line comes from the
+  spawned program itself.
+  Proof: `tests/runtime/test_coreutils_runtime_v1.py`, contract
+  `docs/runtime/exec_v1.md`
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.

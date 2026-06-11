@@ -2827,13 +2827,29 @@ cfg_r4! {
         Some(e_entry)
     }
 
+    // Args page: the kernel copies the spawn argument string (NUL
+    // terminated) into the last page of the app window; the child gets
+    // its address in RDI and length in RSI.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_spawn_v1(name_ptr: u64, name_len: u64) -> u64 {
+    const EXEC_ARGS_VA: u64 = 0x017F_F000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_ARGS_MAX: usize = 256;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_spawn_v1(name_ptr: u64, name_len: u64, args_ptr: u64, args_len: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_STORAGE == 0 {
             return ERR;
         }
         if name_len == 0 || name_len > 24 {
+            return ERR;
+        }
+        if args_len as usize > EXEC_ARGS_MAX {
+            return ERR;
+        }
+        let mut args_buf = [0u8; EXEC_ARGS_MAX + 1];
+        let args_n = args_len as usize;
+        if args_n > 0 && copyin_user(&mut args_buf[..args_n], args_ptr, args_n).is_err() {
             return ERR;
         }
         let mut name_buf = [0u8; 24];
@@ -2956,14 +2972,24 @@ cfg_r4! {
                 return ERR;
             }
         };
+        // Deliver the argument string (NUL terminated) to the args page;
+        // copyout pre-maps it.
+        if copyout_user(EXEC_ARGS_VA, &args_buf[..args_n + 1], args_n + 1).is_err() {
+            exec_log(name, b"badargs");
+            return ERR;
+        }
         r4_init_task(tid, entry, r4_stack_top_for_slot(tid), parent);
-        // External apps start with no capabilities and no object quotas.
+        // External apps get read access to the file tree (storage) but no
+        // network, spawn, or IPC surface.
         R4_TASKS[tid].can_spawn = false;
-        R4_TASKS[tid].cap_flags = 0;
-        R4_TASKS[tid].fd_limit = 0;
+        R4_TASKS[tid].cap_flags = R4_TASK_CAP_STORAGE;
+        R4_TASKS[tid].fd_limit = 2;
         R4_TASKS[tid].socket_limit = 0;
         R4_TASKS[tid].endpoint_limit = 0;
         R4_TASKS[tid].isolation_domain = 5;
+        // Argument convention: RDI = args pointer, RSI = args length.
+        R4_TASKS[tid].saved_frame[9] = EXEC_ARGS_VA;
+        R4_TASKS[tid].saved_frame[10] = args_n as u64;
         R4_TASKS[tid].state = R4State::Ready;
         R4_THREADS_CREATED += 1;
         EXEC_APP_TID = tid as i32;

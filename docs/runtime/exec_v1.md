@@ -14,13 +14,27 @@ fork).
 `sys_spawn` (id 46, inside the additive v3.x window `28..47` reserved by
 `docs/abi/syscall_v3.md`):
 
-- args: `rdi` = name pointer, `rsi` = name length (1..24 bytes)
+- args: `rdi` = name pointer, `rsi` = name length (1..24 bytes),
+  `rdx` = argument-string pointer, `r10` = argument length (0..256)
 - returns the child tid, or -1
 - caller must hold the storage capability (`taskCapStorage`); `can_spawn`
   remains a thread-spawn-only right
-- the child starts with **no** capabilities and zero fd/socket/endpoint
-  quotas, isolation domain 5, a demand-paged stack stride, and is reaped
-  with the existing `sys_wait`
+- the kernel copies the argument string, NUL terminated, to the args page
+  at `0x017F_F000` (last page of the app window) and hands the child
+  `rdi` = args pointer, `rsi` = args length
+- the child gets the storage capability (fd limit 2) so file utilities
+  can read the `/data` tree, but no network, spawn, or IPC surface;
+  isolation domain 5, demand-paged stack stride; reaped with `sys_wait`
+
+## Coreutils
+
+`ls`, `cat`, `echo`, and `ps` (`apps/coreutils/*.asm`) ship in the app
+region and run as real external programs: the shell's `ls`/`cat`/`echo`/
+`ps` commands spawn the on-disk ELF with the command's argument string
+and reap it — every output line comes from the program itself (`ps`
+enumerates live kernel tasks through `sys_proc_info`). Pipes are the
+documented remaining sub-item of gap item 8 (they need kernel pipe
+objects and fd inheritance).
 
 ## On-disk app region
 

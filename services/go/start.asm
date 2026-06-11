@@ -79,6 +79,7 @@ main.sysWait:
 
 global main.sysSpawn
 main.sysSpawn:
+    mov  r10, rcx            ; 4th SysV arg -> 4th syscall arg
     mov  eax, 46
     int  0x80
     ret

@@ -39,42 +39,56 @@ def build_pkg(name: str, payload: bytes) -> bytes:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--disk", required=True, help="disk image to patch")
-    parser.add_argument("--elf", required=True, help="app ELF payload")
+    parser.add_argument(
+        "--app",
+        action="append",
+        default=[],
+        metavar="NAME=ELF",
+        help="app to install (repeatable)",
+    )
+    parser.add_argument("--elf", help="single-app compatibility: ELF payload")
     parser.add_argument("--name", default="base-shell")
     parser.add_argument("--base-sector", type=int, default=64)
     args = parser.parse_args()
 
-    disk_path = Path(args.disk)
-    elf = Path(args.elf).read_bytes()
-    pkg = build_pkg(args.name, elf)
+    apps = []
+    for spec in args.app:
+        name, _, elf_path = spec.partition("=")
+        apps.append((name, Path(elf_path).read_bytes()))
+    if args.elf:
+        apps.append((args.name, Path(args.elf).read_bytes()))
+    if not apps or len(apps) > 16:
+        raise SystemExit("app-disk: between 1 and 16 apps required")
 
     base = args.base_sector
     data_sector = base + 2
-    pkg_sectors = (len(pkg) + SECTOR - 1) // SECTOR
+    table = bytearray(SECTOR)
+    payloads = bytearray()
+    cursor = data_sector
+    for index, (name, elf) in enumerate(apps):
+        pkg = build_pkg(name, elf)
+        pkg_sectors = (len(pkg) + SECTOR - 1) // SECTOR
+        entry = name.encode("ascii")[:24].ljust(24, b"\x00")
+        entry += struct.pack("<II", cursor, len(pkg))
+        table[index * 32 : (index + 1) * 32] = entry
+        payloads += pkg.ljust(pkg_sectors * SECTOR, b"\x00")
+        cursor += pkg_sectors
 
-    superblock = struct.pack(
-        "<IIII", SIMPLEFS_MAGIC, 1, data_sector, data_sector + pkg_sectors
-    )
+    superblock = struct.pack("<IIII", SIMPLEFS_MAGIC, len(apps), data_sector, cursor)
 
-    entry = args.name.encode("ascii")[:24].ljust(24, b"\x00")
-    entry += struct.pack("<II", data_sector, len(pkg))
-    table = entry.ljust(SECTOR, b"\x00")
-
-    needed = (data_sector + pkg_sectors) * SECTOR
+    disk_path = Path(args.disk)
+    needed = cursor * SECTOR
     disk = bytearray(disk_path.read_bytes()) if disk_path.is_file() else bytearray()
     if len(disk) < needed:
         disk.extend(b"\x00" * (needed - len(disk)))
 
     disk[base * SECTOR : base * SECTOR + SECTOR] = superblock.ljust(SECTOR, b"\x00")
     disk[(base + 1) * SECTOR : (base + 2) * SECTOR] = table
-    payload = pkg.ljust(pkg_sectors * SECTOR, b"\x00")
-    disk[data_sector * SECTOR : data_sector * SECTOR + len(payload)] = payload
+    disk[data_sector * SECTOR : data_sector * SECTOR + len(payloads)] = payloads
 
     disk_path.write_bytes(bytes(disk))
-    print(
-        f"app-disk: {args.name} ({len(elf)} bytes ELF) at sector {data_sector} "
-        f"of {disk_path}"
-    )
+    names = ",".join(name for name, _ in apps)
+    print(f"app-disk: {names} at sector {data_sector}+ of {disk_path}")
     return 0
 
 
