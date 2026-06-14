@@ -947,6 +947,9 @@ test-ndp-v1: image-go
 test-tcp-listen-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp-listen-v1.xml
 
+test-tcp-rto-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_rto_v1.py -v --junitxml=$(OUT)/pytest-tcp-rto-v1.xml
+
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
 

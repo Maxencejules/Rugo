@@ -22,6 +22,15 @@ pub(crate) const ST_SYN_RCVD: u8 = 6;
 const RX_RING: usize = 1024;
 const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
 
+// Retransmission / RTO (full-os guide Part II.6): the single outstanding segment
+// is held until its sequence span is acknowledged. The timer is a tick
+// countdown (decremented once per PIT tick by tcp_rt_tick), so it needs no wall
+// clock and stays deterministic in the self-test. PIT is 100 Hz, so 50 ticks is
+// a ~500 ms initial RTO; it backs off exponentially and gives up after MAX.
+const TCP_RTO_TICKS: u32 = 50;
+const TCP_MAX_RETRIES: u32 = 5;
+const RT_DATA_MAX: usize = 512;
+
 struct TcpConn {
     state: u8,
     peer_ip: [u8; 4],
@@ -30,10 +39,21 @@ struct TcpConn {
     local_port: u16,
     remote_port: u16,
     snd_nxt: u32,
+    snd_una: u32,
     rcv_nxt: u32,
     peer_fin: bool,
     rx_len: usize,
     rx: [u8; RX_RING],
+    // Retransmit slot: the oldest unacknowledged segment.
+    rt_active: bool,
+    rt_flags: u8,
+    rt_seq: u32,
+    rt_len: usize,
+    rt_data: [u8; RT_DATA_MAX],
+    rt_ticks_left: u32,
+    rt_retries: u32,
+    rt_last_send_ok: bool, // did the most recent retransmit actually emit?
+    pending_close: bool,   // a close() deferred because data was outstanding
 }
 
 static mut CONN: TcpConn = TcpConn {
@@ -44,10 +64,20 @@ static mut CONN: TcpConn = TcpConn {
     local_port: 0,
     remote_port: 0,
     snd_nxt: 0,
+    snd_una: 0,
     rcv_nxt: 0,
     peer_fin: false,
     rx_len: 0,
     rx: [0; RX_RING],
+    rt_active: false,
+    rt_flags: 0,
+    rt_seq: 0,
+    rt_len: 0,
+    rt_data: [0; RT_DATA_MAX],
+    rt_ticks_left: 0,
+    rt_retries: 0,
+    rt_last_send_ok: false,
+    pending_close: false,
 };
 
 pub(crate) unsafe fn tcp_state() -> u8 {
@@ -130,6 +160,87 @@ unsafe fn tcp_tx(flags: u8, seq: u32, ack: u32, payload: &[u8]) -> bool {
     net::wire_send(&f[..total])
 }
 
+/// Number of sequence numbers a segment with these flags + payload consumes
+/// (payload bytes, plus one each for SYN / FIN).
+fn seq_span(flags: u8, payload_len: usize) -> u32 {
+    let mut span = payload_len as u32;
+    if flags & 0x02 != 0 {
+        span += 1; // SYN
+    }
+    if flags & 0x01 != 0 {
+        span += 1; // FIN
+    }
+    span
+}
+
+/// Arm the retransmit timer for a just-sent segment (the single outstanding
+/// segment in this v1 connection). Records the bytes so it can be re-sent
+/// verbatim, sets snd_una to its sequence, and starts the RTO countdown.
+unsafe fn tcp_rt_arm(flags: u8, seq: u32, payload: &[u8]) {
+    let n = payload.len().min(RT_DATA_MAX);
+    CONN.snd_una = seq;
+    CONN.rt_active = true;
+    CONN.rt_flags = flags;
+    CONN.rt_seq = seq;
+    CONN.rt_len = n;
+    CONN.rt_data[..n].copy_from_slice(&payload[..n]);
+    CONN.rt_ticks_left = TCP_RTO_TICKS;
+    CONN.rt_retries = 0;
+}
+
+/// Clear the retransmit timer once the peer's cumulative ACK covers the whole
+/// outstanding segment. Uses wrapping sequence arithmetic so it is correct
+/// across the 32-bit wrap.
+unsafe fn tcp_rt_ack(ack: u32) {
+    if !CONN.rt_active {
+        return;
+    }
+    let span = seq_span(CONN.rt_flags, CONN.rt_len);
+    if span == 0 {
+        return;
+    }
+    // Fully acknowledged when ack - rt_seq >= span (wrapping). A duplicate or
+    // stale ACK (ack <= rt_seq, i.e. distance >= 2^31) leaves the timer armed.
+    let dist = ack.wrapping_sub(CONN.rt_seq);
+    if dist >= span && dist < 0x8000_0000 {
+        CONN.snd_una = CONN.rt_seq.wrapping_add(span);
+        CONN.rt_active = false;
+        CONN.rt_retries = 0;
+    }
+}
+
+/// One PIT tick of the retransmit timer: retransmit the oldest unacknowledged
+/// segment when its RTO elapses (exponential backoff, capped), and tear the
+/// connection down after TCP_MAX_RETRIES. Called once per tick while a
+/// connection is active (full-os guide Part II.6, TCP reliability).
+pub(crate) unsafe fn tcp_rt_tick() {
+    if !CONN.rt_active || CONN.state == ST_CLOSED {
+        return;
+    }
+    if CONN.rt_ticks_left > 0 {
+        CONN.rt_ticks_left -= 1;
+        return;
+    }
+    if CONN.rt_retries >= TCP_MAX_RETRIES {
+        // Peer unreachable: abort. RFC 1122 §4.2.3.5 — send an RST so the peer
+        // releases its half of the connection instead of waiting for its own
+        // timers, then drop all connection state.
+        tcp_tx(0x04, CONN.snd_nxt, CONN.rcv_nxt, &[]); // RST
+        serial_write(b"TCP: rto giveup\n");
+        conn_reset();
+        return;
+    }
+    let len = CONN.rt_len;
+    let mut buf = [0u8; RT_DATA_MAX];
+    buf[..len].copy_from_slice(&CONN.rt_data[..len]);
+    CONN.rt_last_send_ok = tcp_tx(CONN.rt_flags, CONN.rt_seq, CONN.rcv_nxt, &buf[..len]);
+    CONN.rt_retries += 1;
+    // Exponential backoff, capped at 16x the base RTO.
+    let shift = CONN.rt_retries.min(4);
+    CONN.rt_ticks_left = TCP_RTO_TICKS << shift;
+    serial_write(b"TCP: rexmit\n");
+}
+
 unsafe fn arp_request() {
     let mut f = [0u8; 42];
     f[0..6].copy_from_slice(&[0xFF; 6]);
@@ -159,12 +270,16 @@ pub(crate) unsafe fn tcp_connect(dst: [u8; 4], port: u16) -> bool {
     CONN.remote_port = port;
     CONN.local_port = 0xC000 | (port & 0x0FFF); // deterministic ephemeral
     CONN.snd_nxt = 0x0001_0000;
+    CONN.snd_una = 0x0001_0000;
     CONN.rcv_nxt = 0;
     CONN.rx_len = 0;
     CONN.peer_fin = false;
+    CONN.rt_active = false;
     if CONN.have_mac {
         CONN.state = ST_SYN_SENT;
-        tcp_tx(0x02, CONN.snd_nxt, 0, &[]); // SYN
+        let syn_seq = CONN.snd_nxt;
+        tcp_tx(0x02, syn_seq, 0, &[]); // SYN
+        tcp_rt_arm(0x02, syn_seq, &[]); // retransmit the SYN if unacked
         CONN.snd_nxt = CONN.snd_nxt.wrapping_add(1);
         serial_write(b"TCP: syn sent\n");
     } else {
@@ -179,7 +294,9 @@ pub(crate) unsafe fn on_arp_reply(sender_ip: &[u8], sender_mac: &[u8]) {
         CONN.peer_mac.copy_from_slice(&sender_mac[..6]);
         CONN.have_mac = true;
         CONN.state = ST_SYN_SENT;
-        tcp_tx(0x02, CONN.snd_nxt, 0, &[]);
+        let syn_seq = CONN.snd_nxt;
+        tcp_tx(0x02, syn_seq, 0, &[]);
+        tcp_rt_arm(0x02, syn_seq, &[]); // retransmit the SYN if unacked
         CONN.snd_nxt = CONN.snd_nxt.wrapping_add(1);
         serial_write(b"TCP: syn sent\n");
     }
@@ -217,9 +334,31 @@ pub(crate) unsafe fn tcp_input(ip: &[u8]) {
 
     if flags & 0x04 != 0 {
         // RST
+        CONN.rt_active = false;
         CONN.state = ST_CLOSED;
         serial_write(b"TCP: rst\n");
         return;
+    }
+
+    // A cumulative ACK retires the oldest unacknowledged segment, stopping its
+    // retransmit timer (full-os guide Part II.6, TCP reliability).
+    if flags & 0x10 != 0 {
+        let ack = u32::from_be_bytes([t[8], t[9], t[10], t[11]]);
+        tcp_rt_ack(ack);
+        // A close() deferred while data was outstanding (so it would not clobber
+        // the retransmit slot) is acted on now that the slot is clear. This ACK
+        // acknowledged the DATA, not the FIN we are about to send, so return
+        // afterwards rather than falling through to the FIN_WAIT arm (which would
+        // otherwise treat this same ACK as acking the FIN and close early).
+        if CONN.pending_close && !CONN.rt_active && CONN.state == ST_ESTABLISHED {
+            let fin_seq = CONN.snd_nxt;
+            tcp_tx(0x11, fin_seq, CONN.rcv_nxt, &[]); // FIN|ACK
+            tcp_rt_arm(0x11, fin_seq, &[]);
+            CONN.snd_nxt = CONN.snd_nxt.wrapping_add(1);
+            CONN.state = ST_FIN_WAIT;
+            CONN.pending_close = false;
+            return;
+        }
     }
 
     match CONN.state {
@@ -285,9 +424,16 @@ pub(crate) unsafe fn tcp_send(data: &[u8]) -> usize {
     if CONN.state != ST_ESTABLISHED || data.is_empty() || data.len() > 512 {
         return 0;
     }
-    if !tcp_tx(0x18, CONN.snd_nxt, CONN.rcv_nxt, data) {
+    // One outstanding segment at a time in this v1: refuse a new send while a
+    // prior segment is still unacknowledged (it owns the single retransmit slot).
+    if CONN.rt_active {
         return 0;
     }
+    let seq = CONN.snd_nxt;
+    if !tcp_tx(0x18, seq, CONN.rcv_nxt, data) {
+        return 0;
+    }
+    tcp_rt_arm(0x18, seq, data); // retransmit the data if unacked
     CONN.snd_nxt = CONN.snd_nxt.wrapping_add(data.len() as u32);
     data.len()
 }
@@ -307,12 +453,23 @@ pub(crate) unsafe fn tcp_recv(dst: &mut [u8]) -> usize {
 pub(crate) unsafe fn tcp_close() {
     match CONN.state {
         ST_ESTABLISHED => {
-            tcp_tx(0x11, CONN.snd_nxt, CONN.rcv_nxt, &[]); // FIN|ACK
-            CONN.snd_nxt = CONN.snd_nxt.wrapping_add(1);
-            CONN.state = ST_FIN_WAIT;
+            if CONN.rt_active {
+                // A data segment is still unacknowledged and owns the single
+                // retransmit slot. Sending the FIN now would clobber that slot
+                // and lose the data on loss; defer the FIN until the data is
+                // acked (tcp_input fires it once the slot clears).
+                CONN.pending_close = true;
+            } else {
+                let fin_seq = CONN.snd_nxt;
+                tcp_tx(0x11, fin_seq, CONN.rcv_nxt, &[]); // FIN|ACK
+                tcp_rt_arm(0x11, fin_seq, &[]); // retransmit the FIN if unacked
+                CONN.snd_nxt = CONN.snd_nxt.wrapping_add(1);
+                CONN.state = ST_FIN_WAIT;
+            }
         }
         ST_CLOSED => {}
         _ => {
+            CONN.rt_active = false;
             CONN.state = ST_CLOSED;
         }
     }
@@ -359,9 +516,15 @@ unsafe fn conn_reset() {
     CONN.local_port = 0;
     CONN.remote_port = 0;
     CONN.snd_nxt = 0;
+    CONN.snd_una = 0;
     CONN.rcv_nxt = 0;
     CONN.peer_fin = false;
     CONN.rx_len = 0;
+    CONN.rt_active = false;
+    CONN.rt_retries = 0;
+    CONN.rt_ticks_left = 0;
+    CONN.rt_last_send_ok = false;
+    CONN.pending_close = false;
 }
 
 /// Passive-open (listener) self-test (full-os guide Part II.6): bind a listener
@@ -414,5 +577,162 @@ pub(crate) unsafe fn tcp_listen_selftest() -> u64 {
         return 0;
     }
     serial_write(b"TCP: listen ok\n");
+    1
+}
+
+/// Drive `n` retransmit-timer ticks.
+unsafe fn rt_ticks(n: u32) {
+    let mut i = 0u32;
+    while i < n {
+        tcp_rt_tick();
+        i += 1;
+    }
+}
+
+/// Build + feed an ACK segment from the synthetic peer used by the RTO self-test.
+unsafe fn rto_feed_ack(peer_ip: &[u8; 4], ack: u32) {
+    let mut seg = [0u8; 40];
+    build_seg(&mut seg, peer_ip, 50001, 9090, CONN.rcv_nxt, ack, 0x10);
+    tcp_input(&seg);
+}
+
+/// Retransmission / RTO self-test (full-os guide Part II.6) on a synthetic
+/// established connection. Proves, deterministically (QEMU's user-net is
+/// loss-free, so the timeout path is unobservable on the live wire): the
+/// retransmit fires on exactly the right tick and actually emits; the backoff
+/// doubles the interval for the second retransmit; a stale/partial ACK does NOT
+/// clear the timer while a full-cover ACK does (advancing snd_una); a fresh send
+/// re-arms a new segment; and a close() while data is outstanding defers the FIN
+/// (rather than clobbering the data) until the data is acked. Returns 1 on ok.
+pub(crate) unsafe fn tcp_rto_selftest() -> u64 {
+    if CONN.state != ST_CLOSED {
+        return 0;
+    }
+    let peer_ip = [10, 0, 2, 99];
+    CONN.state = ST_ESTABLISHED;
+    CONN.peer_ip = peer_ip;
+    CONN.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x63];
+    CONN.have_mac = true;
+    CONN.local_port = 9090;
+    CONN.remote_port = 50001;
+    CONN.snd_nxt = 0x0000_5000;
+    CONN.snd_una = 0x0000_5000;
+    CONN.rcv_nxt = 0x0000_9000;
+    CONN.rx_len = 0;
+    CONN.peer_fin = false;
+    CONN.rt_active = false;
+    CONN.rt_retries = 0;
+    CONN.pending_close = false;
+
+    let data = b"rto-test"; // 8 bytes
+    let dlen = data.len() as u32;
+
+    // 1) Send: a segment must now be outstanding (armed, zero retries) at snd_nxt.
+    if tcp_send(data) != data.len() || !CONN.rt_active || CONN.rt_retries != 0 {
+        conn_reset();
+        return 0;
+    }
+    let armed_seq = CONN.rt_seq;
+    if armed_seq != 0x0000_5000 || CONN.snd_una != 0x0000_5000 {
+        conn_reset();
+        return 0;
+    }
+
+    // 2) The retransmit must fire on EXACTLY tick TCP_RTO_TICKS+1, not before:
+    // after TCP_RTO_TICKS ticks the countdown is at zero but has NOT yet fired.
+    rt_ticks(TCP_RTO_TICKS);
+    if CONN.rt_retries != 0 {
+        conn_reset();
+        return 0;
+    }
+    tcp_rt_tick(); // the (TCP_RTO_TICKS+1)th tick
+    if CONN.rt_retries != 1 || !CONN.rt_active {
+        conn_reset();
+        return 0;
+    }
+    // The retransmit must have actually emitted a segment, and the backoff must
+    // have doubled the interval (RTO << 1) for the next attempt.
+    if !CONN.rt_last_send_ok || CONN.rt_ticks_left != TCP_RTO_TICKS << 1 {
+        conn_reset();
+        return 0;
+    }
+
+    // 3) Backoff honored: the SECOND retransmit must take RTO<<1 ticks. After
+    // RTO<<1 ticks it must still be at 1 retry; the next tick makes it 2.
+    rt_ticks(TCP_RTO_TICKS << 1);
+    if CONN.rt_retries != 1 {
+        conn_reset();
+        return 0;
+    }
+    tcp_rt_tick();
+    if CONN.rt_retries != 2 || CONN.rt_ticks_left != TCP_RTO_TICKS << 2 {
+        conn_reset();
+        return 0;
+    }
+
+    // 4) A stale ACK (at the segment's own seq) and a partial ACK (one byte in)
+    // must NOT clear the timer or advance snd_una.
+    rto_feed_ack(&peer_ip, armed_seq); // stale: ack == rt_seq
+    if !CONN.rt_active || CONN.snd_una != armed_seq {
+        conn_reset();
+        return 0;
+    }
+    rto_feed_ack(&peer_ip, armed_seq.wrapping_add(1)); // partial: < full span
+    if !CONN.rt_active {
+        conn_reset();
+        return 0;
+    }
+
+    // 5) A full-cover ACK clears the timer and advances snd_una.
+    let ack = armed_seq.wrapping_add(dlen);
+    rto_feed_ack(&peer_ip, ack);
+    if CONN.rt_active || CONN.snd_una != ack {
+        conn_reset();
+        return 0;
+    }
+
+    // 6) A fresh send must re-arm a NEW segment at the advanced snd_nxt and be
+    // the one retransmitted (proves the slot truly retired, not stuck on stale).
+    let snd6 = CONN.snd_nxt;
+    if tcp_send(data) != data.len() || CONN.rt_seq != snd6 || CONN.rt_flags != 0x18 {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(TCP_RTO_TICKS + 1);
+    if CONN.rt_retries != 1 || CONN.rt_seq != snd6 {
+        conn_reset();
+        return 0;
+    }
+    rto_feed_ack(&peer_ip, snd6.wrapping_add(dlen));
+    if CONN.rt_active {
+        conn_reset();
+        return 0;
+    }
+
+    // 7) Deferred close: closing while data is outstanding must NOT clobber the
+    // retransmit slot — the data stays armed and the FIN is deferred until the
+    // data is acked, then the FIN takes the slot and the state moves to FIN_WAIT.
+    let snd7 = CONN.snd_nxt;
+    if tcp_send(data) != data.len() || CONN.rt_seq != snd7 || CONN.rt_flags != 0x18 {
+        conn_reset();
+        return 0;
+    }
+    tcp_close(); // data still unacked -> FIN deferred, slot keeps the data
+    if CONN.state != ST_ESTABLISHED
+        || !CONN.pending_close
+        || CONN.rt_flags != 0x18
+        || CONN.rt_seq != snd7
+    {
+        conn_reset();
+        return 0;
+    }
+    rto_feed_ack(&peer_ip, snd7.wrapping_add(dlen)); // ack the data -> FIN goes
+    if CONN.state != ST_FIN_WAIT || !CONN.rt_active || CONN.rt_flags != 0x11 {
+        conn_reset();
+        return 0;
+    }
+
+    conn_reset();
+    serial_write(b"TCP: rto ok\n");
     1
 }
