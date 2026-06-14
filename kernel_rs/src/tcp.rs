@@ -348,11 +348,32 @@ unsafe fn build_seg(
     t[14] = 0x10; // window 4096
 }
 
+/// Restore the single global connection to its pristine CLOSED state. Used by
+/// the listener self-test so it leaves NO residue (especially have_mac /
+/// peer_mac) that would corrupt the next outbound tcp_connect.
+unsafe fn conn_reset() {
+    CONN.state = ST_CLOSED;
+    CONN.peer_ip = [0; 4];
+    CONN.peer_mac = [0; 6];
+    CONN.have_mac = false;
+    CONN.local_port = 0;
+    CONN.remote_port = 0;
+    CONN.snd_nxt = 0;
+    CONN.rcv_nxt = 0;
+    CONN.peer_fin = false;
+    CONN.rx_len = 0;
+}
+
 /// Passive-open (listener) self-test (full-os guide Part II.6): bind a listener
 /// to :8080 with a synthetic peer, feed a SYN, expect SYN_RCVD + a SYN|ACK,
 /// then feed the client's ACK and expect ESTABLISHED. Returns 1 on success.
 /// Wildcard accept (any peer) and a multi-connection table are carry-forward.
 pub(crate) unsafe fn tcp_listen_selftest() -> u64 {
+    // Never disturb a live connection: refuse if one is in flight (mirrors
+    // tcp_connect's guard). The boot self-test runs while CONN is CLOSED.
+    if CONN.state != ST_CLOSED {
+        return 0;
+    }
     let client_ip = [10, 0, 2, 99];
     CONN.state = ST_LISTEN;
     CONN.peer_ip = client_ip;
@@ -371,7 +392,7 @@ pub(crate) unsafe fn tcp_listen_selftest() -> u64 {
     build_seg(&mut seg, &client_ip, 50000, 8080, client_isn, 0, 0x02);
     tcp_input(&seg);
     if CONN.state != ST_SYN_RCVD {
-        CONN.state = ST_CLOSED;
+        conn_reset();
         return 0;
     }
     // 2) inbound ACK completing the handshake (acks our ISN+1).
@@ -386,8 +407,9 @@ pub(crate) unsafe fn tcp_listen_selftest() -> u64 {
     );
     tcp_input(&seg);
     let ok = CONN.state == ST_ESTABLISHED;
-    // Reset so the live outbound client path (tcp_connect) stays usable.
-    CONN.state = ST_CLOSED;
+    // Fully reset (state AND have_mac/peer_mac/...) so the live outbound client
+    // path (tcp_connect) re-resolves ARP and is unaffected.
+    conn_reset();
     if !ok {
         return 0;
     }
