@@ -5420,6 +5420,55 @@ fn pci_bdf_key(bdf: PciBdf) -> u16 {
     ((bdf.bus as u16) << 8) | ((bdf.dev as u16) << 3) | (bdf.func as u16)
 }
 
+/// Enumerate PCI bus 0 (full-os guide Part II.7 driver model: device
+/// discovery). Logs every present function's vendor/device/class so the
+/// device inventory is visible at boot; this is the registry-discovery step
+/// the per-driver probe/attach refactor builds on. Read-only — it does not
+/// claim or initialize anything (the existing virtio/NVMe probes still own
+/// attachment).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pci_enumerate_log() {
+    serial_write(b"PCI: enumerate bus0\n");
+    let mut count = 0u32;
+    let mut dev = 0u8;
+    while dev < 32 {
+        let id0 = pci_read32(0, dev, 0, 0);
+        if (id0 & 0xFFFF) as u16 == 0xFFFF {
+            dev += 1;
+            continue;
+        }
+        // Multi-function devices set bit 7 of the header-type byte.
+        let hdr = (pci_read32(0, dev, 0, 0x0C) >> 16) & 0xFF;
+        let funcs = if hdr & 0x80 != 0 { 8u8 } else { 1u8 };
+        let mut func = 0u8;
+        while func < funcs {
+            let id = pci_read32(0, dev, func, 0);
+            let v = (id & 0xFFFF) as u16;
+            if v != 0xFFFF {
+                let d = ((id >> 16) & 0xFFFF) as u16;
+                let class = pci_read32(0, dev, func, 0x08) >> 16; // class<<8|subclass
+                serial_write(b"PROBE: dev=0x");
+                serial_write_hex(dev as u64);
+                serial_write(b" func=0x");
+                serial_write_hex(func as u64);
+                serial_write(b" vendor=0x");
+                serial_write_hex(v as u64);
+                serial_write(b" device=0x");
+                serial_write_hex(d as u64);
+                serial_write(b" class=0x");
+                serial_write_hex((class & 0xFFFF) as u64);
+                serial_write(b"\n");
+                count += 1;
+            }
+            func += 1;
+        }
+        dev += 1;
+    }
+    serial_write(b"PCI: devices=0x");
+    serial_write_hex(count as u64);
+    serial_write(b"\n");
+}
+
 /// Claim a PCI function once so one function does not get initialized by
 /// multiple in-kernel drivers.
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "net_test", feature = "go_test"))]
@@ -7540,6 +7589,7 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
+        pci_enumerate_log();
         net::r4_c4_runtime_init();
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
