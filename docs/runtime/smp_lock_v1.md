@@ -52,6 +52,15 @@ preempts and shuts down cleanly, so enabling the BSP LAPIC does not disturb
 PIC-delivered timer interrupts). Requires CPU x2APIC support
 (`-cpu qemu64,+x2apic`).
 
+## Per-CPU LAPIC timer
+
+Each AP also starts its **own** periodic LAPIC timer (`lapic_timer_start`:
+divide-by-16, LVT timer = periodic + vector 241, initial count) before parking —
+the preemption clock a per-CPU scheduler needs, since the legacy PIT/PIC timer
+only reaches the BSP. The timer fires on vector 241
+(`isr_stub_241` → `lapic_timer_handler`: tick + EOI). The BSP confirms every
+AP's local timer fired (`SMP: ap timers ok`).
+
 ## v1 boundary / carry-forward
 
 - The spinlock and IPI are exercised by the boot self-test; the spinlock is

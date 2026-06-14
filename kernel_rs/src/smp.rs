@@ -79,6 +79,25 @@ pub(crate) unsafe fn ipi_handler() {
     x2apic_eoi();
 }
 
+// Per-CPU LAPIC timer (full-os guide Part I.3): each AP's own preemption clock,
+// the source a per-CPU scheduler needs (the legacy PIC timer only reaches the
+// BSP). v1 just counts ticks to prove every AP's local timer fires.
+static AP_TICKS: AtomicU64 = AtomicU64::new(0);
+const LAPIC_TIMER_VECTOR: u64 = 241;
+
+/// Start this CPU's LAPIC timer in periodic mode on vector 241.
+unsafe fn lapic_timer_start() {
+    wrmsr(0x83E, 0x3); // divide configuration: divide by 16
+    wrmsr(0x832, (1 << 17) | LAPIC_TIMER_VECTOR); // LVT timer: periodic + vector
+    wrmsr(0x838, 0x0010_0000); // initial count (counts down, reloads each period)
+}
+
+/// LAPIC-timer service routine (from trap_handler vector 241): tick + EOI.
+pub(crate) unsafe fn lapic_timer_handler() {
+    AP_TICKS.fetch_add(1, Ordering::SeqCst);
+    x2apic_eoi();
+}
+
 /// One CPU's contribution: ITERS locked, intentionally non-atomic increments of
 /// the shared counter. Read-modify-write through volatile so the compiler can't
 /// fuse it; correctness depends entirely on the spinlock serializing CPUs.
@@ -148,6 +167,7 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
         crate::arch_x86::gdt_init();
         crate::arch_x86::load_idt();
         x2apic_enable();
+        lapic_timer_start(); // this AP's own periodic preemption clock
         APS_ONLINE.fetch_add(1, Ordering::SeqCst);
         loop {
             core::arch::asm!("sti; hlt", options(nomem, nostack));
@@ -224,6 +244,20 @@ pub fn smp_init() {
             serial_write(b"SMP: ipi ack=0x");
             serial_write_hex(IPI_ACK.load(Ordering::SeqCst));
             serial_write(b"\n");
+            // Let the APs' periodic LAPIC timers tick, then confirm every AP's
+            // own preemption clock fired (the basis for per-CPU scheduling).
+            let mut tspins = 0u64;
+            while AP_TICKS.load(Ordering::SeqCst) < expected && tspins < 200_000_000 {
+                core::hint::spin_loop();
+                tspins += 1;
+            }
+            let ticked = AP_TICKS.load(Ordering::SeqCst);
+            serial_write(b"SMP: ap timers ");
+            if ticked >= expected {
+                serial_write(b"ok\n");
+            } else {
+                serial_write(b"FAIL\n");
+            }
         }
     }
 }

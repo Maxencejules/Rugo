@@ -96,6 +96,8 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "SMP: lock count=0x0000000000001F40 ok",
         # IPI: the BSP broadcasts to all 3 APs, each takes vector 240 and acks.
         "SMP: ipi ack=0x0000000000000003",
+        # Per-CPU LAPIC timers: every AP's own preemption clock fired.
+        "SMP: ap timers ok",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out
@@ -116,6 +118,8 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: lock count=0x0000000000000FA0 ok",
         # IPI: the BSP signals the single AP, which takes vector 240 and acks.
         "SMP: ipi ack=0x0000000000000001",
+        # The AP's own LAPIC timer fired.
+        "SMP: ap timers ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

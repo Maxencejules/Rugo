@@ -53,8 +53,10 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 These each require dedicated, infra-heavy work; they do not decompose into a
 single safe boot-verified slice and several have hard prerequisites.
 
-1. **I.3 per-CPU scheduler — IPI DONE, run queue remains.** The spinlock
-   (locking) **and** a working x2APIC IPI are implemented (`smp_lock_v1.md`):
+1. **I.3 per-CPU scheduler — primitives DONE, run queue remains.** The spinlock
+   (locking), a working x2APIC IPI, **and** per-CPU LAPIC timers are implemented
+   (`smp_lock_v1.md`): every AP runs its own periodic preemption clock
+   (`SMP: ap timers ok`). The spinlock+IPI details:
    the BSP broadcasts vector 240 to the APs, which acknowledge (`SMP: ipi ack`).
    The four bugs the first attempt hit, now fixed: (a) the AP must `gdt_init`
    (Limine hands it its own GDT) before loading the IDT; (b) `-cpu qemu64,+x2apic`

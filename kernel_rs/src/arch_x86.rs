@@ -229,6 +229,7 @@ pub(crate) unsafe fn idt_init() {
         fn isr_stub_65();
         fn isr_stub_128();
         fn isr_stub_240();
+        fn isr_stub_241();
     }
 
     idt_set_gate(0, isr_stub_0 as *const () as u64);
@@ -255,9 +256,10 @@ pub(crate) unsafe fn idt_init() {
         reserved: 0,
     };
 
-    // SMP IPI vector (full-os guide Part I.3): an interrupt gate (DPL=0).
-    // Installed in every lane so APs can take the IPI on the base lane too.
+    // SMP IPI + per-CPU LAPIC timer vectors (full-os guide Part I.3): interrupt
+    // gates (DPL=0). Installed in every lane so APs can take them on any lane.
     idt_set_gate(240, isr_stub_240 as *const () as u64);
+    idt_set_gate(241, isr_stub_241 as *const () as u64);
 
     load_idt();
 }
