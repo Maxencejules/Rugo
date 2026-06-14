@@ -3925,6 +3925,29 @@ cfg_r4! {
         0
     }
 
+    /// sys_sysinfo (ABI v3.2 id 61): lightweight /proc-style metrics.
+    /// op 1 = live task count, op 2 = free physical frames, op 3 = uptime
+    /// in PIT ticks (100 Hz). -1 on bad op.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_sysinfo(op: u64) -> u64 {
+        match op {
+            1 => {
+                let mut live = 0u64;
+                let mut i = 0usize;
+                while i < R4_NUM_TASKS {
+                    if !matches!(R4_TASKS[i].state, R4State::Dead) {
+                        live += 1;
+                    }
+                    i += 1;
+                }
+                live
+            }
+            2 => mm::free_frames(),
+            3 => R4_PREEMPT_TICKS,
+            _ => 0xFFFF_FFFF_FFFF_FFFF,
+        }
+    }
+
     unsafe fn r4_find_spawn_slot() -> Option<usize> {
         for tid in 1..R4_NUM_TASKS {
             if R4_TASKS[tid].state == R4State::Dead {

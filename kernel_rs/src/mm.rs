@@ -70,6 +70,11 @@ pub fn phys_to_virt(phys: u64) -> u64 {
     unsafe { phys + PMM.hhdm }
 }
 
+/// Number of physical frames currently free (for sysinfo / metrics).
+pub fn free_frames() -> u64 {
+    unsafe { PMM.free_frames }
+}
+
 /// Populate the PMM from the Limine memmap. Prints `MM: pmm ok frames=0x<n>`
 /// on success or `MM: pmm none` when the bootloader gave no memmap (static
 /// pools still work in that case).
