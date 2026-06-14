@@ -7352,6 +7352,161 @@ unsafe fn mmio_map_4k(phys: u64) -> Option<u64> {
     Some(MMIO_WINDOW_VA + (phys & 0xFFF))
 }
 
+/// Map `npages` consecutive 4 KiB pages of device MMIO starting at the
+/// page-aligned `phys` into a dedicated kernel window, returning the window VA of
+/// `phys`. For a register block that spans more than one page (e.g. an e1000 BAR
+/// whose TX-ring registers live at offset 0x3800). `npages` must fit in one PT
+/// from the window's PT index (true for the small counts used here).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn mmio_map_region(phys: u64, npages: usize) -> Option<u64> {
+    const REGION_WINDOW_VA: u64 = 0xFFFF_FF10_0000_0000; // distinct from the 4k window
+    let hhdm = crate::mm::hhdm_offset();
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let mut table_phys = cr3 & 0x000F_FFFF_FFFF_F000;
+    let base_page = phys & !0xFFF;
+    // Walk/create PML4 -> PDPT -> PD (deferred linking, all-or-nothing).
+    let mut pending: [(u64, usize, u64); 3] = [(0, 0, 0); 3];
+    let mut npending = 0usize;
+    for &shift in &[39u32, 30, 21] {
+        let table = (table_phys + hhdm) as *mut u64;
+        let i = ((REGION_WINDOW_VA >> shift) & 0x1FF) as usize;
+        let e = core::ptr::read_volatile(table.add(i));
+        if e & 1 == 0 {
+            let new = match crate::mm::alloc_frame() {
+                Some(f) => f,
+                None => {
+                    let mut k = 0;
+                    while k < npending {
+                        crate::mm::free_frame(pending[k].2);
+                        k += 1;
+                    }
+                    return None;
+                }
+            };
+            core::ptr::write_bytes((new + hhdm) as *mut u8, 0, 4096);
+            pending[npending] = (table_phys, i, new);
+            npending += 1;
+            table_phys = new;
+        } else {
+            table_phys = e & 0x000F_FFFF_FFFF_F000;
+        }
+    }
+    let mut k = 0;
+    while k < npending {
+        let (parent_phys, i, new) = pending[k];
+        core::ptr::write_volatile(((parent_phys + hhdm) as *mut u64).add(i), new | 0b11);
+        k += 1;
+    }
+    let pt = (table_phys + hhdm) as *mut u64;
+    let base_i = ((REGION_WINDOW_VA >> 12) & 0x1FF) as usize;
+    let mut p = 0usize;
+    while p < npages && base_i + p < 512 {
+        core::ptr::write_volatile(
+            pt.add(base_i + p),
+            (base_page + (p as u64) * 0x1000)
+                | (1 << 0)
+                | (1 << 1)
+                | (1 << 3)
+                | (1 << 4)
+                | (1u64 << 63),
+        );
+        core::arch::asm!("invlpg [{}]", in(reg) REGION_WINDOW_VA + (p as u64) * 0x1000, options(nostack));
+        p += 1;
+    }
+    Some(REGION_WINDOW_VA + (phys & 0xFFF))
+}
+
+/// e1000 TX-ring self-test (full-os guide Part II.7, e1000 driver): set up a
+/// transmit descriptor ring in the DMA pool, enable the transmitter, queue one
+/// Ethernet frame, and confirm the device wrote back the descriptor Done bit —
+/// proving the TX DMA path works end to end. Called from `e1000_detect` when an
+/// e1000 is present.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_tx_selftest(bdf: PciBdf) {
+    let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
+    let base = (bar0 & 0xFFFF_FFF0) as u64;
+    // Map the first 16 KiB of the BAR (covers CTRL/STATUS/TCTL@0x400 + the TX-ring
+    // registers @0x3800).
+    let mmio = match mmio_map_region(base, 4) {
+        Some(p) => p,
+        None => {
+            serial_write(b"E1000: tx mmio fail\n");
+            return;
+        }
+    };
+    let reg = |off: u64| (mmio + off) as *mut u32;
+    // DMA: one page for the descriptor ring (16 descriptors × 16 B), one for the
+    // packet buffer.
+    let ring_phys = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            serial_write(b"E1000: tx dma fail\n");
+            return;
+        }
+    };
+    let buf_phys = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(ring_phys, 1); // free the ring on the buffer-alloc failure path
+            serial_write(b"E1000: tx dma fail\n");
+            return;
+        }
+    };
+    let ring = mm::phys_to_virt(ring_phys) as *mut u8;
+    let buf = mm::phys_to_virt(buf_phys) as *mut u8;
+    core::ptr::write_bytes(ring, 0, 4096);
+    // Build a minimal padded Ethernet frame: dst broadcast, src = our MAC.
+    core::ptr::write_bytes(buf, 0, 60);
+    let mac = net::net_mac();
+    for i in 0..6 {
+        *buf.add(i) = 0xFF; // broadcast dst
+        *buf.add(6 + i) = mac[i];
+    }
+    *buf.add(12) = 0x88; // an unassigned ethertype (0x88B5, local experimental)
+    *buf.add(13) = 0xB5;
+    let frame_len: u16 = 60;
+
+    // Set link up (CTRL.SLU bit 6).
+    core::ptr::write_volatile(reg(0x0000), core::ptr::read_volatile(reg(0x0000)) | (1 << 6));
+    // TX descriptor ring base/length/head/tail.
+    core::ptr::write_volatile(reg(0x3800), ring_phys as u32); // TDBAL
+    core::ptr::write_volatile(reg(0x3804), (ring_phys >> 32) as u32); // TDBAH
+    core::ptr::write_volatile(reg(0x3808), 16 * 16); // TDLEN (16 descriptors)
+    core::ptr::write_volatile(reg(0x3810), 0); // TDH
+    core::ptr::write_volatile(reg(0x3818), 0); // TDT
+    // TIPG (inter-packet gap) + TCTL: EN | PSP | CT=0x0F | COLD=0x40.
+    core::ptr::write_volatile(reg(0x0410), 0x0060_200A);
+    core::ptr::write_volatile(reg(0x0400), (1 << 1) | (1 << 3) | (0x0F << 4) | (0x40 << 12));
+
+    // Descriptor 0: buffer address, length, CMD = EOP|IFCS|RS, status = 0.
+    core::ptr::write_volatile(ring as *mut u64, buf_phys); // buffer address
+    core::ptr::write_volatile((ring.add(8)) as *mut u16, frame_len); // length
+    *ring.add(11) = 0x01 | 0x02 | 0x08; // CMD: EOP | IFCS | RS
+    *ring.add(12) = 0; // status (DD cleared)
+    // Hand descriptor 0 to the device.
+    core::ptr::write_volatile(reg(0x3818), 1); // TDT = 1
+
+    // Poll the descriptor Done bit (status bit 0), written back by the device.
+    let mut spins = 0u32;
+    let mut dd = false;
+    while spins < 2_000_000 {
+        if core::ptr::read_volatile(ring.add(12)) & 0x01 != 0 {
+            dd = true;
+            break;
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    dma::dma_free(ring_phys, 1);
+    dma::dma_free(buf_phys, 1);
+    if dd {
+        serial_write(b"E1000: tx ok\n");
+    } else {
+        serial_write(b"E1000: tx no-dd\n");
+    }
+}
+
 /// Read + report an xHCI controller's capability registers (xHCI spec 5.3).
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn xhci_report(bdf: PciBdf) {
@@ -7424,7 +7579,9 @@ unsafe fn e1000_detect() {
             let vendor = (id & 0xFFFF) as u16;
             let device = ((id >> 16) & 0xFFFF) as u16;
             if vendor == 0x8086 && device == 0x100E {
-                e1000_report(PciBdf { bus: 0, dev, func });
+                let bdf = PciBdf { bus: 0, dev, func };
+                e1000_report(bdf);
+                e1000_tx_selftest(bdf); // full-os Part II.7: e1000 TX-ring driver
                 return;
             }
             func += 1;

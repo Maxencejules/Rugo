@@ -97,6 +97,9 @@ def test_e1000_detected(find_in_order):
         "PCI: enumerate bus0",
         "ATTACH: e1000",
         "E1000: found status=0x",
+        # The TX descriptor ring transmitted a frame and the device wrote back the
+        # descriptor Done bit (the TX DMA path works end to end).
+        "E1000: tx ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
@@ -104,5 +107,8 @@ def test_e1000_detected(find_in_order):
     assert "E1000: bar" not in out  # neither "bar not mmio" nor "bar unassigned"
     assert "E1000: eeprom timeout" not in out
     assert "E1000: mmio map fail" not in out
+    assert "E1000: tx no-dd" not in out
+    assert "E1000: tx dma fail" not in out
+    assert "E1000: tx mmio fail" not in out
     # The EEPROM returned the pinned MAC.
     assert E1000_MAC_PACKED in out

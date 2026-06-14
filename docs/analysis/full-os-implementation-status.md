@@ -112,9 +112,11 @@ single safe boot-verified slice and several have hard prerequisites.
    config space through **PCIe ECAM** (`ecam_v1.md`: the memory-mapped window from
    the q35 PCIEXBAR, cross-checked against the legacy I/O path). What remains: an
    XHCI controller **driver** (command/event rings, port reset, device
-   enumeration) + a HID boot-protocol driver; an e1000 TX/RX-ring driver (built on
-   the DMA pool); MSI/MSI-X; and migrating the virtio/NVMe probes onto `dma_alloc`
-   + routing all config access through ECAM.
+   enumeration) + a HID boot-protocol driver. The **e1000 TX ring driver** is done
+   (`e1000_v1.md`: a descriptor ring on the DMA pool transmits a frame and the
+   device's Done bit confirms it); the e1000 **RX** ring + interrupt-driven
+   completion, and migrating the virtio/NVMe probes onto `dma_alloc` + routing all
+   config access through ECAM, remain.
 3. **III input + compositor/window-server + audio — mouse + packet parsing, z-order compositor, HD-Audio detection done.**
    The mouse device is reset + identified at boot and its 3-byte movement packets
    are decoded into signed dx/dy + buttons with cursor accumulation
