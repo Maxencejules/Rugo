@@ -78,8 +78,12 @@ single safe boot-verified slice and several have hard prerequisites.
    CoW paths; put a real `current`/run-queue in the per-CPU slots; add per-CPU
    GDT/TSS so an AP can take a ring3→ring0 trap on its own kernel stack and run
    user tasks instead of parking.
-2. **II.7 USB / XHCI + HID, DMA pool, e1000** — needs `-device qemu-xhci` (and
-   `-device e1000`) in a dedicated test profile, then an XHCI controller driver
+2. **II.7 USB / XHCI + HID, DMA pool, e1000 — controller DETECTION done.** The OS
+   now discovers a USB xHCI host controller (`-device qemu-xhci`), maps its BAR
+   (the PCI MMIO hole is not in the HHDM, so `mmio_map_4k` walks CR3 and installs
+   an uncacheable leaf), and reads its capability registers
+   (`xhci_v1.md`: `XHCI: found ver=0x100 caplen=0x40 ports=8 slots=64`). What
+   remains: an XHCI controller **driver**
    (command/event rings, port reset, device enumeration) and a HID boot-protocol
    driver. DMA pool = a contiguous-frame allocator over the PMM (the bitmap
    allocator is single-frame today).

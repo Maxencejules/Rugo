@@ -6479,6 +6479,158 @@ unsafe fn pci_enumerate_log() {
     serial_write(b"\n");
 }
 
+/// Detect a USB xHCI host controller (full-os guide Part II.7): scan PCI bus 0
+/// for a Serial-Bus / USB / xHCI function (class 0x0C, subclass 0x03,
+/// prog-if 0x30), then read its memory-mapped capability registers so the OS
+/// reports the controller it found. This is the discovery + capability-read
+/// foundation; command/event rings, port reset, and device enumeration are
+/// carry-forward. Reachable only when a controller is attached
+/// (`-device qemu-xhci`); otherwise reports `XHCI: none`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn xhci_detect() {
+    let mut dev = 0u8;
+    while dev < 32 {
+        let id0 = pci_read32(0, dev, 0, 0);
+        if (id0 & 0xFFFF) as u16 == 0xFFFF {
+            dev += 1;
+            continue;
+        }
+        let hdr = (pci_read32(0, dev, 0, 0x0C) >> 16) & 0xFF;
+        let funcs = if hdr & 0x80 != 0 { 8u8 } else { 1u8 };
+        let mut func = 0u8;
+        while func < funcs {
+            let id = pci_read32(0, dev, func, 0);
+            if (id & 0xFFFF) as u16 != 0xFFFF {
+                let class_reg = pci_read32(0, dev, func, 0x08);
+                let class = (class_reg >> 24) as u8;
+                let subclass = (class_reg >> 16) as u8;
+                let prog_if = (class_reg >> 8) as u8;
+                if class == 0x0C && subclass == 0x03 && prog_if == 0x30 {
+                    xhci_report(PciBdf { bus: 0, dev, func });
+                    return;
+                }
+            }
+            func += 1;
+        }
+        dev += 1;
+    }
+    serial_write(b"XHCI: none\n");
+}
+
+/// Map a 4 KiB device-MMIO page into the kernel address space (go lane) and
+/// return the VA corresponding to `phys` (page offset preserved). The PCI MMIO
+/// hole is not covered by the HHDM, so walk the active CR3 through the HHDM,
+/// allocating any missing intermediate page-table levels from the PMM, and
+/// install an uncacheable (PWT|PCD) leaf at a fixed kernel MMIO window VA.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn mmio_map_4k(phys: u64) -> Option<u64> {
+    const MMIO_WINDOW_VA: u64 = 0xFFFF_FF00_0000_0000; // unused high kernel slot
+    let hhdm = crate::mm::hhdm_offset();
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let mut table_phys = cr3 & 0x000F_FFFF_FFFF_F000;
+    let page = phys & !0xFFF;
+    // Walk PML4 -> PDPT -> PD (the three non-leaf levels). To stay all-or-nothing
+    // under PMM pressure, allocate missing levels but DEFER linking them into the
+    // live tree until the whole walk succeeds; on any allocation failure, free
+    // what we took and leave the page tables untouched. (A freshly allocated
+    // table is reachable through the HHDM before it is linked, so the walk can
+    // continue into it.)
+    let mut pending: [(u64, usize, u64); 3] = [(0, 0, 0); 3];
+    let mut npending = 0usize;
+    for &shift in &[39u32, 30, 21] {
+        let table = (table_phys + hhdm) as *mut u64;
+        let i = ((MMIO_WINDOW_VA >> shift) & 0x1FF) as usize;
+        let e = core::ptr::read_volatile(table.add(i));
+        if e & 1 == 0 {
+            let new = match crate::mm::alloc_frame() {
+                Some(f) => f,
+                None => {
+                    let mut k = 0;
+                    while k < npending {
+                        crate::mm::free_frame(pending[k].2);
+                        k += 1;
+                    }
+                    return None;
+                }
+            };
+            core::ptr::write_bytes((new + hhdm) as *mut u8, 0, 4096);
+            pending[npending] = (table_phys, i, new);
+            npending += 1;
+            table_phys = new;
+        } else {
+            table_phys = e & 0x000F_FFFF_FFFF_F000;
+        }
+    }
+    // The whole chain is available; link the deferred tables into the live tree.
+    let mut k = 0;
+    while k < npending {
+        let (parent_phys, i, new) = pending[k];
+        core::ptr::write_volatile(((parent_phys + hhdm) as *mut u64).add(i), new | 0b11);
+        k += 1;
+    }
+    // Install the leaf PTE: present | write | PWT | PCD (uncacheable for MMIO) |
+    // NX — the BAR is device data the kernel only reads, never code (W^X).
+    let pt = (table_phys + hhdm) as *mut u64;
+    let i = ((MMIO_WINDOW_VA >> 12) & 0x1FF) as usize;
+    core::ptr::write_volatile(
+        pt.add(i),
+        page | (1 << 0) | (1 << 1) | (1 << 3) | (1 << 4) | (1u64 << 63),
+    );
+    core::arch::asm!("invlpg [{}]", in(reg) MMIO_WINDOW_VA, options(nostack));
+    Some(MMIO_WINDOW_VA + (phys & 0xFFF))
+}
+
+/// Read + report an xHCI controller's capability registers (xHCI spec 5.3).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn xhci_report(bdf: PciBdf) {
+    // Enable memory space + bus master so the controller decodes its BAR.
+    let cmd = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x04);
+    pci_write32(bdf.bus, bdf.dev, bdf.func, 0x04, cmd | 0x0006);
+    // BAR0 is the xHCI MMIO base (a memory BAR, possibly 64-bit).
+    let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
+    if bar0 & 1 != 0 {
+        serial_write(b"XHCI: bar not mmio\n");
+        return;
+    }
+    let mut base = (bar0 & 0xFFFF_FFF0) as u64;
+    if (bar0 >> 1) & 0x3 == 0x2 {
+        let high = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x14);
+        base |= (high as u64) << 32;
+    }
+    if base == 0 {
+        serial_write(b"XHCI: bar unassigned\n");
+        return;
+    }
+    // The PCI MMIO hole is NOT covered by the HHDM, so map the BAR page into the
+    // kernel's MMIO window before touching it.
+    let mmio = match mmio_map_4k(base) {
+        Some(p) => p,
+        None => {
+            serial_write(b"XHCI: mmio map fail\n");
+            return;
+        }
+    };
+    // xHCI MMIO requires 32-bit accesses, so read whole dwords. Dword 0 packs
+    // CAPLENGTH (bits[7:0]) and HCIVERSION (bits[31:16]); HCSPARAMS1 (dword @4)
+    // packs MaxSlots (bits[7:0]) and MaxPorts (bits[31:24]) (xHCI spec 5.3).
+    let cap0 = core::ptr::read_volatile(mmio as *const u32);
+    let caplength = cap0 & 0xFF;
+    let hciversion = (cap0 >> 16) & 0xFFFF;
+    let hcsparams1 = core::ptr::read_volatile((mmio + 4) as *const u32);
+    let max_slots = hcsparams1 & 0xFF;
+    let max_ports = (hcsparams1 >> 24) & 0xFF;
+    serial_write(b"XHCI: found ver=0x");
+    serial_write_hex(hciversion as u64);
+    serial_write(b" caplen=0x");
+    serial_write_hex(caplength as u64);
+    serial_write(b" ports=0x");
+    serial_write_hex(max_ports as u64);
+    serial_write(b" slots=0x");
+    serial_write_hex(max_slots as u64);
+    serial_write(b"\n");
+}
+
 /// Claim a PCI function once so one function does not get initialized by
 /// multiple in-kernel drivers.
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "net_test", feature = "go_test"))]
@@ -8603,6 +8755,7 @@ pub extern "C" fn kmain() -> ! {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
         pci_enumerate_log();
+        xhci_detect(); // full-os Part II.7: USB xHCI controller discovery
         net::r4_c4_runtime_init();
         // Net responder self-tests (full-os guide Part II.6): exercise the same
         // builders the live RX pump uses to answer inbound pings and ARP.
