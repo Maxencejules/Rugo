@@ -1,0 +1,98 @@
+# Rugo — full-os-implementation-guide: implementation status
+
+Date: 2026-06-14
+Companion to [`full-os-implementation-guide.md`](full-os-implementation-guide.md).
+Branch: `feat/full-os-keystone-addrspace`. Every item below is **boot-verified**
+(a `make test-<name>-v1` target booting under QEMU and asserting serial/screen
+markers emitted by runtime code) with a `docs/runtime/<name>_v1.md` contract and,
+where it added an ABI id/op, an entry in `docs/abi/syscall_v3.md`. Validated by
+repeated full `make test-qemu` gates (latest: **876 passed / 0 failed**).
+
+This document records what is implemented at **v1** and gives **concrete next
+steps** for the subsystems the guide tags L/XL that remain as carry-forward.
+
+## Implemented (v1) — by guide part
+
+### Part I — Foundations
+- **Per-process address spaces** (keystone): per-task PML4, CR3 reload in
+  `r4_switch_to`, kernel-half cloning, release on exit. `per_task_as_v1.md`.
+- **fork / clone + copy-on-write**: `sys_proc_ctl` op 1/2, `COW_REFCOUNT`,
+  `cow_break`. `fork_v1.md`.
+- **mmap / brk / munmap / mprotect**: `sys_vm_ctl`. `mmap_v1.md`.
+- **SMP bring-up + spinlock**: APs released via Limine, run real kernel code; a
+  test-and-set spinlock guards a counter every CPU hammers under contention
+  (`-smp 4` → 8000 increments, zero lost updates). `smp_lock_v1.md`.
+
+### Part II — Core subsystems
+- **II.5 Filesystem**: tmpfs `/tmp` (`pseudo_fs_v1.md`), MBR partition parse
+  (`partitions_v1.md`), FAT16 read + `/mnt` namespace mount + directory list
+  (`fat16_v1.md`), write-ahead journaling + replay (`journal_v1.md`); plus the
+  pre-existing SimpleFS `/data` tree and `/dev`, `/proc/self/stat`.
+- **II.6 Networking**: DHCP/DNS clients (`netcfg_v1.md`), and a comprehensively
+  reachable host — ARP responder (`arp_v1.md`), ICMP echo (`icmp_v1.md`),
+  ICMPv6 echo (`icmpv6_v1.md`), TCP client **and** passive-open/listener
+  (`tcp_listen_v1.md`), UDP echo (`udp_echo_v1.md`).
+- **II.7 Drivers**: PCI enumeration + driver registry/ATTACH (`driver_model_v1.md`).
+
+### Part III — Human interface
+- Framebuffer blit (`graphics_v1.md`), PC speaker audio (`audio_v1.md`).
+
+### Part IV — System services
+- **IV.9**: clock_gettime, nanosleep + scheduler idle/wait-queue, timerfd,
+  power/ACPI (`clock_v1.md`, `power_v1.md`, …).
+- **IV.10**: getrandom (`rng_v1.md`), stack ASLR, sandbox (`sandbox_v1.md`),
+  security audit log (`audit_v1.md`), at-rest disk encryption
+  (`disk_crypt_v1.md`), multi-user getuid/setuid (`userid_v1.md`).
+
+### Part V — Userspace & operations
+- dmesg ring (`dmesg_v1.md`), pty pair (`pty_v1.md`), /proc-style sysinfo,
+  lseek (`lseek_v1.md`), rlibc v1 (POSIX-ish C library), multi-page exec.
+
+## Carry-forward — the L/XL subsystems (with concrete next steps)
+
+These each require dedicated, infra-heavy work; they do not decompose into a
+single safe boot-verified slice and several have hard prerequisites.
+
+1. **I.3 per-CPU scheduler + IPIs / TLB shootdown** — the spinlock (locking
+   half) is done. The IPI half needs a LAPIC layer that does not exist yet.
+   Concrete plan: add `ISR_NOERR 240` in `arch/x86_64/isr.asm`; a `trap_handler`
+   vector-240 arm (`ipi_handler`: bump an atomic + x2APIC EOI via `wrmsr 0x80B`);
+   `x2apic_enable` (`rdmsr/wrmsr 0x1B` bits 10/11, SVR `0x80F` = `(1<<8)|65`
+   reusing the existing spurious vector 65); a shared `load_idt()` so APs `lidt`
+   the static IDT; change `ap_entry` to `load_idt + x2apic_enable + sti` then
+   `hlt`; send the IPI from `smp_init` via `wrmsr 0x830 = (lapic_id<<32)|(1<<14)|240`.
+   **Risk to manage:** enabling the LAPIC on the BSP can change PIC interrupt
+   delivery (LINT0/ExtINT) and break the PIT timer that drives preemption —
+   gate the whole path on `cpu_count > 1` so the default `-smp 1` lanes are
+   untouched, and verify the `-smp 2` go-lane still preempts. Then build the
+   per-CPU run queue + per-CPU GDT/TSS on top.
+2. **II.7 USB / XHCI + HID, DMA pool, e1000** — needs `-device qemu-xhci` (and
+   `-device e1000`) in a dedicated test profile, then an XHCI controller driver
+   (command/event rings, port reset, device enumeration) and a HID boot-protocol
+   driver. DMA pool = a contiguous-frame allocator over the PMM (the bitmap
+   allocator is single-frame today).
+3. **III input + compositor/window-server + richer audio** — PS/2 mouse needs
+   QMP `input-send-event` injection (the `_boot` fixture only feeds a fixed input
+   string; add a QMP-capable boot helper like `tests/runtime/test_smp_runtime_v1.py`
+   builds its own QEMU cmd). The window-server needs concurrent processes (have)
+   + shared-memory surfaces + an input event queue.
+4. **V.11 dynamic linker / .so** — **blocked** on the PE→ELF toolchain: mingw’s
+   refptr/auto-import + the homemade `tools/pe_to_elf_v1.py` break C binaries that
+   cross 2 pages (proved via `page3probe`: the kernel handles 3-page apps; the
+   toolchain does not). Fix `pe_to_elf` (or switch the C apps to a real ELF
+   linker) first, then add `sys_dlctl` (map-segment/resolve) + ELF dynamic
+   relocation.
+5. **V.11 installer + UEFI + package fetch + self-hosting** — UEFI is a second
+   Limine boot path; the installer writes the SimpleFS/app-region image to a
+   target disk; package fetch needs the TCP client (have) + a repo server.
+6. **II.6 TCP retransmit/RTO, IPv6 NDP/SLAAC, routing** — the client/listener and
+   v4/v6 echo exist; production reliability (retransmission timers, congestion,
+   Neighbor Discovery so a host can actually resolve the guest’s IPv6) remain.
+
+## ABI op map (current)
+- `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,
+  7 ICMPv6, 8 UDP-echo (4–8 are self-tests).
+- `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep.
+- `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
+  6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal.
+- `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid.
