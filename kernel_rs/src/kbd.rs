@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crate::arch_x86::inb;
+use crate::arch_x86::{inb, outb};
 
 const QUEUE: usize = 64;
 
@@ -99,4 +99,92 @@ pub(crate) unsafe fn kbd_pop() -> Option<u8> {
 pub(crate) unsafe fn kbd_has_input() -> bool {
     kbd_poll();
     KBD.tail != KBD.head
+}
+
+// ---------------- PS/2 mouse (full-os guide Part III input) ----------------
+//
+// The i8042 hosts a second PS/2 port (the mouse) alongside the keyboard. v1
+// brings the mouse up: enable the aux port, reset it, and read its BAT result +
+// device ID, proving the OS can talk to the pointing device. Continuous movement
+// reporting (and a compositor consuming it) is carry-forward — movement packets
+// need QMP input injection to exercise, and the keyboard poll already drains any
+// stray aux bytes (status bit 5) so an enabled mouse never disturbs the console.
+
+/// Wait until the i8042 input buffer is empty (ready to accept a write).
+unsafe fn ctrl_wait_write() -> bool {
+    let mut spins = 0u32;
+    while inb(0x64) & 0x02 != 0 {
+        spins += 1;
+        if spins > 200_000 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Read the next byte the mouse (aux) sent, draining any interleaved keyboard
+/// bytes (distinguished by status bit 5). None on timeout.
+unsafe fn mouse_read() -> Option<u8> {
+    let mut spins = 0u32;
+    loop {
+        let st = inb(0x64);
+        if st & 0x01 != 0 {
+            let b = inb(0x60);
+            if st & 0x20 != 0 {
+                return Some(b); // an aux (mouse) byte
+            }
+            // a keyboard byte: ignore and keep waiting for the mouse reply
+        }
+        spins += 1;
+        if spins > 4_000_000 {
+            return None;
+        }
+    }
+}
+
+/// Send one command byte to the mouse (0xD4 routes the next data byte to the aux
+/// port) and consume its ACK (0xFA). Returns true on ACK.
+unsafe fn mouse_cmd(cmd: u8) -> bool {
+    if !ctrl_wait_write() {
+        return false;
+    }
+    outb(0x64, 0xD4); // next 0x60 write goes to the aux device
+    if !ctrl_wait_write() {
+        return false;
+    }
+    outb(0x60, cmd);
+    matches!(mouse_read(), Some(0xFA))
+}
+
+/// Mouse init self-test (full-os guide Part III): enable the aux port, reset the
+/// mouse, and read its Basic Assurance Test result (0xAA) + device ID (0x00 for a
+/// standard PS/2 mouse). Returns 1 on success. Runs at boot with interrupts off,
+/// so the keyboard poll cannot race the reply bytes.
+pub(crate) unsafe fn mouse_selftest() -> u64 {
+    // Enable the auxiliary (mouse) device on the i8042.
+    if !ctrl_wait_write() {
+        return 0;
+    }
+    outb(0x64, 0xA8);
+    // Reset: 0xFF -> ACK(0xFA), then BAT(0xAA), then device ID(0x00).
+    if !mouse_cmd(0xFF) {
+        return 0;
+    }
+    let bat = match mouse_read() {
+        Some(b) => b,
+        None => return 0,
+    };
+    let id = match mouse_read() {
+        Some(b) => b,
+        None => return 0,
+    };
+    if bat != 0xAA {
+        return 0;
+    }
+    crate::serial_write(b"MOUSE: reset bat=0x");
+    crate::serial_write_hex(bat as u64);
+    crate::serial_write(b" id=0x");
+    crate::serial_write_hex(id as u64);
+    crate::serial_write(b" ok\n");
+    1
 }

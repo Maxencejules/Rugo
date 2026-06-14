@@ -8756,6 +8756,7 @@ pub extern "C" fn kmain() -> ! {
         tss_init(kstack);
         pci_enumerate_log();
         xhci_detect(); // full-os Part II.7: USB xHCI controller discovery
+        let _ = kbd::mouse_selftest(); // full-os Part III: PS/2 mouse bring-up
         net::r4_c4_runtime_init();
         // Net responder self-tests (full-os guide Part II.6): exercise the same
         // builders the live RX pump uses to answer inbound pings and ARP.

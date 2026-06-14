@@ -947,6 +947,9 @@ test-ndp-v1: image-go
 test-xhci-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_xhci_v1.py -v --junitxml=$(OUT)/pytest-xhci-v1.xml
 
+test-mouse-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mouse_v1.py -v --junitxml=$(OUT)/pytest-mouse-v1.xml
+
 test-tcp-listen-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp-listen-v1.xml
 
