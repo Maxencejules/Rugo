@@ -53,20 +53,26 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 These each require dedicated, infra-heavy work; they do not decompose into a
 single safe boot-verified slice and several have hard prerequisites.
 
-1. **I.3 per-CPU scheduler — primitives DONE, run queue remains.** The spinlock
-   (locking), a working x2APIC IPI, **and** per-CPU LAPIC timers are implemented
-   (`smp_lock_v1.md`): every AP runs its own periodic preemption clock
-   (`SMP: ap timers ok`). The spinlock+IPI details:
-   the BSP broadcasts vector 240 to the APs, which acknowledge (`SMP: ipi ack`).
+1. **I.3 per-CPU scheduler — primitives + TLB shootdown DONE, run queue remains.**
+   The spinlock (locking), a working x2APIC IPI, per-CPU LAPIC timers, **and**
+   cross-CPU TLB shootdown are implemented (`smp_lock_v1.md`,
+   `tlb_shootdown_v1.md`): every AP runs its own periodic preemption clock
+   (`SMP: ap timers ok`) and acknowledges directed TLB invalidations
+   (`SMP: tlb shootdown ok`). The spinlock+IPI details:
+   the BSP broadcasts vector 240 to the APs, which acknowledge (`SMP: ipi ack`);
+   the BSP broadcasts vector 242 for shootdown, the APs `invlpg`+ack.
    The four bugs the first attempt hit, now fixed: (a) the AP must `gdt_init`
    (Limine hands it its own GDT) before loading the IDT; (b) `-cpu qemu64,+x2apic`
-   is required (plain qemu64 #GPs on the x2APIC enable); (c) IDT vector 240 must
-   be installed in **every** lane (the `-smp 4` test uses the base `os.iso`, not
-   `go_test`); (d) `smp_init` must run **after** `idt_init` in `kmain` so a
-   released AP loads a populated IDT. Gating on `cpu_count > 1` keeps `-smp 1`
-   lanes off the LAPIC; verified the `-smp 2` go-lane still preempts.
-   **Remaining:** use the IPI for TLB shootdown; build a per-CPU run queue +
-   per-CPU GDT/TSS and run the scheduler on the APs instead of parking them.
+   is required (plain qemu64 #GPs on the x2APIC enable); (c) IDT vectors 240–242
+   must be installed in **every** lane (the `-smp 4` test uses the base `os.iso`,
+   not `go_test`) — including the LAPIC spurious vector 65 (review fix); (d)
+   `smp_init` must run **after** `idt_init` in `kmain` so a released AP loads a
+   populated IDT. Gating on `cpu_count > 1` keeps `-smp 1` lanes off the LAPIC;
+   verified the `-smp 2` go-lane still preempts. Three adversarial-review bugs in
+   the triad were fixed (unconditional vector-65 gate, two-step x2APIC enable,
+   success-gated lock-count read). **Remaining:** wire `tlb_shootdown` into the
+   `munmap`/`mprotect`/CoW paths and build a per-CPU run queue + per-CPU GDT/TSS
+   so the scheduler runs user tasks on the APs instead of parking them.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000** — needs `-device qemu-xhci` (and
    `-device e1000`) in a dedicated test profile, then an XHCI controller driver
    (command/event rings, port reset, device enumeration) and a HID boot-protocol

@@ -98,6 +98,9 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "SMP: ipi ack=0x0000000000000003",
         # Per-CPU LAPIC timers: every AP's own preemption clock fired.
         "SMP: ap timers ok",
+        # TLB shootdown: the BSP directed all 3 APs to invalidate an address
+        # and every one acknowledged (cross-CPU TLB invalidation works).
+        "SMP: tlb shootdown ok",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out
@@ -120,6 +123,8 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: ipi ack=0x0000000000000001",
         # The AP's own LAPIC timer fired.
         "SMP: ap timers ok",
+        # TLB shootdown: the BSP directed the single AP to invalidate and it acked.
+        "SMP: tlb shootdown ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

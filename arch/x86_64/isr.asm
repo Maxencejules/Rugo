@@ -42,6 +42,7 @@ ISR_NOERR 128              ; Syscall gate (DPL=3 set in IDT by Rust)
 ; --- Inter-processor interrupt (SMP, full-os guide Part I.3) ---
 ISR_NOERR 240             ; IPI vector 0xF0 (fixed delivery), handled per-CPU
 ISR_NOERR 241             ; Per-CPU LAPIC timer vector 0xF1 (AP preemption clock)
+ISR_NOERR 242             ; TLB-shootdown IPI vector 0xF2 (cross-CPU invalidation)
 
 ; --- Common tail: save all GPRs, call Rust handler, restore, iretq ---
 ;

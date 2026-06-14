@@ -106,6 +106,66 @@ pub(crate) unsafe fn lapic_timer_handler() {
     x2apic_eoi();
 }
 
+// TLB shootdown (full-os guide Part I.3): cross-CPU TLB invalidation — the
+// mechanism the VM (munmap/mprotect/CoW) and a per-CPU scheduler need once a
+// page table is edited on one CPU while another may hold a stale translation.
+// The initiator (the BSP today) publishes the target address, then broadcasts
+// vector 242; every AP invalidates and increments the ack counter.
+static SHOOTDOWN_ADDR: AtomicU64 = AtomicU64::new(0);
+static SHOOTDOWN_ACK: AtomicU64 = AtomicU64::new(0);
+// Number of APs the initiator should wait for (set once the APs are confirmed
+// online in smp_init). 0 => uniprocessor: a shootdown is purely local.
+static SMP_AP_COUNT: AtomicU64 = AtomicU64::new(0);
+const TLB_SHOOTDOWN_VECTOR: u64 = 242;
+
+/// Invalidate `addr` on the current CPU, or reload CR3 (full flush) if `addr`
+/// is 0. Shared by the local path in `tlb_shootdown` and the AP handler.
+#[inline(always)]
+unsafe fn tlb_invalidate(addr: u64) {
+    if addr != 0 {
+        core::arch::asm!("invlpg [{}]", in(reg) addr, options(nostack));
+    } else {
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+        core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack));
+    }
+}
+
+/// TLB-shootdown service routine (from trap_handler vector 242): invalidate the
+/// requested address (or full-flush when 0), then acknowledge. Runs on each AP.
+pub(crate) unsafe fn tlb_shootdown_handler() {
+    let addr = SHOOTDOWN_ADDR.load(Ordering::Acquire);
+    tlb_invalidate(addr);
+    SHOOTDOWN_ACK.fetch_add(1, Ordering::SeqCst);
+    x2apic_eoi();
+}
+
+/// Initiate a TLB shootdown from the BSP: invalidate `addr` locally, then direct
+/// every online AP to do the same and wait (bounded) for their acknowledgements.
+/// `addr == 0` requests a full flush (CR3 reload) on each CPU. Returns true if
+/// every AP acknowledged (trivially true on a uniprocessor / before APs are up).
+///
+/// v1 boundary: a single shared `SHOOTDOWN_ADDR` + the BSP-only initiator make
+/// this safe for the boot self-test and for callers serialized by the kernel's
+/// big lock; a fully concurrent kernel needs per-CPU shootdown mailboxes or a
+/// lock around the request so two initiators cannot clobber the address.
+pub(crate) unsafe fn tlb_shootdown(addr: u64) -> bool {
+    tlb_invalidate(addr); // initiator invalidates its own TLB first
+    let aps = SMP_AP_COUNT.load(Ordering::Acquire);
+    if aps == 0 {
+        return true; // uniprocessor (or APs not up): nothing to shoot down
+    }
+    let base = SHOOTDOWN_ACK.load(Ordering::SeqCst);
+    SHOOTDOWN_ADDR.store(addr, Ordering::Release);
+    x2apic_broadcast_ipi(TLB_SHOOTDOWN_VECTOR);
+    let mut spins = 0u64;
+    while SHOOTDOWN_ACK.load(Ordering::SeqCst) < base + aps && spins < 200_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    SHOOTDOWN_ACK.load(Ordering::SeqCst) >= base + aps
+}
+
 /// One CPU's contribution: ITERS locked, intentionally non-atomic increments of
 /// the shared counter. Read-modify-write through volatile so the compiler can't
 /// fuse it; correctness depends entirely on the spinlock serializing CPUs.
@@ -226,6 +286,10 @@ pub fn smp_init() {
             spins += 1;
         }
         let online = APS_ONLINE.load(Ordering::SeqCst);
+        // Record how many APs are alive so tlb_shootdown knows how many acks to
+        // await. Only the confirmed-online APs (they will also ack the IPI and
+        // run their timers below), so a degraded boot does not wedge a shootdown.
+        SMP_AP_COUNT.store(online, Ordering::Release);
         serial_write(b"SMP: aps online=0x");
         serial_write_hex(online);
         serial_write(b"\n");
@@ -272,6 +336,20 @@ pub fn smp_init() {
             let ticked = AP_TICKS.load(Ordering::SeqCst);
             serial_write(b"SMP: ap timers ");
             if ticked >= expected {
+                serial_write(b"ok\n");
+            } else {
+                serial_write(b"FAIL\n");
+            }
+            // TLB shootdown: direct every AP to invalidate a specific address and
+            // acknowledge — proof the cross-CPU invalidation path (the mechanism
+            // munmap/mprotect/CoW and a per-CPU scheduler need) works end to end.
+            // The probe is the address of SMP_GUARDED, a known-mapped kernel VA;
+            // invlpg on it is harmless (drops the entry if cached, else a no-op),
+            // so what is verified is that every AP executed the directed flush.
+            let probe = core::ptr::addr_of!(SMP_GUARDED) as u64;
+            let shot_ok = tlb_shootdown(probe);
+            serial_write(b"SMP: tlb shootdown ");
+            if shot_ok {
                 serial_write(b"ok\n");
             } else {
                 serial_write(b"FAIL\n");

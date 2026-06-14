@@ -116,6 +116,9 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             241 => {
                 crate::smp::lapic_timer_handler();
             }
+            242 => {
+                crate::smp::tlb_shootdown_handler();
+            }
             _ => {}
         }
     }
