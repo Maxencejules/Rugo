@@ -5466,6 +5466,21 @@ unsafe fn pci_enumerate_log() {
                 serial_write(b" class=0x");
                 serial_write_hex((class & 0xFFFF) as u64);
                 serial_write(b"\n");
+                // Driver registry match (full-os guide Part II.7): a known
+                // (vendor, device) gets an ATTACH marker. This is the
+                // registry/attach step; actual init is still owned by the
+                // existing virtio/NVMe probes.
+                let name: &[u8] = match (v, d) {
+                    (0x1AF4, 0x1001) => b"virtio-blk-pci",
+                    (0x1AF4, 0x1000) => b"virtio-net-pci",
+                    (0x1B36, 0x0010) | (0x8086, 0x5845) => b"nvme",
+                    _ => b"",
+                };
+                if !name.is_empty() {
+                    serial_write(b"ATTACH: ");
+                    serial_write(name);
+                    serial_write(b"\n");
+                }
                 count += 1;
             }
             func += 1;

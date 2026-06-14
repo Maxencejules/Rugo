@@ -23,7 +23,13 @@ initializes nothing; the existing virtio/NVMe probes still own attachment.
 |--------|--------|
 | `PCI: enumerate bus0` | start of the scan |
 | `PROBE: dev=0x<d> func=0x<f> vendor=0x<vid> device=0x<did> class=0x<cc>` | one per present function |
+| `ATTACH: <driver-name>` | a known (vendor,device) matched the driver registry |
 | `PCI: devices=0x<n>` | total functions found |
+
+A small driver registry maps known IDs to names (`1AF4:1001`→virtio-blk-pci,
+`1AF4:1000`→virtio-net-pci, NVMe) and emits `ATTACH:` on a match — the
+probe→attach lifecycle the guide describes. The ATTACH is a registry-match
+record; actual device init is still owned by the existing virtio/NVMe probes.
 
 Hex fields are 16 zero-padded digits (`serial_write_hex`). The q35 test
 machine yields 7 functions: host bridge (8086:29C0), VGA (1234:1111),
@@ -33,10 +39,10 @@ LPC/SATA/SMBus at dev 0x1F (funcs 0/2/3).
 ## v1 boundary / carry-forward
 
 - Bus 0 only (no PCI-to-PCI bridge recursion, no ECAM/multi-segment).
-- A discovery log, not yet a `DriverProbe` registry with per-driver
-  `probe_fn`/claim, a DMA pool, or IRQ/MSI routing — those, plus moving
-  virtio/NVMe onto the registry and new USB/XHCI/e1000 drivers, are
-  carry-forward.
+- Discovery + a name-matching registry (ATTACH), not yet per-driver
+  `probe_fn`/claim that actually initializes via the registry, a DMA pool, or
+  IRQ/MSI routing — those, plus moving virtio/NVMe init onto the registry and
+  new USB/XHCI/e1000 drivers, are carry-forward.
 
 ## Acceptance
 

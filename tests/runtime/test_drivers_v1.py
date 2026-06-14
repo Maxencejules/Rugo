@@ -22,3 +22,6 @@ def test_pci_device_enumeration(qemu_go_c4_runtime, find_in_order):
     assert "dev=0x000000000000001F func=0x0000000000000002" in out
     # All seven q35 bus-0 functions enumerated.
     assert "PCI: devices=0x0000000000000007" in out
+    # Driver registry matched the virtio functions and emitted ATTACH.
+    assert "ATTACH: virtio-blk-pci" in out
+    assert "ATTACH: virtio-net-pci" in out
