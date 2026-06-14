@@ -511,6 +511,27 @@ unsafe fn fat16_list() -> u64 {
     count
 }
 
+/// Symmetric block cipher for at-rest disk encryption (full-os guide Part
+/// IV.10). XORs `buf` with a per-LBA xorshift64 keystream seeded from a fixed
+/// key, so encrypt == decrypt. NOTE: an xorshift keystream is NOT
+/// cryptographically secure and there is no integrity tag — a real AEAD
+/// (AES-GCM / ChaCha20-Poly1305) with a KDF'd key is carry-forward. v1 proves
+/// the transparent encrypt-on-write / decrypt-on-read path.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn disk_crypt(lba: u64, buf: &mut [u8]) {
+    const DISK_KEY: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut s = DISK_KEY ^ lba.wrapping_mul(0x0000_0100_0000_01B3);
+    if s == 0 {
+        s = 1; // xorshift must not be seeded with 0
+    }
+    for b in buf.iter_mut() {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        *b ^= (s & 0xFF) as u8;
+    }
+}
+
 fn serial_can_read() -> bool {
     unsafe { inb(COM1 + 5) & 0x01 != 0 }
 }
@@ -4275,24 +4296,24 @@ cfg_r4! {
             BLK_DATA_PAGE.0[7],
         ]) as usize;
 
-        // File table spans two sectors (32 entries x 32 bytes).
-        let mut table = [0u8; 1024];
-        if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR + 1, 512, false) {
-            exec_log(name, b"ioerr");
-            return ERR;
+        // File table spans three sectors (48 entries x 32 bytes). Kept in sync
+        // with tools/app_disk_v1.py (data payloads start at base + 4).
+        let mut table = [0u8; 1536];
+        let mut ts = 0u64;
+        while ts < 3 {
+            if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR + 1 + ts, 512, false) {
+                exec_log(name, b"ioerr");
+                return ERR;
+            }
+            core::ptr::copy_nonoverlapping(
+                BLK_DATA_PAGE.0.as_ptr(),
+                table.as_mut_ptr().add((ts * 512) as usize),
+                512,
+            );
+            ts += 1;
         }
-        core::ptr::copy_nonoverlapping(BLK_DATA_PAGE.0.as_ptr(), table.as_mut_ptr(), 512);
-        if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR + 2, 512, false) {
-            exec_log(name, b"ioerr");
-            return ERR;
-        }
-        core::ptr::copy_nonoverlapping(
-            BLK_DATA_PAGE.0.as_ptr(),
-            table.as_mut_ptr().add(512),
-            512,
-        );
 
-        let fc = core::cmp::min(file_count, 32);
+        let fc = core::cmp::min(file_count, 48);
         let mut file_sector = 0u64;
         let mut file_size = 0usize;
         let mut found = false;
@@ -5183,6 +5204,43 @@ cfg_r4! {
             // op 8 = FAT16 root directory list (full-os guide Part II.5): logs
             // each entry, returns the count.
             8 => fat16_list(),
+            // op 9 = disk-encryption round trip (full-os guide Part IV.10):
+            // encrypt a known plaintext, write it to a scratch sector, read it
+            // back raw (must be ciphertext != plaintext), decrypt, and verify
+            // it matches. -> 1 on success, 0 on failure.
+            9 => {
+                const SCRATCH_LBA: u64 = 1600; // free, above the /data region
+                let plain: [u8; 32] = *b"rugo-crypt-plaintext-0123456789!";
+                if !storage::r4_storage_available() {
+                    return 0;
+                }
+                let mut ct = plain;
+                disk_crypt(SCRATCH_LBA, &mut ct);
+                if ct == plain {
+                    return 0; // cipher must actually transform the data
+                }
+                core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+                BLK_DATA_PAGE.0[..32].copy_from_slice(&ct);
+                if !block_io_dispatch(true, SCRATCH_LBA, 512, false) {
+                    return 0;
+                }
+                core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+                if !block_io_dispatch(false, SCRATCH_LBA, 512, false) {
+                    return 0;
+                }
+                // On-disk bytes must be ciphertext, not the plaintext.
+                if BLK_DATA_PAGE.0[..32] == plain {
+                    return 0;
+                }
+                let mut dec = [0u8; 32];
+                dec.copy_from_slice(&BLK_DATA_PAGE.0[..32]);
+                disk_crypt(SCRATCH_LBA, &mut dec);
+                if dec != plain {
+                    return 0;
+                }
+                serial_write(b"CRYPT: disk roundtrip ok\n");
+                1
+            }
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }

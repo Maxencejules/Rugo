@@ -62,10 +62,11 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   bytes copied, op 5 = MBR partition parse → partition count (logs each
   entry), op 6 = FAT16 read HELLO.TXT(`rsi`=buf, `rdx`=cap) → file bytes,
   op 7 = security audit-log read(`rsi`=buf, `rdx`=cap) → bytes copied,
-  op 8 = FAT16 root directory list → entry count (logs each);
-  contract in `docs/runtime/sysinfo_v1.md`, `docs/runtime/dmesg_v1.md`,
+  op 8 = FAT16 root directory list → entry count (logs each), op 9 = disk
+  encryption round-trip self-test → 1 ok / 0 fail; contract in
+  `docs/runtime/sysinfo_v1.md`, `docs/runtime/dmesg_v1.md`,
   `docs/runtime/partitions_v1.md`, `docs/runtime/fat16_v1.md`,
-  `docs/runtime/audit_v1.md`).
+  `docs/runtime/audit_v1.md`, `docs/runtime/disk_crypt_v1.md`).
 
 Spawned tasks get a copy-on-write-isolated private address space, a random
 page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),

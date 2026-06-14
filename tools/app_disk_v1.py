@@ -57,12 +57,14 @@ def main() -> int:
         apps.append((name, Path(elf_path).read_bytes()))
     if args.elf:
         apps.append((args.name, Path(args.elf).read_bytes()))
-    if not apps or len(apps) > 32:
-        raise SystemExit("app-disk: between 1 and 32 apps required")
+    if not apps or len(apps) > 48:
+        raise SystemExit("app-disk: between 1 and 48 apps required")
 
+    # Superblock at `base`, then a 3-sector (48-entry x 32-byte) file table,
+    # then the packed app payloads. Kept in sync with sys_spawn_v1's reader.
     base = args.base_sector
-    data_sector = base + 3
-    table = bytearray(2 * SECTOR)
+    data_sector = base + 4
+    table = bytearray(3 * SECTOR)
     payloads = bytearray()
     cursor = data_sector
     for index, (name, elf) in enumerate(apps):
@@ -83,7 +85,7 @@ def main() -> int:
         disk.extend(b"\x00" * (needed - len(disk)))
 
     disk[base * SECTOR : base * SECTOR + SECTOR] = superblock.ljust(SECTOR, b"\x00")
-    disk[(base + 1) * SECTOR : (base + 3) * SECTOR] = table
+    disk[(base + 1) * SECTOR : (base + 4) * SECTOR] = table
     disk[data_sector * SECTOR : data_sector * SECTOR + len(payloads)] = payloads
 
     disk_path.write_bytes(bytes(disk))
