@@ -27,9 +27,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   op 3 = sigreturn; contract in `docs/runtime/signals_v1.md`);
   `49` = `sys_net_query` (op 1 = DHCP discover, op 2 = DNS A query,
   op 3 = poll, op 4 = ICMP echo self-test, op 5 = ARP responder self-test,
-  op 6 = TCP passive-open (listener) self-test (→ 1 ok / 0 fail); contract in
-  `docs/runtime/netcfg_v1.md`, `docs/runtime/icmp_v1.md`,
-  `docs/runtime/arp_v1.md`, `docs/runtime/tcp_listen_v1.md`);
+  op 6 = TCP passive-open (listener) self-test, op 7 = ICMPv6 echo self-test
+  (→ 1 ok / 0 fail); contract in `docs/runtime/netcfg_v1.md`,
+  `docs/runtime/icmp_v1.md`, `docs/runtime/arp_v1.md`,
+  `docs/runtime/tcp_listen_v1.md`, `docs/runtime/icmpv6_v1.md`);
   `50` = `sys_vm_ctl` (op 1 = mmap(va, sz, prot) → va, op 2 = munmap(va,
   sz) → 0, op 3 = brk(new) → old break, op 4 = mprotect(va, sz, prot) → 0;
   contract in `docs/runtime/mmap_v1.md`);

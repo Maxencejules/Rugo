@@ -234,6 +234,9 @@ pub(crate) unsafe fn net_rx_pump() {
             } else if ip[9] == 1 {
                 crate::netcfg::icmp_input(&buf[..n]);
             }
+        } else if ethertype == 0x86DD && n >= 54 {
+            // IPv6: answer ICMPv6 echo requests (ping6) -> reachable host.
+            crate::netcfg::icmpv6_input(&buf[..n]);
         }
     }
 }

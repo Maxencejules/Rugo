@@ -595,6 +595,158 @@ pub(crate) unsafe fn icmp_selftest() -> u64 {
     1
 }
 
+/// The guest's IPv6 link-local address (fe80::/64 + EUI-64 from the NIC MAC).
+unsafe fn guest_ip6() -> [u8; 16] {
+    let mac = net::net_mac();
+    let mut a = [0u8; 16];
+    a[0] = 0xfe;
+    a[1] = 0x80;
+    a[8] = mac[0] ^ 0x02; // flip the universal/local bit
+    a[9] = mac[1];
+    a[10] = mac[2];
+    a[11] = 0xff;
+    a[12] = 0xfe;
+    a[13] = mac[3];
+    a[14] = mac[4];
+    a[15] = mac[5];
+    a
+}
+
+/// ICMPv6 checksum over the IPv6 pseudo-header + message (`icmp6` has its
+/// checksum field already zeroed). `src`/`dst` are the reply's addresses.
+fn icmpv6_checksum(src: &[u8; 16], dst: &[u8; 16], icmp6: &[u8]) -> u16 {
+    let mut s = 0u32;
+    csum_words(&mut s, src);
+    csum_words(&mut s, dst);
+    s += icmp6.len() as u32; // upper-layer length
+    s += 58; // next header = ICMPv6
+    csum_words(&mut s, icmp6);
+    csum_fold(s)
+}
+
+/// Build an ICMPv6 echo *reply* (type 129) for a received echo *request*
+/// (type 128) Ethernet frame addressed to the guest's link-local address.
+/// Returns the reply length in `out`, or None. Shared by the live responder
+/// and the self-test (full-os guide Part II.6, IPv6).
+unsafe fn build_icmpv6_echo_reply(req: &[u8], out: &mut [u8]) -> Option<usize> {
+    if req.len() < 14 + 40 + 8 {
+        return None;
+    }
+    if u16::from_be_bytes([req[12], req[13]]) != 0x86DD {
+        return None;
+    }
+    let ip6 = &req[14..];
+    if ip6[6] != 58 {
+        return None; // next header must be ICMPv6
+    }
+    let g6 = guest_ip6();
+    if ip6[24..40] != g6 {
+        return None; // not addressed to us
+    }
+    let icmp_off = 14 + 40;
+    if req[icmp_off] != 128 {
+        return None; // not an echo request
+    }
+    let total = req.len();
+    if total > out.len() {
+        return None;
+    }
+    out[..total].copy_from_slice(&req[..total]);
+    // Ethernet: dst = requester, src = us.
+    out[0..6].copy_from_slice(&req[6..12]);
+    out[6..12].copy_from_slice(&net::net_mac());
+    let orig_src: [u8; 16] = ip6[8..24].try_into().ok()?;
+    {
+        let oip = &mut out[14..14 + 40];
+        oip[7] = 255; // hop limit
+        oip[8..24].copy_from_slice(&g6); // src = guest
+        oip[24..40].copy_from_slice(&orig_src); // dst = requester
+    }
+    let icmp_len = total - icmp_off;
+    {
+        let oic = &mut out[icmp_off..total];
+        oic[0] = 129; // echo reply
+        oic[2] = 0;
+        oic[3] = 0;
+        let ck = icmpv6_checksum(&g6, &orig_src, oic);
+        oic[2] = (ck >> 8) as u8;
+        oic[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Live RX responder: answer ICMPv6 echo requests (ping6) so the guest is a
+/// reachable IPv6 host. Called from the RX pump for ethertype 0x86DD frames.
+pub(crate) unsafe fn icmpv6_input(frame: &[u8]) {
+    let mut out = [0u8; 1514];
+    if let Some(len) = build_icmpv6_echo_reply(frame, &mut out) {
+        let _ = net::wire_send(&out[..len]);
+        serial_write(b"ICMPV6: echo reply sent\n");
+    }
+}
+
+/// Self-test (op 7): synthesize an ICMPv6 echo request to the guest's
+/// link-local address, run the responder, and verify the reply is type 129
+/// with a wire-correct checksum and echoed payload. Returns 1 on success.
+pub(crate) unsafe fn icmpv6_selftest() -> u64 {
+    const PAYLOAD: &[u8; 8] = b"rugo-v6!";
+    let g6 = guest_ip6();
+    let src6: [u8; 16] = [
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0x55, 0x0a, 0xff, 0xfe, 0x00, 0x02, 0x02,
+    ];
+    let mut req = [0u8; 14 + 40 + 16];
+    req[0..6].copy_from_slice(&net::net_mac());
+    req[6..12].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02]);
+    req[12] = 0x86;
+    req[13] = 0xDD;
+    {
+        let ip6 = &mut req[14..54];
+        ip6[0] = 0x60; // version 6
+        let plen = (16u16).to_be_bytes(); // ICMPv6 payload length
+        ip6[4] = plen[0];
+        ip6[5] = plen[1];
+        ip6[6] = 58; // next header ICMPv6
+        ip6[7] = 255; // hop limit
+        ip6[8..24].copy_from_slice(&src6);
+        ip6[24..40].copy_from_slice(&g6);
+    }
+    {
+        let ic = &mut req[54..70];
+        ic[0] = 128; // echo request
+        ic[4] = 0x52;
+        ic[5] = 0x47; // ident
+        ic[6] = 0x00;
+        ic[7] = 0x01; // seq
+        ic[8..16].copy_from_slice(PAYLOAD);
+        let ck = icmpv6_checksum(&src6, &g6, ic);
+        ic[2] = (ck >> 8) as u8;
+        ic[3] = (ck & 0xFF) as u8;
+    }
+    let mut out = [0u8; 1514];
+    let len = match build_icmpv6_echo_reply(&req, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let oic = &out[54..len];
+    if oic[0] != 129 || oic[8..16] != *PAYLOAD {
+        return 0;
+    }
+    // Verify the reply's ICMPv6 checksum folds to zero over the pseudo-header.
+    let reply_src: [u8; 16] = out[22..38].try_into().unwrap();
+    let reply_dst: [u8; 16] = out[38..54].try_into().unwrap();
+    let mut s = 0u32;
+    csum_words(&mut s, &reply_src);
+    csum_words(&mut s, &reply_dst);
+    s += oic.len() as u32;
+    s += 58;
+    csum_words(&mut s, oic);
+    if csum_fold(s) != 0 {
+        return 0;
+    }
+    serial_write(b"ICMPV6: echo reply ok\n");
+    1
+}
+
 /// Poll (op 3): -1 while pending; the result once, then idle.
 pub(crate) unsafe fn poll_result() -> u64 {
     net::net_rx_pump();
