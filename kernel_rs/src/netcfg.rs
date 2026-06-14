@@ -18,6 +18,7 @@ const Q_DHCP: u8 = 1;
 const Q_DNS_ARP: u8 = 2;
 const Q_DNS: u8 = 3;
 const Q_DONE: u8 = 4;
+const Q_DHCP_REQ: u8 = 5; // awaiting ACK after sending REQUEST (full DORA)
 
 const DHCP_XID: u32 = 0x5247_4F31; // "RGO1"
 const DNS_TXID: u16 = 0x5255; // "RU"
@@ -247,12 +248,56 @@ pub(crate) unsafe fn udp_input(ip: &[u8]) {
                 && payload[0] == 2
                 && payload[4..8] == DHCP_XID.to_be_bytes()
             {
+                let yiaddr = [payload[16], payload[17], payload[18], payload[19]];
+                let ip4 = u32::from_be_bytes(yiaddr);
+                QUERY.result = ip4 as u64;
+                serial_write(b"DHCP: offer ip=0x");
+                serial_write_hex(ip4 as u64);
+                serial_write(b"\n");
+                // Full DORA: confirm the lease with a REQUEST (option 50 =
+                // offered IP, option 54 = server id = the slirp gateway).
+                let mut q = [0u8; 300];
+                q[0] = 1;
+                q[1] = 1;
+                q[2] = 6;
+                q[4..8].copy_from_slice(&DHCP_XID.to_be_bytes());
+                q[10] = 0x80;
+                q[28..34].copy_from_slice(&net::net_mac());
+                q[236..240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]);
+                q[240] = 53;
+                q[241] = 1;
+                q[242] = 3; // REQUEST
+                q[243] = 50;
+                q[244] = 4;
+                q[245..249].copy_from_slice(&yiaddr);
+                q[249] = 54;
+                q[250] = 4;
+                q[251..255].copy_from_slice(&GATEWAY_IP);
+                q[255] = 255;
+                let _ = udp_tx(
+                    &[0xFF; 6],
+                    &[0, 0, 0, 0],
+                    &[255, 255, 255, 255],
+                    DHCP_CLIENT_PORT,
+                    67,
+                    &q,
+                );
+                QUERY.state = Q_DHCP_REQ;
+                serial_write(b"DHCP: request sent\n");
+            }
+        }
+        Q_DHCP_REQ if dport == DHCP_CLIENT_PORT => {
+            // BOOTREPLY ACK with our xid: the lease is confirmed.
+            if payload.len() >= 240
+                && payload[0] == 2
+                && payload[4..8] == DHCP_XID.to_be_bytes()
+            {
                 let ip4 = u32::from_be_bytes([
                     payload[16], payload[17], payload[18], payload[19],
                 ]);
                 QUERY.result = ip4 as u64;
                 QUERY.state = Q_DONE;
-                serial_write(b"DHCP: offer ip=0x");
+                serial_write(b"DHCP: ack ip=0x");
                 serial_write_hex(ip4 as u64);
                 serial_write(b"\n");
             }
