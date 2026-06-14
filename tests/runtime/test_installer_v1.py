@@ -45,12 +45,16 @@ def _boot_with_target(timeout=40, target_seed=None):
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
         "-cdrom", iso,
         "-boot", "d",
-        # disk0 = boot/app-region disk (the FIRST virtio-blk).
+        # disk0 = boot/app-region disk (the FIRST virtio-blk). Pin PCI slots so
+        # disk0 always enumerates before disk1 — QEMU does NOT guarantee command
+        # -line order == PCI device order, and the installer targets the SECOND
+        # virtio-blk, so without pinning the target could non-deterministically be
+        # the boot disk (a real source of flakiness).
         "-drive", f"file={boot_disk},if=none,id=disk0,format=raw",
-        "-device", "virtio-blk-pci,drive=disk0,disable-modern=on",
+        "-device", "virtio-blk-pci,drive=disk0,disable-modern=on,addr=0x05",
         # disk1 = blank install target (the SECOND virtio-blk).
         "-drive", f"file={target_disk},if=none,id=disk1,format=raw",
-        "-device", "virtio-blk-pci,drive=disk1,disable-modern=on",
+        "-device", "virtio-blk-pci,drive=disk1,disable-modern=on,addr=0x06",
         "-netdev", "user,id=n0",
         "-device", "virtio-net-pci,netdev=n0,disable-modern=on",
         "-serial", f"tcp:127.0.0.1:{serial_port},server=on,wait=off",

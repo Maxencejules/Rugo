@@ -87,14 +87,16 @@ single safe boot-verified slice and several have hard prerequisites.
    (command/event rings, port reset, device enumeration) and a HID boot-protocol
    driver. DMA pool = a contiguous-frame allocator over the PMM (the bitmap
    allocator is single-frame today).
-3. **III input + compositor/window-server + richer audio — PS/2 mouse bring-up done.**
-   The mouse device is now reset + identified at boot (`mouse_v1.md`:
-   `MOUSE: reset bat=0xAA id=0x00 ok`). What remains: enabling continuous data
+3. **III input + compositor/window-server + richer audio — mouse + z-order compositor done.**
+   The mouse device is reset + identified at boot (`mouse_v1.md`), and the
+   compositor composites multiple surfaces to the framebuffer in **z-order**
+   (`compositor_v1.md`: a red window drawn over a blue background, both verified
+   present via QMP screendump). What remains: enabling continuous mouse data
    reporting + parsing movement/button packets needs QMP `input-send-event`
-   injection to exercise (the `_boot` fixture only feeds a fixed keyboard string;
-   add a QMP-capable boot helper like `tests/runtime/test_smp_runtime_v1.py`
-   builds its own QEMU cmd), then an input event queue. The window-server needs
-   concurrent processes (have) + shared-memory surfaces + that input queue.
+   injection (the `_boot` fixture only feeds a fixed keyboard string); per-client
+   **shared-memory pixel surfaces** (vs v1 solid-color rects), damage regions,
+   alpha; a standing compositor **process** owning the FB; and an input event
+   queue routing clicks to the top window.
 4. **V.11 dynamic linker / .so** — **blocked** on the PE→ELF toolchain: mingw’s
    refptr/auto-import + the homemade `tools/pe_to_elf_v1.py` break C binaries that
    cross 2 pages (proved via `page3probe`: the kernel handles 3-page apps; the

@@ -4978,6 +4978,11 @@ cfg_r4! {
         0
     }
 
+    /// Maximum surfaces a single compositor `compose` call (sys_ioctl op 4) may
+    /// blit in one frame.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const COMPOSE_MAX: usize = 16;
+
     /// sys_ioctl (ABI v3.2 id 56, generic device control): op 1 = framebuffer
     /// blit. a2 packs the rectangle as x<<48 | y<<32 | w<<16 | h (each u16);
     /// a3 is the 32-bpp XRGB color. Returns 0 on success, -1 if no
@@ -5059,6 +5064,67 @@ cfg_r4! {
                 // away; the read-back above already proved the speaker enabled.
                 arch_x86::outb(0x61, prev & !0x03);
                 gate as u64
+            }
+            // op 4 = compositor compose (full-os guide Part III window-server):
+            // composite a client-supplied list of surfaces to the framebuffer in
+            // z-order (painter's algorithm — lowest z first / background, highest
+            // z last / on top). a2 = pointer to `a3` surface descriptors (max 16);
+            // each descriptor is two u64s: [x<<48|y<<32|w<<16|h] then
+            // [color(low 32) | z(high 32)]. Returns the number of surfaces blitted.
+            4 => {
+                let count = a3 as usize;
+                if count == 0 || count > COMPOSE_MAX {
+                    return ERR;
+                }
+                let bytes = count * 16;
+                let mut raw = [0u8; COMPOSE_MAX * 16];
+                if copyin_user(&mut raw[..bytes], a2, bytes).is_err() {
+                    return ERR;
+                }
+                let mut geom = [0u64; COMPOSE_MAX];
+                let mut color = [0u32; COMPOSE_MAX];
+                let mut z = [0u32; COMPOSE_MAX];
+                let mut order = [0usize; COMPOSE_MAX];
+                let mut i = 0usize;
+                while i < count {
+                    let o = i * 16;
+                    let w0 = u64::from_le_bytes(raw[o..o + 8].try_into().unwrap());
+                    let w1 = u64::from_le_bytes(raw[o + 8..o + 16].try_into().unwrap());
+                    geom[i] = w0;
+                    color[i] = (w1 & 0xFFFF_FFFF) as u32;
+                    z[i] = (w1 >> 32) as u32;
+                    order[i] = i;
+                    i += 1;
+                }
+                // Stable insertion-sort of the draw order by z ascending. Stable
+                // (shift only on strictly-greater z) so equal-z surfaces keep
+                // submission order: earlier-submitted drawn first, later on top.
+                let mut a = 1usize;
+                while a < count {
+                    let cur = order[a];
+                    let mut b = a;
+                    while b > 0 && z[order[b - 1]] > z[cur] {
+                        order[b] = order[b - 1];
+                        b -= 1;
+                    }
+                    order[b] = cur;
+                    a += 1;
+                }
+                let mut painted = 0u64;
+                let mut idx = 0usize;
+                while idx < count {
+                    let s = order[idx];
+                    let g = geom[s];
+                    let x = (g >> 48) & 0xFFFF;
+                    let y = (g >> 32) & 0xFFFF;
+                    let w = (g >> 16) & 0xFFFF;
+                    let h = g & 0xFFFF;
+                    if fb::fb_blit_rect(x, y, w, h, color[s]) {
+                        painted += 1;
+                    }
+                    idx += 1;
+                }
+                painted
             }
             _ => ERR,
         }
@@ -6956,6 +7022,12 @@ unsafe fn installer_selftest() {
 unsafe fn install_target_provisionable() -> bool {
     const MAGIC: &[u8; 8] = b"RUGOINST";
     let dp = BLK_DATA_PAGE.0.as_mut_ptr();
+    // The FIRST read right after switching/re-initializing the virtio queue on a
+    // freshly bound device returns stale/empty data (the device reports success
+    // but does not fill the buffer). Do a throwaway warm-up read, then read for
+    // real — otherwise a non-blank target would be misread as blank and clobbered.
+    core::ptr::write_bytes(dp, 0, 512);
+    let _ = virtio_blk_io(false, 0, 512);
     core::ptr::write_bytes(dp, 0, 512);
     if !virtio_blk_io(false, 0, 512) {
         return false; // cannot read -> do not write (safe)
