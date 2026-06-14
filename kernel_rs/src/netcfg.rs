@@ -1541,6 +1541,159 @@ pub(crate) unsafe fn udp_echo_selftest() -> u64 {
     1
 }
 
+/// IPv6 UDP checksum (mandatory, unlike IPv4): over the IPv6 pseudo-header
+/// (src+dst+upper-layer-length+next-header 17) + the UDP header/payload. A
+/// computed value of 0 is transmitted as 0xFFFF (RFC 768/2460).
+fn udp6_checksum(src: &[u8; 16], dst: &[u8; 16], udp: &[u8]) -> u16 {
+    let mut s = 0u32;
+    csum_words(&mut s, src);
+    csum_words(&mut s, dst);
+    s += udp.len() as u32;
+    s += 17;
+    csum_words(&mut s, udp);
+    let ck = csum_fold(s);
+    if ck == 0 {
+        0xFFFF
+    } else {
+        ck
+    }
+}
+
+/// Build an IPv6 UDP echo reply (port 7) for a received Ethernet frame addressed
+/// to the guest's link-local address. Swaps MACs/addresses/ports, echoes the
+/// payload, and computes the MANDATORY IPv6 UDP checksum (full-os guide Part II.6,
+/// IPv6 on the wire). Returns the reply length in `out`.
+unsafe fn build_udp6_echo_reply(req: &[u8], out: &mut [u8]) -> Option<usize> {
+    if req.len() < 14 + 40 + 8 {
+        return None;
+    }
+    if u16::from_be_bytes([req[12], req[13]]) != 0x86DD {
+        return None;
+    }
+    let ip6 = &req[14..];
+    if ip6[6] != 17 {
+        return None; // next header must be UDP
+    }
+    let g6 = guest_ip6();
+    if ip6[24..40] != g6 {
+        return None; // not addressed to us
+    }
+    let udp_off = 14 + 40;
+    if req.len() < udp_off + 8 {
+        return None;
+    }
+    if u16::from_be_bytes([req[udp_off + 2], req[udp_off + 3]]) != UDP_ECHO_PORT {
+        return None;
+    }
+    let total = req.len();
+    if total > out.len() {
+        return None;
+    }
+    out[..total].copy_from_slice(&req[..total]);
+    out[0..6].copy_from_slice(&req[6..12]); // eth dst = sender
+    out[6..12].copy_from_slice(&net::net_mac());
+    let orig_src: [u8; 16] = ip6[8..24].try_into().ok()?;
+    {
+        let oip = &mut out[14..14 + 40];
+        oip[7] = 255; // hop limit
+        oip[8..24].copy_from_slice(&g6); // src = guest
+        oip[24..40].copy_from_slice(&orig_src); // dst = sender
+    }
+    {
+        let sp = [out[udp_off], out[udp_off + 1]];
+        let dp = [out[udp_off + 2], out[udp_off + 3]];
+        out[udp_off] = dp[0]; // swap ports
+        out[udp_off + 1] = dp[1];
+        out[udp_off + 2] = sp[0];
+        out[udp_off + 3] = sp[1];
+        out[udp_off + 6] = 0; // zero checksum before computing
+        out[udp_off + 7] = 0;
+        let ck = udp6_checksum(&g6, &orig_src, &out[udp_off..total]);
+        out[udp_off + 6] = (ck >> 8) as u8;
+        out[udp_off + 7] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Live RX responder: echo IPv6 UDP datagrams sent to the guest on port 7.
+pub(crate) unsafe fn udp6_echo_input(frame: &[u8]) {
+    let mut out = [0u8; 1514];
+    if let Some(len) = build_udp6_echo_reply(frame, &mut out) {
+        let _ = net::wire_send(&out[..len]);
+        serial_write(b"UDP6: echo sent\n");
+    }
+}
+
+/// IPv6 UDP echo self-test (op 17): synthesize an IPv6/UDP datagram to the guest
+/// on port 7, run the responder, and verify the reply swaps the endpoints, echoes
+/// the payload, and carries a correct, non-zero (mandatory) UDP checksum. Returns
+/// 1 on success (full-os guide Part II.6, IPv6 on the wire).
+pub(crate) unsafe fn udp6_echo_selftest() -> u64 {
+    const PAYLOAD: &[u8; 8] = b"udp6-ech";
+    let g6 = guest_ip6();
+    let host6: [u8; 16] = [
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0x55, 0x0a, 0xff, 0xfe, 0x00, 0x02, 0x02,
+    ];
+    let mut req = [0u8; 14 + 40 + 8 + 8];
+    req[0..6].copy_from_slice(&net::net_mac());
+    req[6..12].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02]);
+    req[12] = 0x86;
+    req[13] = 0xDD;
+    {
+        let ip6 = &mut req[14..54];
+        ip6[0] = 0x60;
+        let plen = (8u16 + 8).to_be_bytes(); // UDP header + payload
+        ip6[4] = plen[0];
+        ip6[5] = plen[1];
+        ip6[6] = 17; // UDP
+        ip6[7] = 64;
+        ip6[8..24].copy_from_slice(&host6);
+        ip6[24..40].copy_from_slice(&g6);
+    }
+    {
+        let udp = &mut req[54..70];
+        udp[0] = 0xC3;
+        udp[1] = 0x50; // src port 50000
+        udp[2] = 0x00;
+        udp[3] = 0x07; // dst port 7
+        udp[4] = 0x00;
+        udp[5] = 0x10; // length 16
+        udp[8..16].copy_from_slice(PAYLOAD);
+        let ck = udp6_checksum(&host6, &g6, udp);
+        udp[6] = (ck >> 8) as u8;
+        udp[7] = (ck & 0xFF) as u8;
+    }
+    let mut out = [0u8; 1514];
+    let len = match build_udp6_echo_reply(&req, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let udp_off = 54;
+    // Ports swapped (src now 7) + payload echoed.
+    if out[udp_off] != 0x00
+        || out[udp_off + 1] != 0x07
+        || out[udp_off + 8..udp_off + 16] != *PAYLOAD
+    {
+        return 0;
+    }
+    // src = guest, dst = host.
+    if out[22..38] != g6 || out[38..54] != host6 {
+        return 0;
+    }
+    // The mandatory UDP checksum is non-zero and self-consistent: recomputing it
+    // over the reply (with the checksum field zeroed) reproduces the transmitted
+    // value.
+    let tx_ck = u16::from_be_bytes([out[udp_off + 6], out[udp_off + 7]]);
+    out[udp_off + 6] = 0;
+    out[udp_off + 7] = 0;
+    let recomputed = udp6_checksum(&g6, &host6, &out[udp_off..len]);
+    if tx_ck == 0 || recomputed != tx_ck {
+        return 0;
+    }
+    serial_write(b"UDP6: echo ok\n");
+    1
+}
+
 /// Poll (op 3): -1 while pending; the result once, then idle.
 pub(crate) unsafe fn poll_result() -> u64 {
     net::net_rx_pump();

@@ -236,8 +236,10 @@ pub(crate) unsafe fn net_rx_pump() {
                 crate::netcfg::icmp_input(&buf[..n]);
             }
         } else if ethertype == 0x86DD && n >= 54 {
-            // IPv6: answer ICMPv6 echo requests (ping6) -> reachable host.
+            // IPv6: answer ICMPv6 echo requests (ping6) + UDP echo (port 7) ->
+            // reachable host over IPv6. Each responder checks its own next-header.
             crate::netcfg::icmpv6_input(&buf[..n]);
+            crate::netcfg::udp6_echo_input(&buf[..n]);
         }
     }
 }
