@@ -51,10 +51,25 @@ Spanning all 5 guide parts:
 - **V sysinfo metrics** — `e556a92`, `sysinfo_v1.md`
 - **V lseek** — `f38b5c2`, `lseek_v1.md`
 
+- **IV.9 timerfd** — `c5854e9`, `clock_v1.md` (sys_time op 3)
+
 Key infra unlocked: per-task CR3 + private address spaces; CoW refcounts;
-PTE_COW software bit; a real scheduler **idle loop** (`r4_idle_loop` +
-`r4_enter_idle_or_done` + `r4_wake_sleepers`) that parks safely when only a
-timed wakeup is pending — the prerequisite for nanosleep/timerfd/blocking reads.
+PTE_COW software bit; a CoW-aware user-write path (copyout breaks CoW); a real
+scheduler **idle loop** (`r4_idle_loop` + `r4_enter_idle_or_done` +
+`r4_wake_sleepers`) that parks safely when only a timed wakeup is pending — the
+prerequisite for nanosleep/timerfd/blocking reads.
+
+## Verification & hardening
+
+- Full `make test-qemu` gate: **854 passed** across all ~50 lanes (run twice;
+  once after the slices, once after the review fixes — no regressions).
+- **Adversarial review** (ultracode review→verify workflow over the diff) found
+  **7 real latent bugs** the boot tests never exercised — all fixed in `0047e55`:
+  nanosleep RAX clobber, fork promoting RO pages, waitpid status cross-AS write
+  (+ a CoW-aware user-write path), futex wake(0) aliasing, IPC cross-AS delivery,
+  orphan clone-zombie leak, an ABI-doc register error. Regression: `test-waitpid-v1`.
+- Lesson: boot-marker tests prove it boots, not memory/concurrency safety; run an
+  adversarial review over subtle memory/scheduler code.
 
 ## Remaining (large subsystems — focused sessions, careful regression mgmt)
 
