@@ -88,6 +88,14 @@ struct TcpConn {
     // segment and halves ssthresh.
     cwnd: u32,
     ssthresh: u32,
+    // Fast retransmit (RFC 5681 §3.2): consecutive duplicate ACKs for the
+    // outstanding segment; the 3rd triggers an immediate retransmit + fast
+    // recovery, without waiting for the RTO.
+    dup_acks: u32,
+    // Set once the outstanding segment has been retransmitted by fast retransmit
+    // (rt_retries stays 0 so fast retransmit is distinguishable from an RTO
+    // timeout). Karn: a re-sent segment's ACK must not produce an RTT sample.
+    rt_resent: bool,
 }
 
 static mut CONN: TcpConn = TcpConn {
@@ -119,7 +127,17 @@ static mut CONN: TcpConn = TcpConn {
     rt_send_tick: 0,
     cwnd: TCP_IW,
     ssthresh: TCP_INIT_SSTHRESH,
+    dup_acks: 0,
+    rt_resent: false,
 };
+
+/// Congestion control on three duplicate ACKs (RFC 5681 §3.2, fast recovery):
+/// set ssthresh to half the window (floored at 2·SMSS) and inflate cwnd to
+/// ssthresh + 3·SMSS for the three segments that left the network.
+unsafe fn cc_fast_recovery() {
+    CONN.ssthresh = (CONN.cwnd / 2).max(2 * TCP_MSS);
+    CONN.cwnd = CONN.ssthresh + 3 * TCP_MSS;
+}
 
 /// Congestion control on a cumulative ACK of `acked` new data bytes (RFC 5681).
 /// In slow start (cwnd < ssthresh) cwnd grows by up to one SMSS per ACK
@@ -255,6 +273,8 @@ unsafe fn tcp_rt_arm(flags: u8, seq: u32, payload: &[u8]) {
     CONN.rt_ticks_left = CONN.rto_ticks;
     CONN.rt_retries = 0;
     CONN.rt_send_tick = TCP_TICK;
+    CONN.dup_acks = 0; // a fresh segment starts a new duplicate-ACK run
+    CONN.rt_resent = false; // not yet retransmitted, so its ACK can sample RTT
 }
 
 /// Fold one RTT measurement `m` (in ticks) into SRTT/RTTVAR and recompute the
@@ -283,7 +303,7 @@ unsafe fn tcp_rtt_update(m: u32) {
 /// Clear the retransmit timer once the peer's cumulative ACK covers the whole
 /// outstanding segment. Uses wrapping sequence arithmetic so it is correct
 /// across the 32-bit wrap.
-unsafe fn tcp_rt_ack(ack: u32) {
+unsafe fn tcp_rt_ack(ack: u32, is_pure_ack: bool) {
     if !CONN.rt_active {
         return;
     }
@@ -296,9 +316,10 @@ unsafe fn tcp_rt_ack(ack: u32) {
     let dist = ack.wrapping_sub(CONN.rt_seq);
     if dist >= span && dist < 0x8000_0000 {
         // Karn's algorithm: only sample RTT from a segment that was sent exactly
-        // once (rt_retries == 0). A retransmitted segment's ACK is ambiguous
-        // (which transmission did it acknowledge?), so it must not update SRTT.
-        if CONN.rt_retries == 0 {
+        // once. A segment retransmitted by EITHER an RTO timeout (rt_retries > 0)
+        // OR fast retransmit (rt_resent) has an ambiguous ACK, so it must not
+        // update SRTT.
+        if CONN.rt_retries == 0 && !CONN.rt_resent {
             let m = (TCP_TICK.wrapping_sub(CONN.rt_send_tick)) as u32;
             tcp_rtt_update(m);
         }
@@ -310,6 +331,25 @@ unsafe fn tcp_rt_ack(ack: u32) {
         CONN.snd_una = CONN.rt_seq.wrapping_add(span);
         CONN.rt_active = false;
         CONN.rt_retries = 0;
+        CONN.dup_acks = 0; // new data acked: reset the duplicate run
+    } else if is_pure_ack && ack == CONN.snd_una {
+        // Duplicate ACK (RFC 5681 §2: a true dup ACK carries NO data and re-acks
+        // the same point while the outstanding segment is still missing). The 3rd
+        // triggers fast retransmit + fast recovery (§3.2) — re-send immediately
+        // rather than waiting for the RTO. A data-carrying segment with the same
+        // ack is NOT a dup ACK (is_pure_ack gates this), so a full-duplex peer
+        // streaming to us does not spuriously trip fast retransmit.
+        CONN.dup_acks += 1;
+        if CONN.dup_acks == 3 {
+            cc_fast_recovery();
+            let len = CONN.rt_len;
+            let mut buf = [0u8; RT_DATA_MAX];
+            buf[..len].copy_from_slice(&CONN.rt_data[..len]);
+            CONN.rt_last_send_ok = tcp_tx(CONN.rt_flags, CONN.rt_seq, CONN.rcv_nxt, &buf[..len]);
+            CONN.rt_ticks_left = CONN.rto_ticks; // restart the RTO timer
+            CONN.rt_resent = true; // retransmitted: its ACK can no longer sample RTT (Karn)
+            serial_write(b"TCP: fast rexmit\n");
+        }
     }
 }
 
@@ -338,8 +378,9 @@ pub(crate) unsafe fn tcp_rt_tick() {
         return;
     }
     // RTO timeout: collapse the congestion window and restart slow start
-    // (RFC 5681 §3.1) before retransmitting.
+    // (RFC 5681 §3.1) before retransmitting; a timeout exits fast recovery.
     cc_on_timeout();
+    CONN.dup_acks = 0;
     let len = CONN.rt_len;
     let mut buf = [0u8; RT_DATA_MAX];
     buf[..len].copy_from_slice(&CONN.rt_data[..len]);
@@ -454,7 +495,9 @@ pub(crate) unsafe fn tcp_input(ip: &[u8]) {
     // retransmit timer (full-os guide Part II.6, TCP reliability).
     if flags & 0x10 != 0 {
         let ack = u32::from_be_bytes([t[8], t[9], t[10], t[11]]);
-        tcp_rt_ack(ack);
+        // A true duplicate ACK carries no payload (RFC 5681 §2); pass that so a
+        // data-carrying segment from a full-duplex peer is not miscounted.
+        tcp_rt_ack(ack, payload.is_empty());
         // A close() deferred while data was outstanding (so it would not clobber
         // the retransmit slot) is acted on now that the slot is clear. This ACK
         // acknowledged the DATA, not the FIN we are about to send, so return
@@ -643,6 +686,8 @@ unsafe fn conn_reset() {
     CONN.rt_send_tick = 0;
     CONN.cwnd = TCP_IW;
     CONN.ssthresh = TCP_INIT_SSTHRESH;
+    CONN.dup_acks = 0;
+    CONN.rt_resent = false;
 }
 
 /// Passive-open (listener) self-test (full-os guide Part II.6): bind a listener
@@ -1055,5 +1100,86 @@ pub(crate) unsafe fn tcp_cc_selftest() -> u64 {
 
     conn_reset();
     serial_write(b"TCP: cc ok\n");
+    1
+}
+
+/// Fast-retransmit self-test (full-os guide Part II.6, RFC 5681 §3.2) on a
+/// synthetic established connection. Proves: two duplicate ACKs do NOT
+/// retransmit; the THIRD triggers an immediate retransmit (without the RTO
+/// elapsing) and enters fast recovery (ssthresh = cwnd/2, cwnd = ssthresh +
+/// 3·SMSS). Returns 1 on success.
+pub(crate) unsafe fn tcp_fastrexmit_selftest() -> u64 {
+    if CONN.state != ST_CLOSED {
+        return 0;
+    }
+    let peer_ip = [10, 0, 2, 99];
+    CONN.state = ST_ESTABLISHED;
+    CONN.peer_ip = peer_ip;
+    CONN.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x63];
+    CONN.have_mac = true;
+    CONN.local_port = 9090; // must match rto_feed_ack's dst_port
+    CONN.remote_port = 50001;
+    CONN.snd_nxt = 0x0000_8000;
+    CONN.snd_una = 0x0000_8000;
+    CONN.rcv_nxt = 0x0000_9000;
+    CONN.rx_len = 0;
+    CONN.peer_fin = false;
+    CONN.rt_active = false;
+    CONN.rt_retries = 0;
+    CONN.pending_close = false;
+    CONN.srtt8 = 0;
+    CONN.rttvar4 = 0;
+    CONN.rto_ticks = TCP_RTO_TICKS;
+    CONN.rtt_valid = false;
+    CONN.cwnd = 8192; // a window large enough that ssthresh = cwnd/2 (not the floor)
+    CONN.ssthresh = TCP_INIT_SSTHRESH;
+
+    let data = b"fr-test!"; // 8 bytes
+    let s = CONN.snd_nxt;
+    if tcp_send(data) != data.len() || CONN.dup_acks != 0 {
+        conn_reset();
+        return 0;
+    }
+    // A DATA-carrying segment with ack == snd_una must NOT count as a duplicate
+    // ACK (RFC 5681 §2): a full-duplex peer streaming to us must not trip fast
+    // retransmit. Build a 1-byte-payload ACK at rcv_nxt with ack == s.
+    {
+        let mut dseg = [0u8; 41];
+        let mut hdr = [0u8; 40];
+        build_seg(&mut hdr, &peer_ip, 50001, 9090, CONN.rcv_nxt, s, 0x10);
+        dseg[..40].copy_from_slice(&hdr);
+        dseg[3] = 41; // IP total length: header (40) + 1 payload byte
+        dseg[40] = 0x5A; // payload
+        tcp_input(&dseg);
+        if CONN.dup_acks != 0 {
+            conn_reset();
+            return 0; // a data segment was wrongly counted as a duplicate ACK
+        }
+    }
+    // Two (pure) duplicate ACKs (ack == snd_una, no payload): no retransmit yet.
+    rto_feed_ack(&peer_ip, s);
+    rto_feed_ack(&peer_ip, s);
+    if CONN.dup_acks != 2 || CONN.rt_retries != 0 {
+        conn_reset();
+        return 0;
+    }
+    // The third duplicate ACK triggers fast retransmit + fast recovery.
+    rto_feed_ack(&peer_ip, s);
+    if CONN.dup_acks != 3 || !CONN.rt_last_send_ok {
+        conn_reset();
+        return 0;
+    }
+    // Fast recovery window: ssthresh = max(8192/2, 2·MSS) = 4096; cwnd += 3·MSS.
+    if CONN.ssthresh != 4096 || CONN.cwnd != 4096 + 3 * TCP_MSS {
+        conn_reset();
+        return 0;
+    }
+    // The retransmit happened via fast retransmit, NOT an RTO timeout.
+    if CONN.rt_retries != 0 {
+        conn_reset();
+        return 0;
+    }
+    conn_reset();
+    serial_write(b"TCP: fast rexmit ok\n");
     1
 }

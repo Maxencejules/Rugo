@@ -1235,6 +1235,184 @@ pub(crate) unsafe fn nud_selftest() -> u64 {
     }
 }
 
+// IPv6 SLAAC (full-os guide Part II.6): stateless address autoconfiguration. The
+// guest sends a Router Solicitation, and from a Router Advertisement's Prefix
+// Information option derives a global address = announced /64 prefix + the
+// interface's EUI-64 (the low 64 bits of its link-local address).
+
+/// Build a Router Solicitation (ICMPv6 type 133) to the all-routers multicast
+/// (ff02::2 / 33:33:00:00:00:02), sourced from the guest link-local with a Source
+/// Link-Layer Address option. Returns the frame length in `out`.
+unsafe fn build_router_solicit(out: &mut [u8]) -> Option<usize> {
+    let total = 14 + 40 + 16; // eth + ipv6 + (RS header 8 + SLLA option 8)
+    if out.len() < total {
+        return None;
+    }
+    let g6 = guest_ip6();
+    let mac = net::net_mac();
+    let mut all_routers = [0u8; 16];
+    all_routers[0] = 0xff;
+    all_routers[1] = 0x02;
+    all_routers[15] = 0x02; // ff02::2
+    for b in out[..total].iter_mut() {
+        *b = 0;
+    }
+    out[0] = 0x33;
+    out[1] = 0x33;
+    out[5] = 0x02; // 33:33:00:00:00:02
+    out[6..12].copy_from_slice(&mac);
+    out[12] = 0x86;
+    out[13] = 0xDD;
+    {
+        let ip6 = &mut out[14..54];
+        ip6[0] = 0x60;
+        let plen = (16u16).to_be_bytes();
+        ip6[4] = plen[0];
+        ip6[5] = plen[1];
+        ip6[6] = 58; // ICMPv6
+        ip6[7] = 255; // hop limit
+        ip6[8..24].copy_from_slice(&g6);
+        ip6[24..40].copy_from_slice(&all_routers);
+    }
+    {
+        let rs = &mut out[54..total];
+        rs[0] = 133; // Router Solicitation
+        // reserved bytes 4..8 stay zero
+        rs[8] = 1; // Source Link-Layer Address option
+        rs[9] = 1;
+        rs[10..16].copy_from_slice(&mac);
+        let ck = icmpv6_checksum(&g6, &all_routers, rs);
+        rs[2] = (ck >> 8) as u8;
+        rs[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Derive a SLAAC global address from a Router Advertisement (ICMPv6 type 134):
+/// find the Prefix Information option (type 3) and combine its /64 prefix with
+/// the guest's EUI-64 interface identifier. Returns the global address.
+unsafe fn slaac_derive_global(frame: &[u8]) -> Option<[u8; 16]> {
+    if frame.len() < 14 + 40 + 16 {
+        return None;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != 0x86DD {
+        return None;
+    }
+    let icmp_off = 14 + 40;
+    if frame[icmp_off] != 134 {
+        return None; // not a Router Advertisement
+    }
+    // RA fixed header is 16 bytes; options follow. Walk them for Prefix Info (3).
+    let mut off = icmp_off + 16;
+    while off + 2 <= frame.len() {
+        let opt_type = frame[off];
+        let opt_len = frame[off + 1] as usize; // in 8-byte units
+        if opt_len == 0 || off + opt_len * 8 > frame.len() {
+            return None;
+        }
+        if opt_type == 3 && opt_len == 4 {
+            // Prefix Information: prefix length @ off+2, prefix @ off+16 (16 bytes).
+            let prefix_len = frame[off + 2];
+            if prefix_len != 64 {
+                return None; // v1 supports a /64 prefix (the SLAAC common case)
+            }
+            let g6 = guest_ip6();
+            let mut global = [0u8; 16];
+            global[..8].copy_from_slice(&frame[off + 16..off + 24]); // /64 network
+            global[8..16].copy_from_slice(&g6[8..16]); // EUI-64 interface id
+            return Some(global);
+        }
+        off += opt_len * 8;
+    }
+    None
+}
+
+/// SLAAC self-test (op 15): the guest builds a Router Solicitation (verified
+/// wire-correct), then a synthetic Router Advertisement carrying a 2001:db8::/64
+/// Prefix Information option is processed to derive the guest's global address
+/// (prefix + EUI-64). Returns 1 on success (full-os guide Part II.6).
+pub(crate) unsafe fn slaac_selftest() -> u64 {
+    let g6 = guest_ip6();
+    let mac = net::net_mac();
+
+    // 1) Router Solicitation, verified on the wire.
+    let mut rs = [0u8; 14 + 40 + 16];
+    let rlen = match build_router_solicit(&mut rs) {
+        Some(l) => l,
+        None => return 0,
+    };
+    if rs[0] != 0x33 || rs[1] != 0x33 || rs[5] != 0x02 || rs[6..12] != mac {
+        return 0;
+    }
+    if rs[54] != 133 || rs[54 + 8] != 1 || rs[54 + 10..54 + 16] != mac {
+        return 0;
+    }
+    if rs[21] != 255 {
+        return 0; // hop limit MUST be 255
+    }
+    {
+        let mut all_routers = [0u8; 16];
+        all_routers[0] = 0xff;
+        all_routers[1] = 0x02;
+        all_routers[15] = 0x02;
+        let mut s = 0u32;
+        csum_words(&mut s, &g6);
+        csum_words(&mut s, &all_routers);
+        s += 16;
+        s += 58;
+        csum_words(&mut s, &rs[54..rlen]);
+        if csum_fold(s) != 0 {
+            return 0;
+        }
+    }
+
+    // 2) Synthesize a Router Advertisement with a 2001:db8::/64 prefix.
+    let prefix: [u8; 16] = [
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    let mut ra = [0u8; 14 + 40 + 16 + 32];
+    let ra_total = ra.len();
+    ra[0..6].copy_from_slice(&mac); // to the guest
+    ra[6..12].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x01]); // a router
+    ra[12] = 0x86;
+    ra[13] = 0xDD;
+    ra[14] = 0x60;
+    {
+        let plen = ((16 + 32) as u16).to_be_bytes();
+        ra[18] = plen[0];
+        ra[19] = plen[1];
+    }
+    ra[20] = 58; // ICMPv6
+    ra[21] = 255;
+    {
+        let mut router6 = [0u8; 16];
+        router6[0] = 0xfe;
+        router6[1] = 0x80;
+        router6[15] = 0x01; // fe80::1
+        ra[22..38].copy_from_slice(&router6);
+    }
+    ra[38..54].copy_from_slice(&g6); // dst = guest
+    let ra_icmp = 14 + 40;
+    ra[ra_icmp] = 134; // Router Advertisement
+    // RA fixed fields (cur hop limit, flags, lifetime, reachable, retrans) left 0.
+    let po = ra_icmp + 16; // Prefix Information option
+    ra[po] = 3; // type
+    ra[po + 1] = 4; // length (4 * 8 = 32 bytes)
+    ra[po + 2] = 64; // prefix length
+    ra[po + 16..po + 32].copy_from_slice(&prefix);
+
+    let global = match slaac_derive_global(&ra[..ra_total]) {
+        Some(g) => g,
+        None => return 0,
+    };
+    // The derived address must be the /64 prefix + the guest's EUI-64.
+    if global[..8] != prefix[..8] || global[8..16] != g6[8..16] {
+        return 0;
+    }
+    serial_write(b"SLAAC: global ok\n");
+    1
+}
+
 const UDP_ECHO_PORT: u16 = 7;
 
 /// Build a UDP echo reply for a received Ethernet frame: IPv4/UDP to the guest

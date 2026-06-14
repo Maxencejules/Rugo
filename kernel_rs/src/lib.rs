@@ -49,6 +49,8 @@ pub(crate) mod cache;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod dma;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod sha256;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod mount;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tty;
@@ -4026,6 +4028,8 @@ cfg_r4! {
             12 => tcp::tcp_cc_selftest(),
             13 => net::route_selftest(),
             14 => netcfg::nud_selftest(),
+            15 => netcfg::slaac_selftest(),
+            16 => tcp::tcp_fastrexmit_selftest(),
             _ => ERR,
         }
     }
@@ -9989,6 +9993,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = tcp::tcp_cc_selftest();
         let _ = net::route_selftest();
         let _ = netcfg::nud_selftest();
+        let _ = netcfg::slaac_selftest();
+        let _ = tcp::tcp_fastrexmit_selftest();
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
@@ -9996,6 +10002,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
+        let _ = sha256::sha256_selftest(); // full-os Part IV.10: SHA-256 + measured boot
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;

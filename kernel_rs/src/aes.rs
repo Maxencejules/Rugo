@@ -31,6 +31,11 @@ static SBOX: [u8; 256] = [
 
 static RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36];
 
+/// The AES S-box as a byte slice (a fixed kernel component to measure at boot).
+pub fn sbox_bytes() -> &'static [u8; 256] {
+    &SBOX
+}
+
 /// Multiply by 2 in GF(2^8) (xtime).
 #[inline]
 fn xtime(b: u8) -> u8 {

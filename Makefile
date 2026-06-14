@@ -1031,6 +1031,15 @@ test-gpt-v1: image-go
 test-mount-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_mount_v1.py -v --junitxml=$(OUT)/pytest-mount-v1.xml
 
+test-sha256-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_sha256_v1.py -v --junitxml=$(OUT)/pytest-sha256-v1.xml
+
+test-slaac-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_slaac_v1.py -v --junitxml=$(OUT)/pytest-slaac-v1.xml
+
+test-tcp-fastrexmit-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_fastrexmit_v1.py -v --junitxml=$(OUT)/pytest-tcp-fastrexmit-v1.xml
+
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
 
