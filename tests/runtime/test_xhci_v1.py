@@ -91,8 +91,13 @@ def test_xhci_controller_detected(find_in_order):
         "PCI: enumerate bus0",
         # The xHCI controller is discovered and its capability registers read.
         "XHCI: found ver=0x0000000000000100",
+        # The controller is reset + started, the command/event rings are set up,
+        # and a No-Op command completes with a Success event (the ring DMA
+        # handshake works end to end).
+        "XHCI: noop ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "XHCI: none" not in out
     assert "XHCI: bar" not in out  # neither "bar not mmio" nor "bar unassigned"
+    assert "XHCI: noop fail" not in out

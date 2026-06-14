@@ -111,8 +111,10 @@ single safe boot-verified slice and several have hard prerequisites.
    first-fit `dma_alloc`/`dma_free`, self-test `DMA: selftest ok`), and reads PCI
    config space through **PCIe ECAM** (`ecam_v1.md`: the memory-mapped window from
    the q35 PCIEXBAR, cross-checked against the legacy I/O path). What remains: an
-   XHCI controller **driver** (command/event rings, port reset, device
-   enumeration) + a HID boot-protocol driver. The **e1000 TX ring driver** is done
+   the XHCI **command/event-ring handshake** is done (`xhci_v1.md`: reset + run +
+   DCBAA/command-ring/event-ring setup + a No-Op command that completes with a
+   Success event); port reset + device enumeration + a HID boot-protocol driver
+   remain. The **e1000 TX ring driver** is done
    (`e1000_v1.md`: a descriptor ring on the DMA pool transmits a frame and the
    device's Done bit confirms it); the e1000 **RX** ring + interrupt-driven
    completion, and migrating the virtio/NVMe probes onto `dma_alloc` + routing all

@@ -30,21 +30,39 @@ function whose class code is **Serial Bus (0x0C) / USB (0x03) / xHCI (0x30)**
 
 When no xHCI controller is present (the default lane), it reports `XHCI: none`.
 
+## Controller bring-up + command/event ring (`xhci_ring_selftest`)
+
+On detection the kernel also brings the controller up and exercises the
+command/event-ring DMA handshake — the core of an xHCI driver:
+
+- maps 32 KiB of the BAR (`mmio_map_region`) covering the operational registers
+  (@CAPLENGTH), the runtime registers (@RTSOFF) and the doorbells (@DBOFF);
+- **stops + resets** the controller (USBCMD.RUN→0 then HCRST), waiting for
+  HCHalted, the reset to clear, and the Controller-Not-Ready bit to clear;
+- programs **MaxSlotsEn** (CONFIG), the **DCBAA** (DCBAAP), the **command ring**
+  (CRCR | RCS), and the **event ring** + ERST + interrupter 0
+  (ERSTSZ/ERSTBA/ERDP) — all in DMA-pool pages ([`dma_v1.md`](dma_v1.md));
+- **runs** the controller (USBCMD.RUN), enqueues a **No-Op command** TRB (type
+  23) with the producer cycle bit, and rings the command doorbell;
+- polls the event ring for a **Command Completion Event** (type 33) with the
+  cycle bit and a **Success** completion code — `XHCI: noop ok`.
+
 ## v1 boundary / carry-forward
 
-- **Detection + capability read only.** No controller reset/run, no command or
-  event rings, no DCBAA/scratchpad allocation, no port reset, and no device
-  enumeration (slot enable, address device, descriptor fetch). Those, plus a HID
-  boot-protocol driver for a USB keyboard/mouse, are the next steps.
-- `mmio_map_4k` maps a single 4 KiB page (enough for the capability registers).
-  The operational registers (at CAPLENGTH offset) and the runtime/doorbell
-  regions would need a larger / multi-page mapping for a full driver.
+- **Detection + capability read + the command/event-ring handshake.** A No-Op
+  command round-trips through the controller. What remains: port reset + device
+  enumeration (Enable Slot, Address Device, descriptor fetch), the transfer rings,
+  and a **HID boot-protocol** driver for a USB keyboard/mouse.
+- The event ring uses a single ERST segment + polled completion (no MSI-X
+  interrupt-driven event delivery yet).
 
 ## Acceptance
 
 `make test-xhci-v1`: the go lane boots with `-device qemu-xhci`; the transcript
-shows the controller in the PCI enumeration (class `0x0C03`) and then
+shows the controller in the PCI enumeration (class `0x0C03`), then
 `XHCI: found ver=0x0000000000000100 caplen=0x0000000000000040 ports=0x...08
 slots=0x...40` (xHCI 1.0, CAPLENGTH 0x40, 8 root ports, 64 device slots — the
-qemu-xhci model), reaching `GOINIT: result shutdown-clean` and `RUGO: halt ok`,
+qemu-xhci model), then `XHCI: noop ok` (the controller round-tripped a No-Op
+command through the command/event rings), reaching `GOINIT: result shutdown-clean`
+and `RUGO: halt ok`,
 with no page fault and no `XHCI: none` / `XHCI: bar ...` error.
