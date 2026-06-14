@@ -956,6 +956,9 @@ test-installer-v1: image-go
 test-compositor-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_compositor_v1.py -v --junitxml=$(OUT)/pytest-compositor-v1.xml
 
+test-uefi-boot-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_uefi_boot_v1.py -v --junitxml=$(OUT)/pytest-uefi-boot-v1.xml
+
 test-tcp-listen-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp-listen-v1.xml
 
