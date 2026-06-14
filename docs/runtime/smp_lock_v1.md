@@ -61,6 +61,26 @@ only reaches the BSP. The timer fires on vector 241
 (`isr_stub_241` → `lapic_timer_handler`: tick + EOI). The BSP confirms every
 AP's local timer fired (`SMP: ap timers ok`).
 
+## Hardening (adversarial review)
+
+Three latent defects found by adversarial review of the triad and fixed:
+- **Spurious-vector gate present in every lane.** `x2apic_enable` points the
+  LAPIC Spurious-Interrupt-Vector register at vector 65, so its IDT gate is now
+  installed **unconditionally** in `idt_init` (previously feature-gated to the
+  native/test lanes). The `-smp 4` test boots the base `os.iso`; a spurious
+  LAPIC delivery there would otherwise hit a not-present gate (#NP→#DF→teardown).
+  In the base lane vector 65 dispatches to a no-op + `iretq` (a spurious
+  interrupt requires no EOI).
+- **Legal x2APIC mode transition.** `IA32_APIC_BASE` is now written in two steps
+  (set global-enable bit 11, then x2APIC bit 10) — the SDM forbids a direct
+  disabled→x2APIC write. QEMU+Limine hand over an already-xAPIC LAPIC, but the
+  code no longer depends on that.
+- **No race on the lock-count read.** The BSP reads the deliberately non-atomic
+  `SMP_GUARDED` only on the success path (`APS_ONLINE >= expected`), where each
+  AP's SeqCst check-in establishes happens-before; the bounded-spin timeout path
+  reports `SMP: lock count timeout FAIL` without dereferencing a counter an AP
+  might still be writing.
+
 ## v1 boundary / carry-forward
 
 - The spinlock and IPI are exercised by the boot self-test; the spinlock is

@@ -50,14 +50,22 @@ unsafe fn wrmsr(msr: u32, val: u64) {
                      in("edx") (val >> 32) as u32, options(nomem, nostack));
 }
 
-/// Enable x2APIC mode + software-enable the local APIC (spurious vector 65,
-/// which already has an IDT entry). Requires CPU x2APIC support (the SMP test
-/// boots `-cpu qemu64,+x2apic`). Called per-CPU only when SMP is active.
+/// Enable x2APIC mode + software-enable the local APIC. The spurious vector is
+/// 65, whose IDT gate is installed unconditionally in `idt_init` (so a spurious
+/// delivery always lands on a present gate, in every lane). Requires CPU x2APIC
+/// support (the SMP test boots `-cpu qemu64,+x2apic`). Called per-CPU only when
+/// SMP is active.
 unsafe fn x2apic_enable() {
     const IA32_APIC_BASE: u32 = 0x1B;
     const X2APIC_SVR: u32 = 0x80F;
     let base = rdmsr(IA32_APIC_BASE);
-    wrmsr(IA32_APIC_BASE, base | (1 << 10) | (1 << 11)); // x2APIC + global enable
+    // The SDM permits only disabled(00)->xAPIC(10)->x2APIC(11); a direct
+    // disabled->x2APIC write #GPs. Set the global-enable bit (11) first, then
+    // the x2APIC bit (10), so the transition is legal regardless of the state
+    // the firmware/bootloader handed us (QEMU+Limine arrive in xAPIC mode, but
+    // do not depend on it).
+    wrmsr(IA32_APIC_BASE, base | (1 << 11)); // ensure xAPIC global-enable
+    wrmsr(IA32_APIC_BASE, base | (1 << 11) | (1 << 10)); // then enable x2APIC
     wrmsr(X2APIC_SVR, (1 << 8) | 65); // APIC software-enable + spurious vector
 }
 
@@ -217,18 +225,28 @@ pub fn smp_init() {
             core::hint::spin_loop();
             spins += 1;
         }
+        let online = APS_ONLINE.load(Ordering::SeqCst);
         serial_write(b"SMP: aps online=0x");
-        serial_write_hex(APS_ONLINE.load(Ordering::SeqCst));
+        serial_write_hex(online);
         serial_write(b"\n");
         // Verify the spinlock serialized every CPU: total must be cpus*ITERS.
-        let total = core::ptr::read_volatile(core::ptr::addr_of!(SMP_GUARDED));
-        let want = count.wrapping_mul(SMP_LOCK_ITERS);
-        serial_write(b"SMP: lock count=0x");
-        serial_write_hex(total);
-        if total == want {
-            serial_write(b" ok\n");
+        // Read the deliberately non-atomic SMP_GUARDED ONLY once every AP has
+        // checked in: each AP does its SeqCst APS_ONLINE increment AFTER its
+        // locked increments, so a successful wait establishes happens-before and
+        // no AP is still writing the counter. On the bounded-spin timeout path
+        // an AP could still be hammering, so this plain read would race it.
+        if online >= expected {
+            let total = core::ptr::read_volatile(core::ptr::addr_of!(SMP_GUARDED));
+            let want = count.wrapping_mul(SMP_LOCK_ITERS);
+            serial_write(b"SMP: lock count=0x");
+            serial_write_hex(total);
+            if total == want {
+                serial_write(b" ok\n");
+            } else {
+                serial_write(b" FAIL\n");
+            }
         } else {
-            serial_write(b" FAIL\n");
+            serial_write(b"SMP: lock count timeout FAIL\n");
         }
         // Inter-processor interrupt: only when SMP is actually present, so the
         // default -smp 1 lanes never enable the LAPIC on the BSP.

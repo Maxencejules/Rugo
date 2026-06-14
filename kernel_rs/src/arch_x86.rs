@@ -225,7 +225,9 @@ pub(crate) unsafe fn idt_init() {
         fn isr_stub_33();
         #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
         fn isr_stub_64();
-        #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+        // isr_stub_65 doubles as the LAPIC spurious-interrupt vector (set by
+        // smp::x2apic_enable in every SMP lane), so its gate must exist
+        // unconditionally — not only in the native/test lanes.
         fn isr_stub_65();
         fn isr_stub_128();
         fn isr_stub_240();
@@ -240,10 +242,12 @@ pub(crate) unsafe fn idt_init() {
     idt_set_gate(32, isr_stub_32 as *const () as u64);
     idt_set_gate(33, isr_stub_33 as *const () as u64);
     #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
-    {
-        idt_set_gate(64, isr_stub_64 as *const () as u64);
-        idt_set_gate(65, isr_stub_65 as *const () as u64);
-    }
+    idt_set_gate(64, isr_stub_64 as *const () as u64);
+    // Vector 65 is the LAPIC spurious-interrupt sink (smp::x2apic_enable points
+    // SVR here on every CPU that software-enables the APIC), so its gate must be
+    // present in every lane — including the base `os.iso` the `-smp 4` test boots.
+    // A spurious delivery to a not-present gate would #NP→#DF→teardown an AP.
+    idt_set_gate(65, isr_stub_65 as *const () as u64);
 
     let handler = isr_stub_128 as *const () as u64;
     IDT[128] = IdtEntry {
