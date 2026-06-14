@@ -220,6 +220,10 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                 sys_proc_ctl(frame, arg1, arg2, arg3);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            52 => {
+                sys_futex(frame, arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             53 => {
                 *frame.add(14) = sys_time(arg1, arg2);
             }

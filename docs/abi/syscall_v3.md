@@ -34,6 +34,8 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   caller, returns child tid to the parent and 0 to the child; op 2 = clone
   — new thread sharing the caller's address space, `rdi` = entry; contract
   in `docs/runtime/fork_v1.md`);
+  `52` = `sys_futex` (op 1 = wait(`rsi`=uaddr, `rdx`=val), op 2 = wake(uaddr,
+  n); contract in `docs/runtime/futex_v1.md`);
   `53` = `sys_time` (op 1 = clock_gettime(`rsi`=clockid: 0 = MONOTONIC
   nanoseconds since boot, 1 = REALTIME seconds since the Unix epoch);
   contract in `docs/runtime/clock_v1.md`);

@@ -2724,6 +2724,10 @@ cfg_r4! {
         // syscall N permitted. u64::MAX = unrestricted; narrowed monotonically
         // by sys_sandbox. Syscalls 0 (debug_write) and 2 (exit) stay allowed.
         sec_filter_mask: u64,
+        // Futex wait address (full-os guide Part I.3 concurrency). Non-zero
+        // while the task is Blocked in sys_futex wait; the matching wake
+        // clears it and makes the task Ready.
+        futex_uaddr: u64,
     }
 
     impl R4Task {
@@ -2760,6 +2764,7 @@ cfg_r4! {
             pml4_phys: 0,
             heap_brk: 0,
             sec_filter_mask: u64::MAX,
+            futex_uaddr: 0,
         };
     }
 
@@ -2857,6 +2862,7 @@ cfg_r4! {
         } else {
             R4_TASKS[parent_tid].sec_filter_mask
         };
+        R4_TASKS[tid].futex_uaddr = 0;
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -3169,15 +3175,32 @@ cfg_r4! {
             // table first so we are not standing on the page tree we free.
             let cur_pml4 = R4_TASKS[cur].pml4_phys;
             if cur_pml4 != 0 && cur_pml4 != SHARED_PML4_PHYS {
-                core::arch::asm!("mov cr3, {}", in(reg) SHARED_PML4_PHYS,
-                                 options(nostack));
-                mm::address_space_release(cur_pml4);
-                R4_TASKS[cur].pml4_phys = SHARED_PML4_PHYS;
-                serial_write(b"ASRELEASE: tid=0x");
-                serial_write_hex(cur as u64);
-                serial_write(b" as=0x");
-                serial_write_hex(cur_pml4);
-                serial_write(b"\n");
+                // A cloned thread shares this private address space; only the
+                // last active thread frees it. Scan for any other live task
+                // still on the same table.
+                let mut shared = false;
+                let mut t = 0usize;
+                while t < R4_NUM_TASKS {
+                    if t != cur
+                        && R4_TASKS[t].pml4_phys == cur_pml4
+                        && !matches!(R4_TASKS[t].state, R4State::Dead | R4State::Exited)
+                    {
+                        shared = true;
+                        break;
+                    }
+                    t += 1;
+                }
+                if !shared {
+                    core::arch::asm!("mov cr3, {}", in(reg) SHARED_PML4_PHYS,
+                                     options(nostack));
+                    mm::address_space_release(cur_pml4);
+                    R4_TASKS[cur].pml4_phys = SHARED_PML4_PHYS;
+                    serial_write(b"ASRELEASE: tid=0x");
+                    serial_write_hex(cur as u64);
+                    serial_write(b" as=0x");
+                    serial_write_hex(cur_pml4);
+                    serial_write(b"\n");
+                }
             }
         }
         R4_TASKS[cur].exit_status = exit_status;
@@ -3725,7 +3748,96 @@ cfg_r4! {
         match op {
             1 => sys_fork_v1(frame),
             2 => {
-                *frame.add(14) = sys_thread_spawn_r4(a2);
+                // clone: a new thread sharing the caller's address space at
+                // entry `a2`. Unlike sys_thread_spawn_r4 this is available to
+                // any task (a thread adds no privilege) - it is how spawned
+                // apps get pthreads.
+                let entry = a2;
+                if entry == 0 || entry >= 0x0000_8000_0000_0000 {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                let tid = match r4_find_spawn_slot() {
+                    Some(t) => t,
+                    None => {
+                        *frame.add(14) = ERR;
+                        return;
+                    }
+                };
+                r4_init_task(tid, entry, r4_stack_top_for_slot(tid), R4_CURRENT);
+                R4_TASKS[tid].state = R4State::Ready;
+                R4_THREADS_CREATED += 1;
+                *frame.add(14) = tid as u64;
+            }
+            _ => {
+                *frame.add(14) = ERR;
+            }
+        }
+    }
+
+    /// sys_futex (ABI v3.2 id 52): op 1 = wait(uaddr, val) — block while the
+    /// u32 at `uaddr` still equals `val`; op 2 = wake(uaddr, n) — wake up to
+    /// `n` (0 = all) waiters on `uaddr` in the caller's address space. wait
+    /// returns 0 (woken) or 1 (value changed, did not block); wake returns
+    /// the number woken; -1 on a bad pointer / op.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_futex(frame: *mut u64, op: u64, uaddr: u64, val: u64) {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => {
+                let mut word = [0u8; 4];
+                if copyin_user(&mut word, uaddr, 4).is_err() {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                if u32::from_le_bytes(word) as u64 != (val & 0xFFFF_FFFF) {
+                    *frame.add(14) = 1; // value changed: do not block
+                    return;
+                }
+                let cur = R4_CURRENT;
+                serial_write(b"FUTEX: wait tid=0x");
+                serial_write_hex(cur as u64);
+                serial_write(b"\n");
+                *frame.add(14) = 0; // value seen on resume after a wake
+                r4_save_frame(frame, cur);
+                R4_TASKS[cur].futex_uaddr = uaddr;
+                R4_TASKS[cur].state = R4State::Blocked;
+                R4_TASKS[cur].block_count += 1;
+                match r4_find_ready(cur) {
+                    Some(tid) => {
+                        r4_switch_to(frame, tid);
+                    }
+                    None => {
+                        serial_write(b"R4: deadlock\n");
+                        let kstack = &stack_top as *const u8 as u64;
+                        *frame.add(17) = r4_all_done as *const () as u64;
+                        *frame.add(18) = 0x08;
+                        *frame.add(19) = 0x02;
+                        *frame.add(20) = kstack;
+                        *frame.add(21) = 0x10;
+                    }
+                }
+            }
+            2 => {
+                let cur_pml4 = R4_TASKS[R4_CURRENT].pml4_phys;
+                let limit = if val == 0 { u64::MAX } else { val };
+                let mut woken = 0u64;
+                let mut t = 0usize;
+                while t < R4_NUM_TASKS && woken < limit {
+                    if matches!(R4_TASKS[t].state, R4State::Blocked)
+                        && R4_TASKS[t].futex_uaddr == uaddr
+                        && R4_TASKS[t].pml4_phys == cur_pml4
+                    {
+                        R4_TASKS[t].futex_uaddr = 0;
+                        R4_TASKS[t].state = R4State::Ready;
+                        woken += 1;
+                    }
+                    t += 1;
+                }
+                serial_write(b"FUTEX: wake n=0x");
+                serial_write_hex(woken);
+                serial_write(b"\n");
+                *frame.add(14) = woken;
             }
             _ => {
                 *frame.add(14) = ERR;
