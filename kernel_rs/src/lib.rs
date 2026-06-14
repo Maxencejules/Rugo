@@ -1129,6 +1129,38 @@ cfg_m3! {
             }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeW => 0xFFFF_FFFF_FFFF_FFFF,
+            // pty (full-os guide Part V.11): master drains slave->master, slave
+            // drains master->slave. Non-blocking v1: empty read returns 0.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::PtyMaster | M8FdKind::PtySlave => {
+                let p = M8_FD_PTY[idx] as usize;
+                if p >= PTY_MAX || !PTYS[p].active {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let is_master = matches!(M8_FD_TABLE[idx].kind, M8FdKind::PtyMaster);
+                let avail = if is_master { PTYS[p].s2m_len } else { PTYS[p].m2s_len };
+                if avail == 0 {
+                    return 0;
+                }
+                let n = avail.min(len as usize).min(PTY_CAP);
+                let mut kbuf = [0u8; PTY_CAP];
+                if is_master {
+                    kbuf[..n].copy_from_slice(&PTYS[p].s2m[..n]);
+                } else {
+                    kbuf[..n].copy_from_slice(&PTYS[p].m2s[..n]);
+                }
+                if copyout_user(buf, &kbuf[..n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                if is_master {
+                    PTYS[p].s2m.copy_within(n..avail, 0);
+                    PTYS[p].s2m_len = avail - n;
+                } else {
+                    PTYS[p].m2s.copy_within(n..avail, 0);
+                    PTYS[p].m2s_len = avail - n;
+                }
+                n as u64
+            }
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -1267,6 +1299,37 @@ cfg_m3! {
             }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeR => 0xFFFF_FFFF_FFFF_FFFF,
+            // pty (full-os guide Part V.11): master writes master->slave, slave
+            // writes slave->master. (sys_write_v1 already caps len at 256.)
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::PtyMaster | M8FdKind::PtySlave => {
+                let p = M8_FD_PTY[idx] as usize;
+                if p >= PTY_MAX || !PTYS[p].active {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let n = len as usize;
+                let mut kbuf = [0u8; 256];
+                if copyin_user(&mut kbuf[..n], buf, n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let is_master = matches!(M8_FD_TABLE[idx].kind, M8FdKind::PtyMaster);
+                if is_master {
+                    if PTYS[p].m2s_len + n > PTY_CAP {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    let off = PTYS[p].m2s_len;
+                    PTYS[p].m2s[off..off + n].copy_from_slice(&kbuf[..n]);
+                    PTYS[p].m2s_len += n;
+                } else {
+                    if PTYS[p].s2m_len + n > PTY_CAP {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    let off = PTYS[p].s2m_len;
+                    PTYS[p].s2m[off..off + n].copy_from_slice(&kbuf[..n]);
+                    PTYS[p].s2m_len += n;
+                }
+                len
+            }
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -1436,6 +1499,8 @@ cfg_m3! {
                 R4_TASKS[owner_tid].fd_count -= 1;
             }
             pipe_drop_end(idx);
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            pty_drop_end(idx);
         }
         M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
         0
@@ -1628,6 +1693,23 @@ cfg_m3! {
                         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
                         M8FdKind::TmpFile => {
                             if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 {
+                                revents |= POLLIN;
+                            }
+                            if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
+                                revents |= POLLOUT;
+                            }
+                        }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::PtyMaster | M8FdKind::PtySlave => {
+                            let p = M8_FD_PTY[idx] as usize;
+                            let readable = p < PTY_MAX
+                                && PTYS[p].active
+                                && if matches!(M8_FD_TABLE[idx].kind, M8FdKind::PtyMaster) {
+                                    PTYS[p].s2m_len > 0
+                                } else {
+                                    PTYS[p].m2s_len > 0
+                                };
+                            if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 && readable {
                                 revents |= POLLIN;
                             }
                             if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
@@ -1869,6 +1951,12 @@ cfg_m3! {
         // node index is held in M8_FD_VFS_NODE[fd].
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         TmpFile,
+        // pty pair (full-os guide Part V.11 TTY/pty): two fds over one PtyObj
+        // (two rings); the pty index is held in M8_FD_PTY[fd].
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        PtyMaster,
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        PtySlave,
     }
 
     // In-memory tmpfs for /tmp (full-os guide Part II.5). Heap-free fixed
@@ -2004,6 +2092,60 @@ cfg_m3! {
         }
         if PIPES[p].readers == 0 && PIPES[p].writers == 0 {
             PIPES[p] = PipeObj::EMPTY;
+        }
+    }
+
+    // pty pair (full-os guide Part V.11 TTY/pty): one PtyObj backs a
+    // master/slave fd pair via two rings. Bidirectional, in-memory, heap-free.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const PTY_MAX: usize = 2;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const PTY_CAP: usize = 512;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct PtyObj {
+        active: bool,
+        master_open: bool,
+        slave_open: bool,
+        m2s_len: usize,
+        s2m_len: usize,
+        m2s: [u8; PTY_CAP],
+        s2m: [u8; PTY_CAP],
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    impl PtyObj {
+        const EMPTY: Self = Self {
+            active: false,
+            master_open: false,
+            slave_open: false,
+            m2s_len: 0,
+            s2m_len: 0,
+            m2s: [0; PTY_CAP],
+            s2m: [0; PTY_CAP],
+        };
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut PTYS: [PtyObj; PTY_MAX] = [PtyObj::EMPTY; PTY_MAX];
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut M8_FD_PTY: [u8; M8_FD_MAX] = [0; M8_FD_MAX];
+
+    /// Drop one pty end on close; recycle the PtyObj when both ends are gone.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn pty_drop_end(fd_idx: usize) {
+        let p = M8_FD_PTY[fd_idx] as usize;
+        if p >= PTY_MAX || !PTYS[p].active {
+            return;
+        }
+        match M8_FD_TABLE[fd_idx].kind {
+            M8FdKind::PtyMaster => PTYS[p].master_open = false,
+            M8FdKind::PtySlave => PTYS[p].slave_open = false,
+            _ => return,
+        }
+        if !PTYS[p].master_open && !PTYS[p].slave_open {
+            PTYS[p] = PtyObj::EMPTY;
         }
     }
 
@@ -2220,6 +2362,10 @@ cfg_m3! {
             M8FdKind::TimerFd => M10_RIGHT_READ | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::TmpFile => M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::PtyMaster | M8FdKind::PtySlave => {
+                M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL
+            }
         }
     }
 
@@ -4539,6 +4685,36 @@ cfg_r4! {
                 } else {
                     ERR
                 }
+            }
+            // op 2 = openpty (full-os guide Part V.11): allocate a pty pair,
+            // return (slave_fd << 32) | master_fd.
+            2 => {
+                let mut p = 0usize;
+                while p < PTY_MAX && PTYS[p].active {
+                    p += 1;
+                }
+                if p == PTY_MAX {
+                    return ERR;
+                }
+                let mfd = m8_alloc_fd(M8FdKind::PtyMaster);
+                if mfd == 0xFFFF_FFFF_FFFF_FFFF {
+                    return ERR;
+                }
+                let sfd = m8_alloc_fd(M8FdKind::PtySlave);
+                if sfd == 0xFFFF_FFFF_FFFF_FFFF {
+                    M8_FD_TABLE[mfd as usize] = M8FdEntry::EMPTY;
+                    return ERR;
+                }
+                PTYS[p] = PtyObj::EMPTY;
+                PTYS[p].active = true;
+                PTYS[p].master_open = true;
+                PTYS[p].slave_open = true;
+                let rights = m10_rights_for_kind(M8FdKind::PtyMaster);
+                M8_FD_TABLE[mfd as usize].rights = rights;
+                M8_FD_TABLE[sfd as usize].rights = rights;
+                M8_FD_PTY[mfd as usize] = p as u8;
+                M8_FD_PTY[sfd as usize] = p as u8;
+                (sfd << 32) | mfd
             }
             _ => ERR,
         }

@@ -47,8 +47,9 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   syscalls whose bit is set; monotonic; syscalls 0 and 2 always kept;
   contract in `docs/runtime/sandbox_v1.md`);
   `56` = `sys_ioctl` (generic device control; op 1 = framebuffer blit,
-  `rsi` packs the rect x<<48|y<<32|w<<16|h, `rdx` = XRGB color; contract in
-  `docs/runtime/graphics_v1.md`);
+  `rsi` packs the rect x<<48|y<<32|w<<16|h, `rdx` = XRGB color; op 2 = openpty
+  → (slave_fd << 32) | master_fd; contract in
+  `docs/runtime/graphics_v1.md`, `docs/runtime/pty_v1.md`);
   `58` = `sys_power` (op 0 = shutdown via ACPI S5 / debug-exit, op 1 =
   reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
   `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
