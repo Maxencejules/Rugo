@@ -228,6 +228,8 @@ pub(crate) unsafe fn net_rx_pump() {
                 crate::tcp::tcp_input(ip);
             } else if ip[9] == 17 {
                 crate::netcfg::udp_input(ip);
+            } else if ip[9] == 1 {
+                crate::netcfg::icmp_input(&buf[..n]);
             }
         }
     }

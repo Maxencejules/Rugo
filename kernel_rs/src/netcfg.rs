@@ -350,6 +350,157 @@ pub(crate) unsafe fn udp_input(ip: &[u8]) {
     }
 }
 
+const ICMP_IDENT: u16 = 0x5247; // "RG"
+
+/// Build an ICMP echo *reply* for a received echo-*request* Ethernet frame.
+/// `req` is the full frame (dst MAC = us, ethertype IPv4, proto ICMP, type 8,
+/// dest IP = the guest). Writes the reply into `out` and returns its length, or
+/// `None` if `req` is not a well-formed echo request addressed to us. Shared by
+/// the live RX responder (`icmp_input`) and the self-test (`icmp_selftest`).
+unsafe fn build_icmp_echo_reply(req: &[u8], out: &mut [u8]) -> Option<usize> {
+    if req.len() < 14 + 20 + 8 {
+        return None;
+    }
+    if u16::from_be_bytes([req[12], req[13]]) != 0x0800 {
+        return None;
+    }
+    let ip = &req[14..];
+    let ihl = ((ip[0] & 0x0F) as usize) * 4;
+    if ihl < 20 || ip[9] != 1 {
+        return None;
+    }
+    if ip[16..20] != GUEST_IP {
+        return None;
+    }
+    let icmp_off = 14 + ihl;
+    if req.len() < icmp_off + 8 || req[icmp_off] != 8 {
+        return None;
+    }
+    let total = req.len();
+    if total > out.len() {
+        return None;
+    }
+    out[..total].copy_from_slice(&req[..total]);
+    // Ethernet: dst = original sender, src = our MAC.
+    out[0..6].copy_from_slice(&req[6..12]);
+    out[6..12].copy_from_slice(&net::net_mac());
+    // IPv4: swap src/dst, reset TTL, recompute the header checksum.
+    let src = [ip[12], ip[13], ip[14], ip[15]];
+    {
+        let oip = &mut out[14..14 + ihl];
+        oip[12..16].copy_from_slice(&GUEST_IP);
+        oip[16..20].copy_from_slice(&src);
+        oip[8] = 64;
+        oip[10] = 0;
+        oip[11] = 0;
+        let mut s = 0u32;
+        csum_words(&mut s, oip);
+        let ck = csum_fold(s);
+        oip[10] = (ck >> 8) as u8;
+        oip[11] = (ck & 0xFF) as u8;
+    }
+    // ICMP: type 8 -> 0 (echo reply); recompute the ICMP checksum.
+    {
+        let oic = &mut out[icmp_off..total];
+        oic[0] = 0;
+        oic[2] = 0;
+        oic[3] = 0;
+        let mut s = 0u32;
+        csum_words(&mut s, oic);
+        let ck = csum_fold(s);
+        oic[2] = (ck >> 8) as u8;
+        oic[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Live RX responder: reply to inbound pings so the guest is a pingable host
+/// (full-os guide Part II.6). Called from the RX pump for IPv4/ICMP frames.
+pub(crate) unsafe fn icmp_input(frame: &[u8]) {
+    let mut out = [0u8; 1514];
+    if let Some(len) = build_icmp_echo_reply(frame, &mut out) {
+        let _ = net::wire_send(&out[..len]);
+        serial_write(b"ICMP: echo reply sent\n");
+    }
+}
+
+/// Self-test (op 4): synthesize an echo request to ourselves, run the real
+/// responder, and verify the reply is a checksum-correct echo reply that
+/// echoes the ident/seq/payload. Deterministic — no external responder needed.
+/// Returns 1 on success, 0 on failure.
+pub(crate) unsafe fn icmp_selftest() -> u64 {
+    const PAYLOAD: &[u8; 8] = b"rugoping";
+    let mut req = [0u8; 14 + 20 + 8 + 8];
+    // Ethernet: from a fake gateway to us.
+    req[0..6].copy_from_slice(&net::net_mac());
+    req[6..12].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02]);
+    req[12] = 0x08;
+    req[13] = 0x00;
+    // IPv4 header.
+    {
+        let ip = &mut req[14..34];
+        ip[0] = 0x45;
+        let tot = (20 + 8 + 8) as u16;
+        ip[2] = (tot >> 8) as u8;
+        ip[3] = (tot & 0xFF) as u8;
+        ip[8] = 64;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&GATEWAY_IP);
+        ip[16..20].copy_from_slice(&GUEST_IP);
+        let mut s = 0u32;
+        csum_words(&mut s, ip);
+        let ck = csum_fold(s);
+        ip[10] = (ck >> 8) as u8;
+        ip[11] = (ck & 0xFF) as u8;
+    }
+    // ICMP echo request (type 8), ident/seq + payload.
+    {
+        let ic = &mut req[34..50];
+        ic[0] = 8;
+        ic[4] = (ICMP_IDENT >> 8) as u8;
+        ic[5] = (ICMP_IDENT & 0xFF) as u8;
+        ic[6] = 0x00;
+        ic[7] = 0x01;
+        ic[8..16].copy_from_slice(PAYLOAD);
+        let mut s = 0u32;
+        csum_words(&mut s, ic);
+        let ck = csum_fold(s);
+        ic[2] = (ck >> 8) as u8;
+        ic[3] = (ck & 0xFF) as u8;
+    }
+    let mut out = [0u8; 1514];
+    let len = match build_icmp_echo_reply(&req, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let oic = &out[34..len];
+    // type 0, ident/seq/payload preserved.
+    if oic[0] != 0
+        || oic[4] != req[38]
+        || oic[5] != req[39]
+        || oic[6] != req[40]
+        || oic[7] != req[41]
+        || oic[8..16] != *PAYLOAD
+    {
+        return 0;
+    }
+    // Reply checksums must fold to zero (wire-correct).
+    let mut v = 0u32;
+    csum_words(&mut v, oic);
+    if csum_fold(v) != 0 {
+        return 0;
+    }
+    let mut v2 = 0u32;
+    csum_words(&mut v2, &out[14..34]);
+    if csum_fold(v2) != 0 {
+        return 0;
+    }
+    serial_write(b"ICMP: echo reply ok seq=0x");
+    serial_write_hex(1);
+    serial_write(b"\n");
+    1
+}
+
 /// Poll (op 3): -1 while pending; the result once, then idle.
 pub(crate) unsafe fn poll_result() -> u64 {
     net::net_rx_pump();
