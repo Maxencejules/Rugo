@@ -96,13 +96,20 @@ single safe boot-verified slice and several have hard prerequisites.
    published, so the BSP safely reclaims the address space (no UAF/leak).
    **Per-CPU run queues DONE** (`runqueue_v1.md`): each CPU drains its OWN
    lock-free queue (reached via its GS slot) concurrently (`SMP: runqueue ok` on
-   both the `-smp 4` and `-smp 2` lanes). **Remaining (turning the mechanism into
-   a running multi-CPU scheduler):** wire `tlb_shootdown` into the
-   `munmap`/`mprotect`/CoW paths; migrate actual R4 tasks onto the per-CPU queues
-   with a per-CPU `current` + load balancing; and make the
-   scheduler/syscall/page-fault paths SMP-safe on every core (today the BSP's are
-   interrupts-off single-CPU) so ordinary user tasks are scheduled across all
-   CPUs, not just the boot self-test.
+   both the `-smp 4` and `-smp 2` lanes). **Per-CPU `current` + real syscalls on
+   an AP DONE** (`smp_syscall_v1.md`): `PerCpu` gains `current_task` at `gs:[16]`;
+   the AP sets its `current` through GS before entering ring 3 and reads it back in
+   the trap handler on the same core (`SMP: ap-current=0x…5A`), and the migrated
+   task issues **two real `int 0x80` syscalls** (`sys_time_now`) serviced on the
+   AP's own per-CPU TSS `rsp0`, with a consecutive-tick delta of exactly 1
+   (`SMP: ap-syscall delta=0x…1`) — the full ring-3→ring-0→ring-3 syscall path on a
+   second CPU. **Remaining (turning the mechanism into a running multi-CPU
+   scheduler):** wire `tlb_shootdown` into the `munmap`/`mprotect`/CoW paths;
+   migrate **live, scheduled** R4 tasks onto the per-CPU queues with load
+   balancing; and make `R4_CURRENT`/`R4_TASKS` + every `R4_CURRENT`-touching
+   syscall (yield/exit/fork/futex/…) SMP-safe (per-CPU `current` under a locked
+   task table) so ordinary user tasks run the full syscall surface across all
+   CPUs, not just a `R4_CURRENT`-free payload in the boot self-test.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000 — detection + DMA pool done.** The OS
    discovers a USB xHCI host controller (`-device qemu-xhci`, `xhci_v1.md`) and an
    Intel **e1000 NIC** (`-device e1000`, `e1000_v1.md`: maps BAR0, reads STATUS +

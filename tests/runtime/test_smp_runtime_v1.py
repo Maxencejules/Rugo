@@ -138,9 +138,13 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # Per-CPU run queues: the AP drained its own queue to the right total.
         "SMP: runqueue ok",
         # Capstone: a real ring-3 USER task ran on the application processor
-        # (not the BSP). The AP entered ring 3 on its own per-CPU TSS rsp0, the
-        # task computed arg*2+1 and reported it via int 0x81, and the AP returned
-        # to the kernel cleanly (verified result + AP slot >= 1).
+        # (not the BSP). The AP entered ring 3 on its own per-CPU TSS rsp0, set
+        # its per-CPU `current` task through GS, serviced TWO real syscalls
+        # (int 0x80 sys_time_now) whose tick delta is exactly 1 -- proof real
+        # kernel code ran for each on the AP's own core -- then reported arg*2+1
+        # via int 0x81 and returned to the kernel cleanly.
+        "SMP: ap-syscall delta=0x0000000000000001",
+        "SMP: ap-current=0x000000000000005A",
         "SMP: ap user task ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",

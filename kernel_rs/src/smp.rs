@@ -114,11 +114,13 @@ const IA32_GS_BASE: u32 = 0xC000_0101;
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct PerCpu {
-    cpu_index: u64,   // gs:[0] — written by each CPU through its own GS base
-    timer_ticks: u64, // gs:[8] — bumped by the per-CPU LAPIC-timer ISR
+    cpu_index: u64,    // gs:[0] — written by each CPU through its own GS base
+    timer_ticks: u64,  // gs:[8] — bumped by the per-CPU LAPIC-timer ISR
+    current_task: u64, // gs:[16] — the task this CPU is currently running (0 = idle)
 }
 
-static mut PERCPU: [PerCpu; MAX_CPUS] = [PerCpu { cpu_index: 0, timer_ticks: 0 }; MAX_CPUS];
+static mut PERCPU: [PerCpu; MAX_CPUS] =
+    [PerCpu { cpu_index: 0, timer_ticks: 0, current_task: 0 }; MAX_CPUS];
 static PERCPU_NEXT: AtomicU64 = AtomicU64::new(1); // slot 0 reserved for the BSP
 
 /// Point this CPU's GS base at PERCPU[slot] and record its index through GS.
@@ -326,22 +328,52 @@ unsafe fn ap_runqueue_selftest() -> bool {
 //
 // Flow: the BSP builds a private address space holding the user code + a stack
 // (the same mm path spawned apps use), publishes it, and dispatches work kind 2.
-// An AP claims it, loads that CR3, and `iretq`s to ring 3 with the arg in RDI.
-// The user code computes arg*2+1 and `int 0x81`s; ap_user_trap records the
-// result, restores the kernel CR3, and trampolines the AP back into kernel code
-// (ap_user_done) on its own kernel stack — mirroring the m3 ring-3->kernel
-// return — which republishes completion and resumes normal AP polling.
+// An AP claims it, sets its per-CPU `current` task (gs:[16] — the scheduler's
+// bookkeeping), loads that CR3, and `iretq`s to ring 3 with the arg in RDI.
+// The user task issues TWO REAL syscalls — `int 0x80` sys_time_now — exercising
+// the full ring-3->ring-0->ring-3 syscall path on the AP's own per-CPU TSS rsp0
+// (serviced on the second core), then reports their tick delta (== 1) and arg*2+1
+// via `int 0x81`; ap_user_trap reads the per-CPU `current` back through GS, records
+// the result, restores the kernel CR3, and trampolines the AP back into kernel
+// code (ap_user_done) on its own kernel stack — mirroring the m3 ring-3->kernel
+// return — which republishes completion and resumes normal AP polling. The BSP
+// verifies the result, that an AP (slot >= 1) ran it, and that the per-CPU
+// `current` round-tripped.
 
-// Ring-3 payload (position-independent, touches no memory so every page is
-// premapped and it never demand-faults on the AP):
-//   48 01 FF        add rdi, rdi    ; rdi = 2*arg   (arg arrives in RDI)
-//   48 83 C7 01     add rdi, 1      ; rdi = 2*arg+1
-//   CD 81           int 0x81        ; report RDI to ap_user_trap
-//   EB FE         1: jmp 1b         ; unreachable (the trampoline takes over)
+// Ring-3 payload (position-independent, touches no user memory so every page is
+// premapped and it never demand-faults on the AP). It issues TWO REAL syscalls —
+// `int 0x80` sys_time_now (op 10) — exercising the full ring-3->ring-0->ring-3
+// syscall path on the AP's own per-CPU TSS rsp0, and reports the delta of the two
+// monotonic ticks (must be exactly 1 — proof real kernel code ran for each call)
+// alongside 2*arg+1. sys_time_now is used (not sys_debug_write) because the latter
+// mirrors to the framebuffer console, which lives under PML4[0] — the half
+// address_space_create replaces — so it is absent from this AP address space.
+//   48 89 FB              mov rbx, rdi    ; save arg (arrives in RDI)
+//   B8 0A 00 00 00        mov eax, 10     ; nr 10 = sys_time_now
+//   CD 80                 int 0x80        ; rax = t1   (REAL syscall #1)
+//   48 89 C1              mov rcx, rax    ; save t1
+//   B8 0A 00 00 00        mov eax, 10     ; nr 10 = sys_time_now
+//   CD 80                 int 0x80        ; rax = t2   (REAL syscall #2)
+//   48 29 C8              sub rax, rcx    ; rax = t2 - t1  (== 1)
+//   48 89 C6              mov rsi, rax    ; report delta in RSI
+//   48 89 DF              mov rdi, rbx    ; restore arg
+//   48 01 FF              add rdi, rdi    ; rdi = 2*arg
+//   48 83 C7 01           add rdi, 1      ; rdi = 2*arg+1  (report in RDI)
+//   CD 81                 int 0x81        ; report to ap_user_trap
+//   EB FE               1: jmp 1b        ; unreachable (trampoline takes over)
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static AP_USER_CODE: [u8; 11] =
-    [0x48, 0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE];
+static AP_USER_CODE: [u8; 40] = [
+    0x48, 0x89, 0xFB, 0xB8, 0x0A, 0x00, 0x00, 0x00, 0xCD, 0x80, 0x48, 0x89, 0xC1, 0xB8, 0x0A,
+    0x00, 0x00, 0x00, 0xCD, 0x80, 0x48, 0x29, 0xC8, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48,
+    0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
+];
 
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_TASKID: AtomicU64 = AtomicU64::new(0); // id of the task migrated to the AP
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_CURRENT: AtomicU64 = AtomicU64::new(0); // per-CPU `current` the AP read back via GS
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_SYSRET: AtomicU64 = AtomicU64::new(0); // delta of the two time_now syscalls the AP ran
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 static AP_USER_CR3: AtomicU64 = AtomicU64::new(0); // user address space to run
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -377,6 +409,12 @@ unsafe fn ap_run_user_task(gen: u64, arg: u64) -> ! {
         }
     }
     AP_USER_GEN.store(gen, Ordering::Release);
+    // Set THIS CPU's `current` task through its own GS base (gs:[16]) — the exact
+    // per-CPU bookkeeping a scheduler does when it dispatches a task to a core.
+    // Written via gs: (not PERCPU[slot] directly) so a wrong GS base would land in
+    // the wrong slot and the BSP's read-back check would fail.
+    let tid = AP_USER_TASKID.load(Ordering::Acquire);
+    core::arch::asm!("mov qword ptr gs:[16], {v}", v = in(reg) tid, options(nostack));
     let kcr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
     AP_SAVED_CR3.store(kcr3, Ordering::Release);
@@ -393,9 +431,18 @@ unsafe fn ap_run_user_task(gen: u64, arg: u64) -> ! {
 /// on THIS AP's own kernel stack.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) unsafe fn ap_user_trap(frame: *mut u64) {
-    let reported = *frame.add(9); // RDI
+    let reported = *frame.add(9); // RDI = 2*arg+1
+    let sysret = *frame.add(10); // RSI = delta of the two sys_time_now ticks (== 1)
+    AP_USER_SYSRET.store(sysret, Ordering::Release);
     let slot: u64;
     core::arch::asm!("mov {}, gs:[0]", out(reg) slot, options(nostack));
+    // Read back THIS CPU's `current` task through its own GS base and publish it,
+    // then clear it (the task is leaving the core). Confirms the per-CPU current
+    // set in ap_run_user_task round-tripped on the same AP via gs:[16].
+    let cur: u64;
+    core::arch::asm!("mov {}, gs:[16]", out(reg) cur, options(nostack));
+    AP_USER_CURRENT.store(cur, Ordering::Release);
+    core::arch::asm!("mov qword ptr gs:[16], 0", options(nostack));
     let kcr3 = AP_SAVED_CR3.load(Ordering::Acquire);
     if kcr3 != 0 {
         core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack));
@@ -435,6 +482,7 @@ unsafe fn ap_user_selftest() -> bool {
     const STACK_TOP: u64 = 0x0013_0000;
     const STACK_PAGE: u64 = STACK_TOP - 0x1000;
     const ARG: u64 = 21;
+    const TASK_ID: u64 = 0x5A; // the migrated task's id, tracked as the AP's `current`
     let kcr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
     let ucr3 = match crate::mm::address_space_create(kcr3) {
@@ -450,8 +498,13 @@ unsafe fn ap_user_selftest() -> bool {
     AP_USER_CR3.store(ucr3, Ordering::Release);
     AP_USER_ENTRY.store(CODE_VA, Ordering::Release);
     AP_USER_SP.store(STACK_TOP, Ordering::Release);
+    AP_USER_TASKID.store(TASK_ID, Ordering::Release);
+    AP_USER_CURRENT.store(0, Ordering::Release);
+    AP_USER_SYSRET.store(0, Ordering::Release);
     let result = smp_dispatch_work(2, ARG);
     let cpu = AP_USER_CPU.load(Ordering::Acquire);
+    let cur = AP_USER_CURRENT.load(Ordering::Acquire);
+    let sysret = AP_USER_SYSRET.load(Ordering::Acquire);
     // Reclaim the address space ONLY on the success path. There, the AP restored
     // the kernel CR3 (ap_user_trap) *before* publishing WORK_DONE, and we waited
     // on WORK_DONE with Acquire ordering, so the AP is provably off this CR3.
@@ -463,7 +516,17 @@ unsafe fn ap_user_selftest() -> bool {
     if result.is_some() {
         crate::mm::address_space_release(ucr3);
     }
-    matches!(result, Some(v) if v == ARG * 2 + 1) && cpu >= 1
+    // Surface the two new facts: (a) the AP serviced REAL syscalls — the delta of
+    // its two sys_time_now calls is exactly 1, so real kernel code ran for each
+    // int 0x80 on the AP's own core; (b) the per-CPU `current` the AP set + read
+    // back through its own GS base matches the dispatched task id.
+    serial_write(b"SMP: ap-syscall delta=0x");
+    serial_write_hex(sysret);
+    serial_write(b"\n");
+    serial_write(b"SMP: ap-current=0x");
+    serial_write_hex(cur);
+    serial_write(b"\n");
+    matches!(result, Some(v) if v == ARG * 2 + 1) && cpu >= 1 && cur == TASK_ID && sysret == 1
 }
 
 /// LAPIC-timer service routine (from trap_handler vector 241): tick + EOI.
