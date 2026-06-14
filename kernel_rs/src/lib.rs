@@ -3660,6 +3660,76 @@ cfg_r4! {
         *frame.add(14) = child as u64; // parent: rax = child tid
     }
 
+    // ---- timekeeping (full-os guide Part IV.9) ----
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn cmos_read(reg: u8) -> u8 {
+        arch_x86::outb(0x70, reg);
+        arch_x86::inb(0x71)
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[inline]
+    fn bcd_to_bin(v: u8) -> u8 {
+        (v & 0x0F) + ((v >> 4) * 10)
+    }
+
+    /// Days since the Unix epoch for a civil date (Howard Hinnant's
+    /// algorithm), valid across the Gregorian calendar.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+        let y = y - if m <= 2 { 1 } else { 0 };
+        let era = (if y >= 0 { y } else { y - 399 }) / 400;
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146097 + doe - 719468
+    }
+
+    /// Wall-clock seconds since the Unix epoch from the CMOS RTC. Assumes
+    /// 24-hour mode (QEMU default); BCD vs binary is read from status B.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn cmos_unix_seconds() -> u64 {
+        let mut spins = 0u32;
+        while cmos_read(0x0A) & 0x80 != 0 && spins < 1_000_000 {
+            spins += 1; // wait out an update-in-progress
+        }
+        let mut sec = cmos_read(0x00);
+        let mut min = cmos_read(0x02);
+        let mut hour = cmos_read(0x04);
+        let mut day = cmos_read(0x07);
+        let mut mon = cmos_read(0x08);
+        let mut year = cmos_read(0x09);
+        if cmos_read(0x0B) & 0x04 == 0 {
+            sec = bcd_to_bin(sec);
+            min = bcd_to_bin(min);
+            hour = bcd_to_bin(hour & 0x7F);
+            day = bcd_to_bin(day);
+            mon = bcd_to_bin(mon);
+            year = bcd_to_bin(year);
+        }
+        let full_year = 2000i64 + year as i64;
+        let days = days_from_civil(full_year, mon as i64, day as i64);
+        (days * 86400 + hour as i64 * 3600 + min as i64 * 60 + sec as i64) as u64
+    }
+
+    /// sys_time (ABI v3.2 id 53, op-multiplexed): op 1 = clock_gettime
+    /// (a2 = clockid: 0 = MONOTONIC nanoseconds since boot from the PIT
+    /// tick counter, 1 = REALTIME seconds since the Unix epoch from the
+    /// CMOS RTC). -1 on bad op/clockid.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_time(op: u64, a2: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => match a2 {
+                0 => R4_PREEMPT_TICKS.wrapping_mul(10_000_000),
+                1 => cmos_unix_seconds(),
+                _ => ERR,
+            },
+            _ => ERR,
+        }
+    }
+
     unsafe fn r4_find_spawn_slot() -> Option<usize> {
         for tid in 1..R4_NUM_TASKS {
             if R4_TASKS[tid].state == R4State::Dead {
