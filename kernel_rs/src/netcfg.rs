@@ -350,6 +350,100 @@ pub(crate) unsafe fn udp_input(ip: &[u8]) {
     }
 }
 
+/// Build an ARP *reply* for a received ARP *request* Ethernet frame. `req` is
+/// the full frame; if it is an ARP request (opcode 1) asking for the guest IP,
+/// writes a 42-byte reply into `out` and returns its length, else None. Shared
+/// by the live responder (`arp_input`) and the self-test (`arp_selftest`).
+unsafe fn build_arp_reply(req: &[u8], out: &mut [u8]) -> Option<usize> {
+    if req.len() < 42 || out.len() < 42 {
+        return None;
+    }
+    if u16::from_be_bytes([req[12], req[13]]) != 0x0806 {
+        return None;
+    }
+    let arp = &req[14..];
+    // opcode 1 (request), target protocol address == GUEST_IP.
+    if u16::from_be_bytes([arp[6], arp[7]]) != 1 || arp[24..28] != GUEST_IP {
+        return None;
+    }
+    let mac = net::net_mac();
+    let sender_mac = [arp[8], arp[9], arp[10], arp[11], arp[12], arp[13]];
+    let sender_ip = [arp[14], arp[15], arp[16], arp[17]];
+    // Ethernet: dst = requester, src = us, ethertype ARP.
+    out[0..6].copy_from_slice(&sender_mac);
+    out[6..12].copy_from_slice(&mac);
+    out[12] = 0x08;
+    out[13] = 0x06;
+    // ARP reply.
+    let a = &mut out[14..42];
+    a[0] = 0x00;
+    a[1] = 0x01; // HTYPE ethernet
+    a[2] = 0x08;
+    a[3] = 0x00; // PTYPE IPv4
+    a[4] = 6;
+    a[5] = 4;
+    a[6] = 0x00;
+    a[7] = 0x02; // opcode reply
+    a[8..14].copy_from_slice(&mac); // sender MAC = us
+    a[14..18].copy_from_slice(&GUEST_IP); // sender IP = guest
+    a[18..24].copy_from_slice(&sender_mac); // target MAC = requester
+    a[24..28].copy_from_slice(&sender_ip); // target IP = requester
+    Some(42)
+}
+
+/// Live RX responder: answer ARP "who-has GUEST_IP" so the guest is reachable
+/// (full-os guide Part II.6). Called from the RX pump for ARP request frames.
+pub(crate) unsafe fn arp_input(frame: &[u8]) {
+    let mut out = [0u8; 42];
+    if let Some(len) = build_arp_reply(frame, &mut out) {
+        let _ = net::wire_send(&out[..len]);
+        serial_write(b"ARP: reply sent\n");
+    }
+}
+
+/// Self-test (op 5): synthesize an ARP request for the guest IP, run the real
+/// responder, and verify the reply (opcode 2, sender = our MAC/IP, target =
+/// requester). Deterministic. Returns 1 on success, 0 on failure.
+pub(crate) unsafe fn arp_selftest() -> u64 {
+    let mut req = [0u8; 42];
+    let fake_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x02];
+    let fake_ip = GATEWAY_IP;
+    req[0..6].copy_from_slice(&[0xFF; 6]); // broadcast
+    req[6..12].copy_from_slice(&fake_mac);
+    req[12] = 0x08;
+    req[13] = 0x06;
+    {
+        let a = &mut req[14..42];
+        a[1] = 0x01;
+        a[2] = 0x08;
+        a[4] = 6;
+        a[5] = 4;
+        a[7] = 0x01; // request
+        a[8..14].copy_from_slice(&fake_mac);
+        a[14..18].copy_from_slice(&fake_ip);
+        a[24..28].copy_from_slice(&GUEST_IP); // who-has guest
+    }
+    let mut out = [0u8; 42];
+    let len = match build_arp_reply(&req, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let mac = net::net_mac();
+    let a = &out[14..len];
+    // opcode 2, sender = our MAC/IP, target = the requester.
+    if a[6] != 0 || a[7] != 2 || a[8..14] != mac || a[14..18] != GUEST_IP
+        || a[18..24] != fake_mac || a[24..28] != fake_ip
+    {
+        return 0;
+    }
+    // Ethernet dst = requester, src = us.
+    if out[0..6] != fake_mac || out[6..12] != mac {
+        return 0;
+    }
+    serial_write(b"ARP: reply ok\n");
+    1
+}
+
 const ICMP_IDENT: u16 = 0x5247; // "RG"
 
 /// Build an ICMP echo *reply* for a received echo-*request* Ethernet frame.

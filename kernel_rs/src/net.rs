@@ -216,6 +216,9 @@ pub(crate) unsafe fn net_rx_pump() {
                 let mut mac = [0u8; 6];
                 mac.copy_from_slice(&arp[8..14]);
                 crate::netcfg::on_arp_reply(sender_ip, &mac);
+            } else if opcode == 1 {
+                // Answer "who-has GUEST_IP" so the guest is reachable.
+                crate::netcfg::arp_input(&buf[..n]);
             }
             // ARP requests for the guest IP are answered by the slirp
             // gateway path only when needed; the UDP-echo lane keeps its
