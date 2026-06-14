@@ -16,6 +16,8 @@ pub(crate) const ST_ARP_WAIT: u8 = 1;
 pub(crate) const ST_SYN_SENT: u8 = 2;
 pub(crate) const ST_ESTABLISHED: u8 = 3;
 pub(crate) const ST_FIN_WAIT: u8 = 4;
+pub(crate) const ST_LISTEN: u8 = 5;
+pub(crate) const ST_SYN_RCVD: u8 = 6;
 
 const RX_RING: usize = 1024;
 const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
@@ -221,6 +223,24 @@ pub(crate) unsafe fn tcp_input(ip: &[u8]) {
     }
 
     match CONN.state {
+        ST_LISTEN => {
+            // Passive open: a bare SYN (SYN set, ACK clear) -> SYN|ACK.
+            if flags & 0x12 == 0x02 {
+                CONN.rcv_nxt = seq.wrapping_add(1);
+                CONN.remote_port = src_port;
+                tcp_tx(0x12, CONN.snd_nxt, CONN.rcv_nxt, &[]); // SYN|ACK
+                CONN.snd_nxt = CONN.snd_nxt.wrapping_add(1); // SYN takes a seq
+                CONN.state = ST_SYN_RCVD;
+                serial_write(b"TCP: syn-rcvd\n");
+            }
+        }
+        ST_SYN_RCVD => {
+            // The client's ACK completes the three-way handshake.
+            if flags & 0x10 != 0 {
+                CONN.state = ST_ESTABLISHED;
+                serial_write(b"TCP: established\n");
+            }
+        }
         ST_SYN_SENT => {
             if flags & 0x12 == 0x12 {
                 // SYN|ACK
@@ -296,4 +316,81 @@ pub(crate) unsafe fn tcp_close() {
             CONN.state = ST_CLOSED;
         }
     }
+}
+
+/// Build a bare 40-byte IPv4+TCP segment (no options, no payload) into `seg`
+/// for the listener self-test. tcp_input does not validate IP/TCP checksums,
+/// so they are left zero.
+unsafe fn build_seg(
+    seg: &mut [u8; 40],
+    src_ip: &[u8; 4],
+    src_port: u16,
+    dst_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+) {
+    *seg = [0u8; 40];
+    seg[0] = 0x45;
+    seg[2] = 0;
+    seg[3] = 40; // total length
+    seg[8] = 64; // ttl
+    seg[9] = 6; // proto TCP
+    seg[12..16].copy_from_slice(src_ip);
+    seg[16..20].copy_from_slice(&GUEST_IP);
+    let t = &mut seg[20..];
+    t[0..2].copy_from_slice(&src_port.to_be_bytes());
+    t[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    t[4..8].copy_from_slice(&seq.to_be_bytes());
+    t[8..12].copy_from_slice(&ack.to_be_bytes());
+    t[12] = 5 << 4; // data offset = 20 bytes
+    t[13] = flags;
+    t[14] = 0x10; // window 4096
+}
+
+/// Passive-open (listener) self-test (full-os guide Part II.6): bind a listener
+/// to :8080 with a synthetic peer, feed a SYN, expect SYN_RCVD + a SYN|ACK,
+/// then feed the client's ACK and expect ESTABLISHED. Returns 1 on success.
+/// Wildcard accept (any peer) and a multi-connection table are carry-forward.
+pub(crate) unsafe fn tcp_listen_selftest() -> u64 {
+    let client_ip = [10, 0, 2, 99];
+    CONN.state = ST_LISTEN;
+    CONN.peer_ip = client_ip;
+    CONN.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x63];
+    CONN.have_mac = true;
+    CONN.local_port = 8080;
+    CONN.remote_port = 50000;
+    CONN.snd_nxt = 0x0000_1000;
+    CONN.rcv_nxt = 0;
+    CONN.rx_len = 0;
+    CONN.peer_fin = false;
+
+    let client_isn = 0x0000_2000u32;
+    let mut seg = [0u8; 40];
+    // 1) inbound SYN from the client.
+    build_seg(&mut seg, &client_ip, 50000, 8080, client_isn, 0, 0x02);
+    tcp_input(&seg);
+    if CONN.state != ST_SYN_RCVD {
+        CONN.state = ST_CLOSED;
+        return 0;
+    }
+    // 2) inbound ACK completing the handshake (acks our ISN+1).
+    build_seg(
+        &mut seg,
+        &client_ip,
+        50000,
+        8080,
+        client_isn.wrapping_add(1),
+        CONN.snd_nxt,
+        0x10,
+    );
+    tcp_input(&seg);
+    let ok = CONN.state == ST_ESTABLISHED;
+    // Reset so the live outbound client path (tcp_connect) stays usable.
+    CONN.state = ST_CLOSED;
+    if !ok {
+        return 0;
+    }
+    serial_write(b"TCP: listen ok\n");
+    1
 }
