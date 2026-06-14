@@ -37,8 +37,8 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `52` = `sys_futex` (op 1 = wait(`rsi`=uaddr, `rdx`=val), op 2 = wake(uaddr,
   n); contract in `docs/runtime/futex_v1.md`);
   `53` = `sys_time` (op 1 = clock_gettime(`rsi`=clockid: 0 = MONOTONIC
-  nanoseconds since boot, 1 = REALTIME seconds since the Unix epoch);
-  contract in `docs/runtime/clock_v1.md`);
+  nanoseconds since boot, 1 = REALTIME seconds since the Unix epoch); op 2 =
+  nanosleep(`rsi`=nanoseconds); contract in `docs/runtime/clock_v1.md`);
   `54` = `sys_getrandom` (`rdi`=buf, `rsi`=len → bytes written; contract in
   `docs/runtime/rng_v1.md`);
   `59` = `sys_sandbox` (`rdi`=allow_mask → restrict the caller to the

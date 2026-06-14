@@ -39,8 +39,13 @@ unchanged).
 
 - **No `timespec`/`timeval` struct out.** A pointer-based variant is
   carry-forward.
-- **No `nanosleep`/`timerfd`.** These need per-task wait queues (the
-  console contract notes blocking reads currently spin); deferred.
+- **`nanosleep` is implemented** (op 2, `rsi` = nanoseconds): the caller
+  blocks (10 ms PIT resolution) and OTHER tasks run meanwhile; if nothing
+  else is runnable the scheduler parks in a ring0 idle loop
+  (`r4_idle_loop`, interrupts enabled) and the PIT (`r4_wake_sleepers`)
+  wakes the sleeper at its deadline — no spinning, no false deadlock. This
+  idle/wake path is the shared wait-queue prerequisite. Proof:
+  `make test-nanosleep-v1`. `timerfd` (fd-backed timers) still deferred.
 - **No ACPI shutdown/reboot yet** (`sys_power`, id 58) — separate phase.
 - **RTC assumptions:** 24-hour mode, century = 2000+. A dead CMOS battery or
   12-hour mode would skew REALTIME; MONOTONIC is unaffected.

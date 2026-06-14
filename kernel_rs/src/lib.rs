@@ -2800,6 +2800,10 @@ cfg_r4! {
         // while the task is Blocked in sys_futex wait; the matching wake
         // clears it and makes the task Ready.
         futex_uaddr: u64,
+        // nanosleep deadline in PIT ticks (full-os guide Part IV.9). Non-zero
+        // while the task is Blocked asleep; the PIT handler clears it and
+        // makes the task Ready once the deadline passes.
+        sleep_until: u64,
     }
 
     impl R4Task {
@@ -2837,6 +2841,7 @@ cfg_r4! {
             heap_brk: 0,
             sec_filter_mask: u64::MAX,
             futex_uaddr: 0,
+            sleep_until: 0,
         };
     }
 
@@ -2935,6 +2940,7 @@ cfg_r4! {
             R4_TASKS[parent_tid].sec_filter_mask
         };
         R4_TASKS[tid].futex_uaddr = 0;
+        R4_TASKS[tid].sleep_until = 0;
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -3201,6 +3207,74 @@ cfg_r4! {
     #[cfg(feature = "go_test")]
     static mut R4_PREEMPT_COUNT: u64 = 0;
 
+    // Idle infrastructure (full-os guide wait-queue prerequisite). When no
+    // task is runnable but a timed wakeup is pending (nanosleep), the kernel
+    // parks in r4_idle_loop at ring0 with interrupts enabled; the PIT wakes
+    // sleepers and switches to them from the idle context.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut R4_IDLE: bool = false;
+
+    /// Ring0 idle loop: enable interrupts and halt. The PIT handler switches
+    /// away from here once a task becomes runnable; it is never returned to.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    extern "C" fn r4_idle_loop() -> ! {
+        loop {
+            unsafe {
+                core::arch::asm!("sti; hlt", options(nomem, nostack));
+            }
+        }
+    }
+
+    /// Wake any task whose nanosleep deadline has passed.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_wake_sleepers() {
+        let now = R4_PREEMPT_TICKS;
+        let mut t = 0usize;
+        while t < R4_NUM_TASKS {
+            if R4_TASKS[t].sleep_until != 0
+                && now >= R4_TASKS[t].sleep_until
+                && matches!(R4_TASKS[t].state, R4State::Blocked)
+            {
+                R4_TASKS[t].sleep_until = 0;
+                R4_TASKS[t].state = R4State::Ready;
+            }
+            t += 1;
+        }
+    }
+
+    /// Called from a block/exit point when no task is currently runnable: if
+    /// any task has a pending timed wakeup, park in the idle loop until the
+    /// PIT wakes it; otherwise the run is genuinely finished.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_enter_idle_or_done(frame: *mut u64) {
+        let mut has_pending = false;
+        let mut t = 0usize;
+        while t < R4_NUM_TASKS {
+            if R4_TASKS[t].sleep_until != 0
+                && matches!(R4_TASKS[t].state, R4State::Blocked)
+            {
+                has_pending = true;
+                break;
+            }
+            t += 1;
+        }
+        let kstack = &stack_top as *const u8 as u64;
+        if has_pending {
+            R4_IDLE = true;
+            *frame.add(17) = r4_idle_loop as *const () as u64; // rip
+            *frame.add(18) = 0x08; // CS ring0
+            *frame.add(19) = 0x202; // RFLAGS, IF=1
+            *frame.add(20) = kstack; // rsp
+            *frame.add(21) = 0x10; // SS ring0
+        } else {
+            *frame.add(17) = r4_all_done as *const () as u64;
+            *frame.add(18) = 0x08;
+            *frame.add(19) = 0x02;
+            *frame.add(20) = kstack;
+            *frame.add(21) = 0x10;
+        }
+    }
+
     /// PIT tick entry for the default lane: EOI first, then involuntarily
     /// switch the interrupted ring-3 task to the next Ready task. Unlike the
     /// yield path this preserves RAX - the saved frame is not a syscall
@@ -3214,6 +3288,21 @@ cfg_r4! {
             // Drive the wire TCP machine / DHCP-DNS query from the tick
             // while one is in flight.
             net::net_rx_pump();
+        }
+        // Wake nanosleep tasks whose deadline has passed (wait-queue infra).
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        r4_wake_sleepers();
+        // If we interrupted the idle loop, dispatch to a freshly-woken task
+        // (there is no idle state to save).
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        if R4_IDLE {
+            if R4_NUM_TASKS != 0 {
+                if let Some(tid) = r4_find_ready(R4_NUM_TASKS) {
+                    R4_IDLE = false;
+                    r4_switch_to(frame, tid);
+                }
+            }
+            return;
         }
         if *frame.add(18) & 3 != 3 {
             return; // interrupted a kernel path - nothing to switch
@@ -3288,13 +3377,19 @@ cfg_r4! {
         match r4_find_ready(R4_CURRENT) {
             Some(tid) => { r4_switch_to(frame, tid); }
             None => {
-                // All tasks done â€” exit
-                let kstack = &stack_top as *const u8 as u64;
-                *frame.add(17) = r4_all_done as *const () as u64;
-                *frame.add(18) = 0x08;
-                *frame.add(19) = 0x02;
-                *frame.add(20) = kstack;
-                *frame.add(21) = 0x10;
+                // No runnable task: idle if a timed wakeup is pending,
+                // otherwise the run is finished.
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                r4_enter_idle_or_done(frame);
+                #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+                {
+                    let kstack = &stack_top as *const u8 as u64;
+                    *frame.add(17) = r4_all_done as *const () as u64;
+                    *frame.add(18) = 0x08;
+                    *frame.add(19) = 0x02;
+                    *frame.add(20) = kstack;
+                    *frame.add(21) = 0x10;
+                }
             }
         }
     }
@@ -3880,13 +3975,7 @@ cfg_r4! {
                         r4_switch_to(frame, tid);
                     }
                     None => {
-                        serial_write(b"R4: deadlock\n");
-                        let kstack = &stack_top as *const u8 as u64;
-                        *frame.add(17) = r4_all_done as *const () as u64;
-                        *frame.add(18) = 0x08;
-                        *frame.add(19) = 0x02;
-                        *frame.add(20) = kstack;
-                        *frame.add(21) = 0x10;
+                        r4_enter_idle_or_done(frame);
                     }
                 }
             }
@@ -4021,7 +4110,7 @@ cfg_r4! {
     /// tick counter, 1 = REALTIME seconds since the Unix epoch from the
     /// CMOS RTC). -1 on bad op/clockid.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_time(op: u64, a2: u64) -> u64 {
+    unsafe fn sys_time(frame: *mut u64, op: u64, a2: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         match op {
             1 => match a2 {
@@ -4029,6 +4118,30 @@ cfg_r4! {
                 1 => cmos_unix_seconds(),
                 _ => ERR,
             },
+            2 => {
+                // nanosleep(a2 = nanoseconds): block until the deadline (10 ms
+                // PIT resolution). Other tasks run meanwhile; if none are
+                // runnable the scheduler idles until the PIT wakes us.
+                let ticks = (a2 + 9_999_999) / 10_000_000;
+                if ticks == 0 {
+                    return 0;
+                }
+                let cur = R4_CURRENT;
+                *frame.add(14) = 0; // value seen on resume
+                r4_save_frame(frame, cur);
+                R4_TASKS[cur].sleep_until = R4_PREEMPT_TICKS + ticks;
+                R4_TASKS[cur].state = R4State::Blocked;
+                R4_TASKS[cur].block_count += 1;
+                match r4_find_ready(cur) {
+                    Some(tid) => {
+                        r4_switch_to(frame, tid);
+                    }
+                    None => {
+                        r4_enter_idle_or_done(frame);
+                    }
+                }
+                0
+            }
             _ => ERR,
         }
     }
@@ -4457,13 +4570,18 @@ cfg_r4! {
         match r4_find_ready(cur) {
             Some(tid) => { r4_switch_to(frame, tid); }
             None => {
-                serial_write(b"R4: deadlock\n");
-                let kstack = &stack_top as *const u8 as u64;
-                *frame.add(17) = r4_all_done as *const () as u64;
-                *frame.add(18) = 0x08;
-                *frame.add(19) = 0x02;
-                *frame.add(20) = kstack;
-                *frame.add(21) = 0x10;
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                r4_enter_idle_or_done(frame);
+                #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+                {
+                    serial_write(b"R4: deadlock\n");
+                    let kstack = &stack_top as *const u8 as u64;
+                    *frame.add(17) = r4_all_done as *const () as u64;
+                    *frame.add(18) = 0x08;
+                    *frame.add(19) = 0x02;
+                    *frame.add(20) = kstack;
+                    *frame.add(21) = 0x10;
+                }
             }
         }
     }
@@ -4690,14 +4808,19 @@ cfg_r4! {
         match r4_find_ready(R4_CURRENT) {
             Some(tid) => { r4_switch_to(frame, tid); }
             None => {
-                // Deadlock â€” no ready tasks
-                serial_write(b"R4: deadlock\n");
-                let kstack = &stack_top as *const u8 as u64;
-                *frame.add(17) = r4_all_done as *const () as u64;
-                *frame.add(18) = 0x08;
-                *frame.add(19) = 0x02;
-                *frame.add(20) = kstack;
-                *frame.add(21) = 0x10;
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                r4_enter_idle_or_done(frame);
+                #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+                {
+                    // Deadlock - no ready tasks
+                    serial_write(b"R4: deadlock\n");
+                    let kstack = &stack_top as *const u8 as u64;
+                    *frame.add(17) = r4_all_done as *const () as u64;
+                    *frame.add(18) = 0x08;
+                    *frame.add(19) = 0x02;
+                    *frame.add(20) = kstack;
+                    *frame.add(21) = 0x10;
+                }
             }
         }
     }
