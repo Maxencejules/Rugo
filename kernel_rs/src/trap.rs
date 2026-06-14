@@ -112,6 +112,13 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
                 crate::kbd::kbd_irq();
                 crate::sched::pic_send_eoi(1);
             }
+            // IRQ12 (vector 44): PS/2 mouse aux interrupt. EOI both PICs (the
+            // mouse is on the PIC2 slave, reached via the cascade).
+            #[cfg(all(feature = "go_test", not(feature = "sched_test"), not(feature = "compat_real_test")))]
+            44 => {
+                crate::kbd::mouse_irq();
+                crate::sched::pic_send_eoi(12);
+            }
             #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
             64 | 65 => {
                 if runtime::native::handle_irq(int_num) {

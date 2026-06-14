@@ -10253,6 +10253,7 @@ pub extern "C" fn kmain() -> ! {
         serial_write(b"SCHED: preempt on hz=100\n");
         sched::pic_unmask(1);
         serial_write(b"KBD: on\n");
+        kbd::mouse_enable_irq(); // full-os Part III: live mouse via IRQ12
         arch_x86::enter_ring3_preemptible(USER_CODE_VA, USER_STACK_TOP);
     }
 

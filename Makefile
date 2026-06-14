@@ -1513,3 +1513,6 @@ docker-legacy:
 
 test-tcp6-listen-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp6_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp6-listen-v1.xml
+
+test-mouse-irq-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mouse_irq_v1.py -v --junitxml=$(OUT)/pytest-mouse-irq-v1.xml

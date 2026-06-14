@@ -290,6 +290,9 @@ pub(crate) unsafe fn idt_init() {
         fn isr_stub_14();
         fn isr_stub_32();
         fn isr_stub_33();
+        // Vector 44 = IRQ12 (PS/2 mouse), go lane only.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        fn isr_stub_44();
         #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
         fn isr_stub_64();
         // isr_stub_65 doubles as the LAPIC spurious-interrupt vector (set by
@@ -312,6 +315,8 @@ pub(crate) unsafe fn idt_init() {
     idt_set_gate(14, isr_stub_14 as *const () as u64);
     idt_set_gate(32, isr_stub_32 as *const () as u64);
     idt_set_gate(33, isr_stub_33 as *const () as u64);
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    idt_set_gate(44, isr_stub_44 as *const () as u64);
     #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
     idt_set_gate(64, isr_stub_64 as *const () as u64);
     // Vector 65 is the LAPIC spurious-interrupt sink (smp::x2apic_enable points

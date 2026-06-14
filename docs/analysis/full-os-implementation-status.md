@@ -117,10 +117,11 @@ single safe boot-verified slice and several have hard prerequisites.
    device's Done bit confirms it); the e1000 **RX** ring + interrupt-driven
    completion, and migrating the virtio/NVMe probes onto `dma_alloc` + routing all
    config access through ECAM, remain.
-3. **III input + compositor/window-server + audio — mouse + packet parsing, z-order compositor, HD-Audio detection done.**
-   The mouse device is reset + identified at boot and its 3-byte movement packets
-   are decoded into signed dx/dy + buttons with cursor accumulation
-   (`mouse_v1.md`, `MOUSE: packet ok`), the compositor
+3. **III input + compositor/window-server + audio — live mouse (IRQ12), z-order compositor, HD-Audio detection done.**
+   The mouse device is reset + identified, its 3-byte movement packets are decoded
+   into signed dx/dy + buttons with cursor accumulation, and **live movement is
+   delivered via IRQ12** (QMP-injected movement → PS/2 packets → `MOUSE: irq`),
+   the compositor
    composites multiple surfaces to the framebuffer in **z-order**
    (`compositor_v1.md`, verified via QMP screendump), the PC speaker beeps
    (`audio_v1.md`), and an Intel **HD Audio** controller is discovered + its

@@ -34,15 +34,23 @@ the sign bit in byte 0. A packet whose sync bit is clear is rejected
 `-2,-1` no-buttons), accumulates a cursor, and confirms it reaches `(3, 2)` and
 that an out-of-sync packet is dropped — `MOUSE: packet ok x=0x3 y=0x2`.
 
+## Live IRQ12 delivery (`mouse_enable_irq` / `mouse_irq`)
+
+`mouse_enable_irq` (called when the go runtime brings up interrupts) sets the
+i8042 command-byte aux-IRQ bit (clearing the aux clock-disable), turns on the
+mouse's data reporting (`0xF4`), and unmasks the cascade (IRQ2) + IRQ12 (PIC2
+line 4). The IRQ12 service routine (`mouse_irq`, trap vector 44, EOI to both
+PICs) reads each aux byte, assembles a 3-byte packet (resyncing on the sync bit),
+decodes it via `mouse_decode`, and accumulates the cursor — logging the first real
+movement as `MOUSE: irq dx=… dy=… btn=…`. Proven with QMP-injected movement
+(`make test-mouse-irq-v1`): the keyboard + PIT keep working alongside it.
+
 ## v1 boundary / carry-forward
 
-- **Bring-up + packet parser.** Reset/identify and the movement-packet decoder +
-  cursor accumulation are done. What remains: enabling continuous data reporting
-  (`0xF4`) and **live IRQ12 delivery** (unmasking PIC2 line 4 + an ISR feeding the
-  decoder), and QMP `input-send-event`-injected movement in the test — the
-  decoder is proven on synthetic packets here (mechanism-before-wiring).
-- A movement-reporting driver + an input event queue routing clicks to a
-  compositor/window-server is the carry-forward (status doc item 3).
+- **Bring-up + packet parser + live IRQ12 delivery** are all done. What remains:
+  an input **event queue** delivering movement/clicks to a compositor/window
+  server and routing clicks to the top window (status doc item 3); scroll-wheel /
+  Intellimouse (4-byte packets); absolute pointing (USB tablet).
 
 ## Acceptance
 

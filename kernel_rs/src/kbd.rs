@@ -263,3 +263,95 @@ pub(crate) unsafe fn mouse_packet_selftest() -> u64 {
     crate::serial_write(b"\n");
     1
 }
+
+// ---- live mouse via IRQ12 (full-os guide Part III input) ----
+//
+// Enable continuous data reporting + the i8042 aux interrupt, unmask IRQ12, and
+// assemble inbound 3-byte movement packets in the IRQ handler, accumulating a
+// cursor. This is the live counterpart to the synthetic-packet parser self-test.
+
+/// Raw read of the i8042 output buffer (port 0x60) once data is available — used
+/// for controller responses (e.g. the command byte), which are not aux bytes.
+unsafe fn ctrl_read() -> Option<u8> {
+    let mut spins = 0u32;
+    while inb(0x64) & 0x01 == 0 {
+        spins += 1;
+        if spins > 200_000 {
+            return None;
+        }
+    }
+    Some(inb(0x60))
+}
+
+static mut MOUSE_PKT: [u8; 3] = [0; 3];
+static mut MOUSE_IDX: usize = 0;
+static mut MOUSE_X: i32 = 0;
+static mut MOUSE_Y: i32 = 0;
+static mut MOUSE_REPORTED: bool = false;
+
+/// Enable live mouse input: set the i8042 command-byte aux-IRQ bit (and clear the
+/// aux clock-disable), turn on the mouse's data reporting (0xF4), and unmask the
+/// cascade (IRQ2) + IRQ12 on the PICs. Called once when the go runtime brings up
+/// interrupts (after the keyboard IRQ is unmasked).
+pub(crate) unsafe fn mouse_enable_irq() {
+    if !ctrl_wait_write() {
+        return;
+    }
+    outb(0x64, 0x20); // read the i8042 command byte
+    let cmd = match ctrl_read() {
+        Some(c) => c,
+        None => return,
+    };
+    if !ctrl_wait_write() {
+        return;
+    }
+    outb(0x64, 0x60); // write the command byte
+    if !ctrl_wait_write() {
+        return;
+    }
+    // bit 1 = enable aux (mouse) IRQ12; bit 5 = aux clock disable -> clear it.
+    outb(0x60, (cmd | 0x02) & !0x20);
+    let _ = mouse_cmd(0xF4); // enable data reporting (-> ACK 0xFA)
+    // Unmask IRQ2 (the cascade) on PIC1 and IRQ12 (line 4) on PIC2.
+    let m1 = inb(0x21);
+    outb(0x21, m1 & !(1 << 2));
+    let m2 = inb(0xA1);
+    outb(0xA1, m2 & !(1 << 4));
+    crate::serial_write(b"MOUSE: irq enabled\n");
+}
+
+/// IRQ12 service routine: read the aux byte, assemble a 3-byte packet (resyncing
+/// on the sync bit), decode it, accumulate the cursor, and log the first real
+/// movement. Called from trap_handler vector 44.
+pub(crate) unsafe fn mouse_irq() {
+    let st = inb(0x64);
+    if st & 0x01 == 0 {
+        return; // no data pending
+    }
+    let b = inb(0x60);
+    if st & 0x20 == 0 {
+        return; // not an aux byte (a keyboard byte slipped onto this line)
+    }
+    if MOUSE_IDX == 0 && b & 0x08 == 0 {
+        return; // resync: a valid packet's first byte has the sync bit set
+    }
+    MOUSE_PKT[MOUSE_IDX] = b;
+    MOUSE_IDX += 1;
+    if MOUSE_IDX >= 3 {
+        MOUSE_IDX = 0;
+        if let Some((dx, dy, btn)) = mouse_decode(MOUSE_PKT) {
+            MOUSE_X = MOUSE_X.wrapping_add(dx);
+            MOUSE_Y = MOUSE_Y.wrapping_add(dy);
+            if !MOUSE_REPORTED && (dx != 0 || dy != 0 || btn != 0) {
+                MOUSE_REPORTED = true;
+                crate::serial_write(b"MOUSE: irq dx=0x");
+                crate::serial_write_hex((dx as i64 as u64) & 0xFFFF);
+                crate::serial_write(b" dy=0x");
+                crate::serial_write_hex((dy as i64 as u64) & 0xFFFF);
+                crate::serial_write(b" btn=0x");
+                crate::serial_write_hex(btn as u64);
+                crate::serial_write(b"\n");
+            }
+        }
+    }
+}
