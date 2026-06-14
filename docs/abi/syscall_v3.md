@@ -42,6 +42,8 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `59` = `sys_sandbox` (`rdi`=allow_mask → restrict the caller to the
   syscalls whose bit is set; monotonic; syscalls 0 and 2 always kept;
   contract in `docs/runtime/sandbox_v1.md`);
+  `58` = `sys_power` (op 0 = shutdown via ACPI S5 / debug-exit, op 1 =
+  reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
   `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
   frames, op 3 = uptime ticks; contract in `docs/runtime/sysinfo_v1.md`).
 

@@ -202,6 +202,12 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 		// write to a shared global does not disturb the parent's copy.
 		return false, spawnRun(appNameForkprobe, "")
 	}
+	if cmd == "poweroff" {
+		// Graceful ACPI power-off (full-os guide Part IV.9). uid 0 only;
+		// the call does not return.
+		sysPower(0)
+		return false, true
+	}
 	if len(cmd) > 6 && cmd[:6] == "probe " {
 		// Generic probe runner: spawn any app in the package store by
 		// name with the remaining argument string. Probes carry their own

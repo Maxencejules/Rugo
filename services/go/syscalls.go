@@ -118,6 +118,9 @@ func sysNetQuery(op uintptr, ptr *byte, arg uintptr) uintptr
 
 func sysFsCtl(op uintptr, path *byte, arg uintptr) uintptr
 
+// sysPower invokes syscall 58 (sys_power): op 0 = shutdown, 1 = reboot.
+func sysPower(op uintptr) uintptr
+
 // sysOpenRaw invokes syscall 18 (sys_open).
 func sysOpenRaw(path *byte, flags uintptr, mode uintptr) uintptr
 

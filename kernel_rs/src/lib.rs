@@ -3948,6 +3948,46 @@ cfg_r4! {
         }
     }
 
+    /// sys_power (ABI v3.2 id 58): op 0 = shutdown, op 1 = reboot. Requires
+    /// uid 0. Shutdown writes the ACPI S5 command to the q35/i440fx PM
+    /// control ports (best effort), then falls back to debug-exit; reboot
+    /// pulses the 8042 reset line.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_power(op: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        if R4_TASKS[R4_CURRENT].uid != 0 {
+            return ERR;
+        }
+        // Drain the UART so the marker reaches the host before we stop.
+        let drain = || {
+            let mut spins = 0u32;
+            while arch_x86::inb(0x3FD) & 0x40 == 0 && spins < 100_000 {
+                spins += 1;
+            }
+        };
+        match op {
+            0 => {
+                serial_write(b"POWER: shutdown\n");
+                drain();
+                arch_x86::outw(0x604, 0x2000); // q35 PM1a_CNT (PMBASE 0x600)
+                arch_x86::outw(0xB004, 0x2000); // i440fx ACPI PM
+                qemu_exit(0x31); // fallback if ACPI did not take
+                loop {
+                    core::arch::asm!("cli; hlt", options(nomem, nostack));
+                }
+            }
+            1 => {
+                serial_write(b"POWER: reboot\n");
+                drain();
+                arch_x86::outb(0x64, 0xFE); // 8042 pulse CPU reset
+                loop {
+                    core::arch::asm!("cli; hlt", options(nomem, nostack));
+                }
+            }
+            _ => ERR,
+        }
+    }
+
     unsafe fn r4_find_spawn_slot() -> Option<usize> {
         for tid in 1..R4_NUM_TASKS {
             if R4_TASKS[tid].state == R4State::Dead {
