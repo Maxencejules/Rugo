@@ -3783,7 +3783,13 @@ cfg_r4! {
             exec_log(name, b"badfd");
             return ERR;
         }
-        r4_init_task(tid, entry, r4_stack_top_for_slot(tid), parent);
+        // ASLR (full-os guide Part IV.10): start the stack a random,
+        // page-aligned offset (0..15 pages) below the slot's top, drawn from
+        // the CSPRNG, so the stack base differs per spawn. Stays well inside
+        // the slot's guard-zoned stride. (Code ASLR needs PIE; carry-forward.)
+        let aslr_stk = r4_stack_top_for_slot(tid)
+            .wrapping_sub((rng_next() & 0xF) * 0x1000);
+        r4_init_task(tid, entry, aslr_stk, parent);
         // Install the private address space (r4_init_task inherited the
         // parent's, so this must come after it).
         R4_TASKS[tid].pml4_phys = child_pml4;
@@ -3822,6 +3828,8 @@ cfg_r4! {
         serial_write(name);
         serial_write(b" as_ok 0x");
         serial_write_hex(child_pml4);
+        serial_write(b" rsp=0x");
+        serial_write_hex(aslr_stk);
         serial_write(b"\n");
         exec_log(name, b"ok");
         tid as u64
