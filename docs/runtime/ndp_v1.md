@@ -1,0 +1,65 @@
+# IPv6 Neighbor Discovery (NDP) — contract v1
+
+Status: boot-verified via `make test-ndp-v1` (go C4 runtime lane)
+Source: `kernel_rs/src/netcfg.rs` (`build_neighbor_advert`, `ndp_selftest`,
+`icmpv6_input` type dispatch), live RX via `net::net_rx_pump` (ethertype 0x86DD).
+ABI: `sys_net_query` (id 49) op 9.
+Proof: `tests/runtime/test_ndp_v1.py`.
+
+Full-OS implementation guide Part II.6 (Networking), IPv6 Neighbor Discovery —
+the piece that makes the guest's link-local IPv6 actually *resolvable*. ICMPv6
+echo (`icmpv6_v1.md`) lets a host ping the guest once it knows the guest's MAC;
+NDP is how the host learns that MAC in the first place.
+
+## Behaviour
+
+When a host wants to send to the guest's link-local address it issues a
+**Neighbor Solicitation** (ICMPv6 type 135) to the target's solicited-node
+multicast address (`ff02::1:ffXX:XXXX`, MAC `33:33:ff:XX:XX:XX`), carrying the
+target address and usually a Source Link-Layer Address option.
+
+`icmpv6_input` dispatches on the ICMPv6 type: type 128 → echo reply (existing),
+type 135 → `build_neighbor_advert`. The advertisement (`build_neighbor_advert`):
+
+- validates the frame is ICMPv6 (next header 58), type 135, and the NS **target
+  address equals the guest's link-local address** (EUI-64 from the NIC MAC) —
+  otherwise it is for some other node and is ignored;
+- builds a **Neighbor Advertisement** (type 136) sent unicast back to the
+  soliciting host (its MAC + source IPv6), hop limit 255;
+- sets the **Solicited (S)** and **Override (O)** flags (`0x60`);
+- sets the **Target Address** to the guest's address;
+- appends a **Target Link-Layer Address** option (type 2, length 1) carrying the
+  guest MAC — the answer the host was after;
+- fills the ICMPv6 checksum over the IPv6 pseudo-header.
+
+## ABI
+
+`sys_net_query(op=9)` runs `ndp_selftest` and returns 1 on success / 0 on fail
+(requires the `NETWORK` capability, like the other net ops). It also runs at
+boot in the go lane, emitting `NDP: advert ok`.
+
+## v1 boundary / carry-forward
+
+- **Responder only.** The guest answers Neighbor Solicitations for its own
+  address so hosts can resolve it. The guest does not yet *send* its own
+  solicitations to resolve remote neighbors, nor maintain a neighbor cache /
+  reachability state machine (NUD), nor perform Duplicate Address Detection on
+  its own address at boot.
+- **DAD defense is handled (RFC 4861 §7.2.4).** A Neighbor Solicitation whose
+  IPv6 source is the unspecified address (`::`) — a remote host's DAD probe of
+  the guest's address — is answered to the all-nodes multicast (`ff02::1`, MAC
+  `33:33:00:00:00:01`) with the **Solicited flag cleared** (Override kept),
+  rather than unicast to `::` (which would be a malformed, undeliverable
+  packet). Normal resolution NS (real link-local source) get a unicast
+  Solicited+Override NA. Both paths are exercised by `ndp_selftest` (op 9).
+- **No SLAAC / Router Discovery.** The address is a fixed link-local
+  (`fe80::/64` + EUI-64); the guest does not solicit Router Advertisements or
+  autoconfigure a global address. SLAAC + a neighbor cache are the natural next
+  steps (status doc item 6).
+
+## Acceptance
+
+`make test-ndp-v1`: the go lane boots, the transcript shows `NDP: advert ok`
+(the self-test built a type-136 advertisement with S+O flags, the guest target,
+the guest-MAC TLLA option, and a checksum that folds to zero), then reaches
+`GOINIT: result shutdown-clean` and `RUGO: halt ok`.

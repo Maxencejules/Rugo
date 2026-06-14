@@ -92,9 +92,12 @@ single safe boot-verified slice and several have hard prerequisites.
 5. **V.11 installer + UEFI + package fetch + self-hosting** — UEFI is a second
    Limine boot path; the installer writes the SimpleFS/app-region image to a
    target disk; package fetch needs the TCP client (have) + a repo server.
-6. **II.6 TCP retransmit/RTO, IPv6 NDP/SLAAC, routing** — the client/listener and
-   v4/v6 echo exist; production reliability (retransmission timers, congestion,
-   Neighbor Discovery so a host can actually resolve the guest’s IPv6) remain.
+6. **II.6 TCP retransmit/RTO, IPv6 SLAAC, routing** — the client/listener,
+   v4/v6 echo, and IPv6 **Neighbor Discovery responder** exist (`ndp_v1.md`: a
+   host can now resolve the guest's link-local IPv6 to its MAC via NS→NA). What
+   remains: TCP retransmission timers / congestion control; the guest *sending*
+   its own solicitations + a neighbor cache (NUD) + Duplicate Address Detection;
+   SLAAC / Router Discovery for a global address; and routing.
 
 ## ABI op map (current)
 - `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,

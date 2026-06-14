@@ -941,6 +941,9 @@ test-icmpv6-v1: image-go
 test-udp-echo-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_udp_echo_v1.py -v --junitxml=$(OUT)/pytest-udp-echo-v1.xml
 
+test-ndp-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_ndp_v1.py -v --junitxml=$(OUT)/pytest-ndp-v1.xml
+
 test-tcp-listen-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp-listen-v1.xml
 

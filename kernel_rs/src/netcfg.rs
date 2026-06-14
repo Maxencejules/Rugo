@@ -675,13 +675,115 @@ unsafe fn build_icmpv6_echo_reply(req: &[u8], out: &mut [u8]) -> Option<usize> {
     Some(total)
 }
 
-/// Live RX responder: answer ICMPv6 echo requests (ping6) so the guest is a
-/// reachable IPv6 host. Called from the RX pump for ethertype 0x86DD frames.
+/// Build an ICMPv6 Neighbor Advertisement (type 136) replying to a received
+/// Neighbor Solicitation (type 135) whose target is the guest's link-local
+/// address — so a host running IPv6 Neighbor Discovery can resolve the guest's
+/// MAC (full-os guide Part II.6, IPv6 NDP). The NA carries the Solicited +
+/// Override flags, the guest's address as the target, and a Target Link-Layer
+/// Address option holding the guest MAC. Returns the reply length in `out`.
+unsafe fn build_neighbor_advert(req: &[u8], out: &mut [u8]) -> Option<usize> {
+    // Ethernet(14) + IPv6(40) + NS body: type/code/csum(4) + reserved(4) +
+    // target(16) = 24. Options (e.g. the source link-layer address) may follow.
+    if req.len() < 14 + 40 + 24 {
+        return None;
+    }
+    if u16::from_be_bytes([req[12], req[13]]) != 0x86DD {
+        return None;
+    }
+    let ip6 = &req[14..];
+    if ip6[6] != 58 {
+        return None; // next header must be ICMPv6
+    }
+    let icmp_off = 14 + 40;
+    if req[icmp_off] != 135 {
+        return None; // not a Neighbor Solicitation
+    }
+    let g6 = guest_ip6();
+    // NS target address (the address being resolved) is at offset 8 in the body.
+    let target: [u8; 16] = req[icmp_off + 8..icmp_off + 24].try_into().ok()?;
+    if target != g6 {
+        return None; // soliciting some other node, not us
+    }
+    let orig_src: [u8; 16] = ip6[8..24].try_into().ok()?;
+    let orig_src_mac: [u8; 6] = req[6..12].try_into().ok()?;
+    // RFC 4861 §7.2.4: an NS sourced from the unspecified address (::) is a
+    // Duplicate Address Detection probe. The advertisement then MUST go to the
+    // all-nodes multicast (ff02::1, MAC 33:33:00:00:00:01) with the Solicited
+    // flag CLEARED — a unicast NA to :: would be a malformed, undeliverable
+    // packet (RFC 4291 forbids :: as a destination). Otherwise (a normal
+    // resolution NS) the NA is unicast back to the soliciting host with
+    // Solicited+Override set.
+    let dad = orig_src == [0u8; 16];
+    let all_nodes: [u8; 16] = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
+    let (na_dst, na_dst_mac, flags): ([u8; 16], [u8; 6], u8) = if dad {
+        (all_nodes, [0x33, 0x33, 0x00, 0x00, 0x00, 0x01], 0x20) // Override only
+    } else {
+        (orig_src, orig_src_mac, 0x60) // Solicited + Override
+    };
+    // NA ICMPv6 message = header(4) + flags(4) + target(16) + TLLA option(8) = 32.
+    let total = 14 + 40 + 32;
+    if total > out.len() {
+        return None;
+    }
+    for b in out[..total].iter_mut() {
+        *b = 0;
+    }
+    // Ethernet: dst = the soliciting host (or all-nodes mcast for DAD), src = us.
+    out[0..6].copy_from_slice(&na_dst_mac);
+    out[6..12].copy_from_slice(&net::net_mac());
+    out[12] = 0x86;
+    out[13] = 0xDD;
+    {
+        let ip = &mut out[14..14 + 40];
+        ip[0] = 0x60; // version 6
+        let plen = (32u16).to_be_bytes(); // ICMPv6 payload length
+        ip[4] = plen[0];
+        ip[5] = plen[1];
+        ip[6] = 58; // next header ICMPv6
+        ip[7] = 255; // hop limit (NDP requires 255)
+        ip[8..24].copy_from_slice(&g6); // src = guest
+        ip[24..40].copy_from_slice(&na_dst); // dst = soliciting host / all-nodes
+    }
+    {
+        let na = &mut out[icmp_off..total];
+        na[0] = 136; // Neighbor Advertisement
+        na[1] = 0; // code
+        // Flag byte 4: R(0x80) Router, S(0x40) Solicited, O(0x20) Override.
+        na[4] = flags;
+        na[8..24].copy_from_slice(&g6); // target = guest's address
+        na[24] = 2; // option type 2 = Target Link-Layer Address
+        na[25] = 1; // length in 8-byte units (1 = 8 bytes)
+        na[26..32].copy_from_slice(&net::net_mac());
+        // Checksum over the IPv6 pseudo-header + message (field already zeroed).
+        let ck = icmpv6_checksum(&g6, &na_dst, na);
+        na[2] = (ck >> 8) as u8;
+        na[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Live RX responder: answer ICMPv6 echo requests (ping6) and Neighbor
+/// Solicitations (NDP) so the guest is a reachable, resolvable IPv6 host.
+/// Called from the RX pump for ethertype 0x86DD frames.
 pub(crate) unsafe fn icmpv6_input(frame: &[u8]) {
+    if frame.len() < 14 + 40 + 1 {
+        return;
+    }
     let mut out = [0u8; 1514];
-    if let Some(len) = build_icmpv6_echo_reply(frame, &mut out) {
-        let _ = net::wire_send(&out[..len]);
-        serial_write(b"ICMPV6: echo reply sent\n");
+    match frame[14 + 40] {
+        128 => {
+            if let Some(len) = build_icmpv6_echo_reply(frame, &mut out) {
+                let _ = net::wire_send(&out[..len]);
+                serial_write(b"ICMPV6: echo reply sent\n");
+            }
+        }
+        135 => {
+            if let Some(len) = build_neighbor_advert(frame, &mut out) {
+                let _ = net::wire_send(&out[..len]);
+                serial_write(b"NDP: advert sent\n");
+            }
+        }
+        _ => {}
     }
 }
 
@@ -744,6 +846,144 @@ pub(crate) unsafe fn icmpv6_selftest() -> u64 {
         return 0;
     }
     serial_write(b"ICMPV6: echo reply ok\n");
+    1
+}
+
+/// Self-test (op 9): synthesize a Neighbor Solicitation (type 135) for the
+/// guest's link-local address — addressed to the solicited-node multicast, as a
+/// real host's NDP would be — run the responder, and verify the reply is a
+/// type-136 Neighbor Advertisement with the Solicited+Override flags, the
+/// guest's address as target, a Target Link-Layer option carrying the guest
+/// MAC, and a wire-correct checksum. Returns 1 on success (full-os Part II.6).
+pub(crate) unsafe fn ndp_selftest() -> u64 {
+    let g6 = guest_ip6();
+    let mac = net::net_mac();
+    let host6: [u8; 16] = [
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0x55, 0x0a, 0xff, 0xfe, 0x00, 0x02, 0x02,
+    ];
+    let host_mac = [0x52u8, 0x55, 0x0a, 0x00, 0x02, 0x02];
+    // Solicited-node multicast of the target: ff02::1:ffXX:XXXX (low 24 bits).
+    let mut snm = [0u8; 16];
+    snm[0] = 0xff;
+    snm[1] = 0x02;
+    snm[11] = 0x01;
+    snm[12] = 0xff;
+    snm[13] = g6[13];
+    snm[14] = g6[14];
+    snm[15] = g6[15];
+    // NS frame = eth(14) + ip6(40) + body(type/code/csum 4 + reserved 4 +
+    // target 16 + SLLA option 8) = 86.
+    let mut req = [0u8; 14 + 40 + 32];
+    // Ethernet: dst = solicited-node multicast MAC 33:33:ff:XX:XX:XX, src = host.
+    req[0] = 0x33;
+    req[1] = 0x33;
+    req[2] = 0xff;
+    req[3] = g6[13];
+    req[4] = g6[14];
+    req[5] = g6[15];
+    req[6..12].copy_from_slice(&host_mac);
+    req[12] = 0x86;
+    req[13] = 0xDD;
+    {
+        let ip6 = &mut req[14..54];
+        ip6[0] = 0x60; // version 6
+        let plen = (32u16).to_be_bytes();
+        ip6[4] = plen[0];
+        ip6[5] = plen[1];
+        ip6[6] = 58; // next header ICMPv6
+        ip6[7] = 255; // hop limit
+        ip6[8..24].copy_from_slice(&host6);
+        ip6[24..40].copy_from_slice(&snm);
+    }
+    {
+        let ns = &mut req[54..86];
+        ns[0] = 135; // Neighbor Solicitation
+        // reserved bytes 4..8 stay zero
+        ns[8..24].copy_from_slice(&g6); // target = guest
+        ns[24] = 1; // Source Link-Layer Address option
+        ns[25] = 1;
+        ns[26..32].copy_from_slice(&host_mac);
+        let ck = icmpv6_checksum(&host6, &snm, ns);
+        ns[2] = (ck >> 8) as u8;
+        ns[3] = (ck & 0xFF) as u8;
+    }
+    let mut out = [0u8; 1514];
+    let len = match build_neighbor_advert(&req, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let na = &out[54..len];
+    // ICMPv6 NA fields.
+    if na[0] != 136 || na[1] != 0 {
+        return 0; // type = Neighbor Advertisement, code = 0
+    }
+    if na[4] & 0x60 != 0x60 {
+        return 0; // Solicited + Override set for a unicast resolution reply
+    }
+    if na[8..24] != g6 {
+        return 0; // NA target must be the guest's address
+    }
+    if na[24] != 2 || na[25] != 1 || na[26..32] != mac {
+        return 0; // TLLA option must carry the guest MAC
+    }
+    // Ethernet + IPv6 header must be wire-correct and deliverable. Check the
+    // on-wire bytes against KNOWN-correct values (not values read back from the
+    // builder's own output), so a regression in any of these fields is caught.
+    if out[0..6] != host_mac || out[6..12] != mac || out[12] != 0x86 || out[13] != 0xDD {
+        return 0; // eth dst = soliciting host, src = guest, ethertype IPv6
+    }
+    if out[21] != 255 {
+        return 0; // hop limit MUST be 255 (RFC 4861 §7.1.2)
+    }
+    if u16::from_be_bytes([out[18], out[19]]) != 32 {
+        return 0; // IPv6 payload length = NA message length
+    }
+    if out[22..38] != g6 || out[38..54] != host6 {
+        return 0; // IPv6 src = guest, dst = soliciting host
+    }
+    // The checksum must fold to zero computed from the known-correct addresses
+    // (g6, host6) and the on-wire payload length — not values read back from the
+    // builder — so a swapped/garbled src/dst cannot pass.
+    let mut s = 0u32;
+    csum_words(&mut s, &g6);
+    csum_words(&mut s, &host6);
+    s += u16::from_be_bytes([out[18], out[19]]) as u32;
+    s += 58;
+    csum_words(&mut s, na);
+    if csum_fold(s) != 0 {
+        return 0;
+    }
+    // DAD sub-case (RFC 4861 §7.2.4): flip the NS source to the unspecified
+    // address (::) and confirm the NA is now answered to the all-nodes multicast
+    // (ff02::1, MAC 33:33:00:00:00:01) with Solicited cleared (Override kept) —
+    // never unicast to ::.
+    req[14 + 8..14 + 24].copy_from_slice(&[0u8; 16]); // IPv6 source = ::
+    let mut dout = [0u8; 1514];
+    let dlen = match build_neighbor_advert(&req, &mut dout) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let all_nodes: [u8; 16] = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
+    if dout[0..6] != [0x33u8, 0x33, 0x00, 0x00, 0x00, 0x01] {
+        return 0; // eth dst = all-nodes multicast MAC
+    }
+    if dout[38..54] != all_nodes {
+        return 0; // IPv6 dst = ff02::1, never ::
+    }
+    let dna = &dout[54..dlen];
+    if dna[4] & 0x40 != 0 || dna[4] & 0x20 == 0 {
+        return 0; // Solicited MUST be clear, Override kept
+    }
+    let mut ds = 0u32;
+    csum_words(&mut ds, &g6);
+    csum_words(&mut ds, &all_nodes);
+    ds += u16::from_be_bytes([dout[18], dout[19]]) as u32;
+    ds += 58;
+    csum_words(&mut ds, dna);
+    if csum_fold(ds) != 0 {
+        return 0;
+    }
+    serial_write(b"NDP: advert ok\n");
     1
 }
 
