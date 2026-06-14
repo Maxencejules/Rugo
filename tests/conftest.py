@@ -851,6 +851,10 @@ def _boot_iso_with_disk_and_net(
         "-serial", "stdio",
         "-display", "none",
         "-no-reboot",
+        # Boot the OS from the CD-ROM explicitly. The data disk may carry a
+        # valid MBR (0x55AA) for partition-table tests; without this, SeaBIOS
+        # would try to boot the codeless data disk and hang.
+        "-boot", "d",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
         "-cdrom", iso_path,
         "-drive", f"file={disk_path},format=raw,if=none,id=disk0",
@@ -895,7 +899,7 @@ def qemu_serial_net_missing():
 
 
 APP_DISK_V1_TOOL = os.path.join(REPO_ROOT, "tools", "app_disk_v1.py")
-APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps", "wc", "hello", "nxprobe", "sigprobe", "fsperm", "asprobe", "forkprobe", "vmprobe", "timeprobe", "rngprobe", "sandboxprobe", "devprobe", "sysinfoprobe", "futexprobe", "lseekprobe", "sleepprobe", "gfxprobe", "waitprobe", "timerfdprobe", "dmesgprobe", "ptyprobe"]
+APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps", "wc", "hello", "nxprobe", "sigprobe", "fsperm", "asprobe", "forkprobe", "vmprobe", "timeprobe", "rngprobe", "sandboxprobe", "devprobe", "sysinfoprobe", "futexprobe", "lseekprobe", "sleepprobe", "gfxprobe", "waitprobe", "timerfdprobe", "dmesgprobe", "ptyprobe", "partprobe"]
 
 
 def _ensure_app_region(disk_path):

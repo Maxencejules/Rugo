@@ -4742,6 +4742,53 @@ cfg_r4! {
             // op 4 = dmesg read: copy the kernel log tail (a2 = user buffer,
             // a3 = capacity) -> bytes copied, or u64::MAX on a bad buffer.
             4 => klog_read(a2, a3 as usize),
+            // op 5 = MBR partition-table parse (full-os guide Part II.5
+            // partitions): read LBA 0, validate the 0x55AA signature, log each
+            // non-empty primary entry -> partition count (u64::MAX if no disk
+            // or no boot signature).
+            5 => {
+                if !storage::r4_storage_available()
+                    || !block_io_dispatch(false, 0, 512, false)
+                {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                if BLK_DATA_PAGE.0[510] != 0x55 || BLK_DATA_PAGE.0[511] != 0xAA {
+                    serial_write(b"PART: no signature\n");
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let mut count = 0u64;
+                let mut i = 0usize;
+                while i < 4 {
+                    let e = 446 + i * 16;
+                    let ptype = BLK_DATA_PAGE.0[e + 4];
+                    if ptype != 0 {
+                        let lba = u32::from_le_bytes([
+                            BLK_DATA_PAGE.0[e + 8],
+                            BLK_DATA_PAGE.0[e + 9],
+                            BLK_DATA_PAGE.0[e + 10],
+                            BLK_DATA_PAGE.0[e + 11],
+                        ]);
+                        let secs = u32::from_le_bytes([
+                            BLK_DATA_PAGE.0[e + 12],
+                            BLK_DATA_PAGE.0[e + 13],
+                            BLK_DATA_PAGE.0[e + 14],
+                            BLK_DATA_PAGE.0[e + 15],
+                        ]);
+                        serial_write(b"PART: ");
+                        serial_write_hex(i as u64);
+                        serial_write(b" type=0x");
+                        serial_write_hex(ptype as u64);
+                        serial_write(b" lba=0x");
+                        serial_write_hex(lba as u64);
+                        serial_write(b" sectors=0x");
+                        serial_write_hex(secs as u64);
+                        serial_write(b"\n");
+                        count += 1;
+                    }
+                    i += 1;
+                }
+                count
+            }
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }

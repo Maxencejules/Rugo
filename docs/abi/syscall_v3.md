@@ -54,8 +54,9 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
   `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
   frames, op 3 = uptime ticks, op 4 = dmesg read(`rsi`=buf, `rdx`=cap) →
-  bytes copied; contract in `docs/runtime/sysinfo_v1.md`,
-  `docs/runtime/dmesg_v1.md`).
+  bytes copied, op 5 = MBR partition parse → partition count (logs each
+  entry); contract in `docs/runtime/sysinfo_v1.md`,
+  `docs/runtime/dmesg_v1.md`, `docs/runtime/partitions_v1.md`).
 
 Spawned tasks get a copy-on-write-isolated private address space, a random
 page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),
