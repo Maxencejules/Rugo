@@ -23,16 +23,25 @@ At boot (go lane, interrupts still masked), `mouse_selftest`:
 **aux bit (0x20)**, draining any interleaved keyboard byte — and the reset runs
 with interrupts masked, so the existing keyboard IRQ/poll cannot race the reply.
 
+## Movement-packet parsing (`mouse_packet_selftest`)
+
+`mouse_decode` parses a standard 3-byte PS/2 movement packet into signed
+`(dx, dy)` + a button bitmap: byte 0 carries the buttons (bit0 left, bit1 right,
+bit2 middle), the always-1 **sync** bit (bit3), and the X/Y **sign** bits
+(bit4/bit5); bytes 1/2 are the 9-bit two's-complement movement whose high bit is
+the sign bit in byte 0. A packet whose sync bit is clear is rejected
+(out-of-sync). `mouse_packet_selftest` decodes a sequence (`+5,+3` left-down, then
+`-2,-1` no-buttons), accumulates a cursor, and confirms it reaches `(3, 2)` and
+that an out-of-sync packet is dropped — `MOUSE: packet ok x=0x3 y=0x2`.
+
 ## v1 boundary / carry-forward
 
-- **Bring-up only.** v1 does not enable continuous data reporting (`0xF4`) or
-  parse 3-byte movement packets, and it does not raise an event to userspace.
-  After reset the mouse defaults to reporting **disabled**, so it stays quiet and
-  cannot flood the i8042; the existing keyboard poll would drain any aux bytes
-  anyway (so the console is unaffected).
-- **No movement test.** Exercising movement/button packets needs QMP
-  `input-send-event` injection (the boot fixture only feeds a fixed keyboard
-  string). A movement-reporting driver + an input event queue feeding a
+- **Bring-up + packet parser.** Reset/identify and the movement-packet decoder +
+  cursor accumulation are done. What remains: enabling continuous data reporting
+  (`0xF4`) and **live IRQ12 delivery** (unmasking PIC2 line 4 + an ISR feeding the
+  decoder), and QMP `input-send-event`-injected movement in the test — the
+  decoder is proven on synthetic packets here (mechanism-before-wiring).
+- A movement-reporting driver + an input event queue routing clicks to a
   compositor/window-server is the carry-forward (status doc item 3).
 
 ## Acceptance

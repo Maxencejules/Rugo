@@ -9979,6 +9979,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ecam_selftest(); // full-os Part II.7: PCIe ECAM config access
         let _ = msix_selftest(); // full-os Part II.7: MSI-X capability + enable
         let _ = kbd::mouse_selftest(); // full-os Part III: PS/2 mouse bring-up
+        let _ = kbd::mouse_packet_selftest(); // full-os Part III: mouse movement packets
         net::r4_c4_runtime_init();
         // Net responder self-tests (full-os guide Part II.6): exercise the same
         // builders the live RX pump uses to answer inbound pings and ARP.

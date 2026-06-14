@@ -188,3 +188,78 @@ pub(crate) unsafe fn mouse_selftest() -> u64 {
     crate::serial_write(b" ok\n");
     1
 }
+
+/// Decode a standard 3-byte PS/2 mouse movement packet into signed (dx, dy) and
+/// the button bitmap (bit0 left, bit1 right, bit2 middle). byte0 holds the button
+/// + sign + overflow flags; byte1/byte2 are 9-bit two's-complement movement whose
+/// high bit lives in byte0 (X sign = bit4, Y sign = bit5). Returns None if the
+/// sync bit (byte0 bit3) is clear (an out-of-sync / invalid packet).
+fn mouse_decode(p: [u8; 3]) -> Option<(i32, i32, u8)> {
+    let b0 = p[0];
+    if b0 & 0x08 == 0 {
+        return None; // sync bit must be set on a valid first packet byte
+    }
+    let mut dx = p[1] as i32;
+    let mut dy = p[2] as i32;
+    if b0 & 0x10 != 0 {
+        dx -= 256; // X sign -> negative
+    }
+    if b0 & 0x20 != 0 {
+        dy -= 256; // Y sign -> negative
+    }
+    Some((dx, dy, b0 & 0x07))
+}
+
+/// Mouse movement-packet self-test (full-os guide Part III input): decode a
+/// sequence of synthetic PS/2 packets, accumulate a cursor position + button
+/// state, and verify the signed movement (including negative via the sign bits),
+/// the button bitmap, and that an out-of-sync packet (sync bit clear) is
+/// rejected. v1: the packet parser + cursor accumulation; live IRQ12 delivery and
+/// QMP-injected movement are carry-forward. Emits `MOUSE: packet ok` / `fail`.
+pub(crate) unsafe fn mouse_packet_selftest() -> u64 {
+    let mut x = 0i32;
+    let mut y = 0i32;
+    let mut buttons = 0u8;
+
+    // 1) +5, +3 with the left button held. byte0 = sync(0x08) | left(0x01) = 0x09.
+    match mouse_decode([0x09, 5, 3]) {
+        Some((dx, dy, b)) if dx == 5 && dy == 3 && b == 0x01 => {
+            x += dx;
+            y += dy;
+            buttons = b;
+        }
+        _ => {
+            crate::serial_write(b"MOUSE: packet fail\n");
+            return 0;
+        }
+    }
+    // 2) -2, -1 with no buttons. byte0 = sync | X sign(0x10) | Y sign(0x20) = 0x38;
+    // byte1 = 254 (-2), byte2 = 255 (-1).
+    match mouse_decode([0x38, 254, 255]) {
+        Some((dx, dy, b)) if dx == -2 && dy == -1 && b == 0x00 => {
+            x += dx;
+            y += dy;
+            buttons = b;
+        }
+        _ => {
+            crate::serial_write(b"MOUSE: packet fail\n");
+            return 0;
+        }
+    }
+    // 3) An out-of-sync packet (sync bit clear) must be rejected.
+    if mouse_decode([0x00, 9, 9]).is_some() {
+        crate::serial_write(b"MOUSE: packet fail\n");
+        return 0;
+    }
+    // The cursor accumulated to (5-2, 3-1) = (3, 2); buttons cleared in packet 2.
+    if x != 3 || y != 2 || buttons != 0 {
+        crate::serial_write(b"MOUSE: packet fail\n");
+        return 0;
+    }
+    crate::serial_write(b"MOUSE: packet ok x=0x");
+    crate::serial_write_hex(x as u64);
+    crate::serial_write(b" y=0x");
+    crate::serial_write_hex(y as u64);
+    crate::serial_write(b"\n");
+    1
+}

@@ -113,8 +113,10 @@ single safe boot-verified slice and several have hard prerequisites.
    enumeration) + a HID boot-protocol driver; an e1000 TX/RX-ring driver (built on
    the DMA pool); MSI/MSI-X; and migrating the virtio/NVMe probes onto `dma_alloc`
    + routing all config access through ECAM.
-3. **III input + compositor/window-server + audio — mouse, z-order compositor, HD-Audio detection done.**
-   The mouse device is reset + identified at boot (`mouse_v1.md`), the compositor
+3. **III input + compositor/window-server + audio — mouse + packet parsing, z-order compositor, HD-Audio detection done.**
+   The mouse device is reset + identified at boot and its 3-byte movement packets
+   are decoded into signed dx/dy + buttons with cursor accumulation
+   (`mouse_v1.md`, `MOUSE: packet ok`), the compositor
    composites multiple surfaces to the framebuffer in **z-order**
    (`compositor_v1.md`, verified via QMP screendump), the PC speaker beeps
    (`audio_v1.md`), and an Intel **HD Audio** controller is discovered + its
