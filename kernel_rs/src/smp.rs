@@ -171,7 +171,18 @@ unsafe fn ap_poll_work() {
             .compare_exchange(gen, 0, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
     {
-        let r = run_work(WORK_KIND.load(Ordering::Acquire), WORK_ARG.load(Ordering::Acquire));
+        let kind = WORK_KIND.load(Ordering::Acquire);
+        let arg = WORK_ARG.load(Ordering::Acquire);
+        // Kind 2 = run a ring-3 user task on this AP (SMP capstone). It does not
+        // return here: it enters ring 3 and later resumes in ap_user_done, which
+        // republishes completion and re-enters the park loop.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if kind == 2 {
+                ap_run_user_task(gen, arg);
+            }
+        }
+        let r = run_work(kind, arg);
         WORK_RESULT.store(r, Ordering::Release);
         WORK_DONE.store(gen, Ordering::Release);
     }
@@ -200,6 +211,153 @@ unsafe fn smp_dispatch_work(kind: u64, arg: u64) -> Option<u64> {
     } else {
         None
     }
+}
+
+// ---- SMP scheduler capstone: run a ring-3 USER task on an application
+// processor (full-os guide Part I.3). The primitives above (IPI, per-CPU LAPIC
+// timer, per-CPU GS, cross-CPU work dispatch, TLB shootdown) made an AP run
+// dispatched KERNEL work; this makes an AP enter ring 3, execute user code on
+// its own core, take the ring-3->ring-0 trap onto its OWN per-CPU kernel stack
+// (via its own TSS rsp0), and report a result the BSP verifies.
+//
+// Flow: the BSP builds a private address space holding the user code + a stack
+// (the same mm path spawned apps use), publishes it, and dispatches work kind 2.
+// An AP claims it, loads that CR3, and `iretq`s to ring 3 with the arg in RDI.
+// The user code computes arg*2+1 and `int 0x81`s; ap_user_trap records the
+// result, restores the kernel CR3, and trampolines the AP back into kernel code
+// (ap_user_done) on its own kernel stack — mirroring the m3 ring-3->kernel
+// return — which republishes completion and resumes normal AP polling.
+
+// Ring-3 payload (position-independent, touches no memory so every page is
+// premapped and it never demand-faults on the AP):
+//   48 01 FF        add rdi, rdi    ; rdi = 2*arg   (arg arrives in RDI)
+//   48 83 C7 01     add rdi, 1      ; rdi = 2*arg+1
+//   CD 81           int 0x81        ; report RDI to ap_user_trap
+//   EB FE         1: jmp 1b         ; unreachable (the trampoline takes over)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_CODE: [u8; 11] =
+    [0x48, 0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE];
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_CR3: AtomicU64 = AtomicU64::new(0); // user address space to run
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_ENTRY: AtomicU64 = AtomicU64::new(0); // ring-3 entry VA
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_SP: AtomicU64 = AtomicU64::new(0); // ring-3 stack top
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_RESULT: AtomicU64 = AtomicU64::new(0); // value the task reported
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_CPU: AtomicU64 = AtomicU64::new(0); // gs:[0] of the AP that ran it
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_USER_GEN: AtomicU64 = AtomicU64::new(0); // work gen, for WORK_DONE
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_SAVED_CR3: AtomicU64 = AtomicU64::new(0); // kernel CR3 to restore
+
+/// Run a ring-3 user task on the current AP. Never returns to the caller: it
+/// enters ring 3 and later resumes in `ap_user_done`. Requires this AP to own a
+/// TSS (per-CPU slot < MAX_TSS, recorded in gs:[0]); without one it cannot take
+/// the ring-3->ring-0 transition, so it reports a sentinel and resumes polling.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ap_run_user_task(gen: u64, arg: u64) -> ! {
+    let slot: u64;
+    core::arch::asm!("mov {}, gs:[0]", out(reg) slot, options(nostack));
+    if slot == 0 || slot >= crate::arch_x86::MAX_TSS as u64 {
+        AP_USER_RESULT.store(u64::MAX, Ordering::Release);
+        AP_USER_CPU.store(slot, Ordering::Release);
+        WORK_RESULT.store(u64::MAX, Ordering::Release);
+        WORK_DONE.store(gen, Ordering::Release);
+        loop {
+            ap_poll_work();
+            core::arch::asm!("sti; hlt", options(nomem, nostack));
+        }
+    }
+    AP_USER_GEN.store(gen, Ordering::Release);
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    AP_SAVED_CR3.store(kcr3, Ordering::Release);
+    let ucr3 = AP_USER_CR3.load(Ordering::Acquire);
+    let entry = AP_USER_ENTRY.load(Ordering::Acquire);
+    let usp = AP_USER_SP.load(Ordering::Acquire);
+    core::arch::asm!("mov cr3, {}", in(reg) ucr3, options(nostack));
+    crate::arch_x86::enter_ring3_with_arg(entry, usp, arg);
+}
+
+/// AP user-task report handler (trap_handler vector 0x81, ring 3 only). Records
+/// the reported value (RDI) and the running AP's slot, restores the kernel CR3,
+/// and rewrites the trap frame so the `iretq` resumes `ap_user_done` in ring 0
+/// on THIS AP's own kernel stack.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn ap_user_trap(frame: *mut u64) {
+    let reported = *frame.add(9); // RDI
+    let slot: u64;
+    core::arch::asm!("mov {}, gs:[0]", out(reg) slot, options(nostack));
+    let kcr3 = AP_SAVED_CR3.load(Ordering::Acquire);
+    if kcr3 != 0 {
+        core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack));
+    }
+    AP_USER_RESULT.store(reported, Ordering::Release);
+    AP_USER_CPU.store(slot, Ordering::Release);
+    let kstack = crate::arch_x86::ap_kstack_top(slot as usize);
+    *frame.add(17) = ap_user_done as *const () as u64; // RIP
+    *frame.add(18) = 0x08; // CS (ring 0)
+    *frame.add(19) = 0x002; // RFLAGS (IF clear)
+    *frame.add(20) = kstack; // RSP (this AP's kernel stack)
+    *frame.add(21) = 0x10; // SS (ring 0 data)
+}
+
+/// Kernel continuation after an AP's ring-3 user task returns: publish
+/// completion (the BSP's smp_dispatch_work is waiting on WORK_DONE), then resume
+/// normal AP duty.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+extern "C" fn ap_user_done() -> ! {
+    unsafe {
+        WORK_RESULT.store(AP_USER_RESULT.load(Ordering::Acquire), Ordering::Release);
+        WORK_DONE.store(AP_USER_GEN.load(Ordering::Acquire), Ordering::Release);
+        loop {
+            ap_poll_work();
+            core::arch::asm!("sti; hlt", options(nomem, nostack));
+        }
+    }
+}
+
+/// BSP side of the capstone: build a private address space with the ring-3 user
+/// code + a stack, dispatch it to an AP (work kind 2), and verify the AP ran it
+/// in ring 3 (result == arg*2+1) on an application processor (slot >= 1).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ap_user_selftest() -> bool {
+    const CODE_VA: u64 = 0x0140_0000; // exec-app window: the loader clears NX here
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    const ARG: u64 = 21;
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let ucr3 = match crate::mm::address_space_create(kcr3) {
+        Some(p) => p,
+        None => return false,
+    };
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_USER_CODE)
+        || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+    {
+        crate::mm::address_space_release(ucr3);
+        return false;
+    }
+    AP_USER_CR3.store(ucr3, Ordering::Release);
+    AP_USER_ENTRY.store(CODE_VA, Ordering::Release);
+    AP_USER_SP.store(STACK_TOP, Ordering::Release);
+    let result = smp_dispatch_work(2, ARG);
+    let cpu = AP_USER_CPU.load(Ordering::Acquire);
+    // Reclaim the address space ONLY on the success path. There, the AP restored
+    // the kernel CR3 (ap_user_trap) *before* publishing WORK_DONE, and we waited
+    // on WORK_DONE with Acquire ordering, so the AP is provably off this CR3.
+    // On a timeout (None) that happens-before is absent — a claiming AP could
+    // still be translating through ucr3 (or a late AP could yet load it) — so we
+    // intentionally LEAK rather than free live page tables (a cross-CPU UAF /
+    // PMM double-allocation). This boot self-test runs once; the timeout path is
+    // unreachable in practice (the AP claims within one LAPIC-timer period).
+    if result.is_some() {
+        crate::mm::address_space_release(ucr3);
+    }
+    matches!(result, Some(v) if v == ARG * 2 + 1) && cpu >= 1
 }
 
 /// LAPIC-timer service routine (from trap_handler vector 241): tick + EOI.
@@ -351,6 +509,17 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
         if slot < MAX_CPUS {
             percpu_init(slot);
             lapic_timer_start(); // this AP's own periodic preemption clock
+            // SMP capstone: give this AP its own TSS (rsp0 = a per-CPU kernel
+            // stack) so it can take a ring-3->ring-0 transition and run user
+            // tasks. Bounded by MAX_TSS; a surplus AP simply cannot run ring 3.
+            // Done before the check-in below, so once the BSP sees every AP
+            // online they are all ready to be handed a user task.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            {
+                if slot < crate::arch_x86::MAX_TSS {
+                    crate::arch_x86::tss_init_cpu(slot, crate::arch_x86::ap_kstack_top(slot));
+                }
+            }
         }
         APS_ONLINE.fetch_add(1, Ordering::SeqCst);
         loop {
@@ -516,6 +685,19 @@ pub fn smp_init() {
                 serial_write(b"ok\n");
             } else {
                 serial_write(b"FAIL\n");
+            }
+            // Capstone: run a real ring-3 USER task on an application processor.
+            // The BSP builds the user address space + dispatches; an AP enters
+            // ring 3, runs it on its own core, and reports back.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            {
+                let user_ok = ap_user_selftest();
+                serial_write(b"SMP: ap user task ");
+                if user_ok {
+                    serial_write(b"ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
             }
         }
     }

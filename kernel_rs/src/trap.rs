@@ -110,6 +110,13 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             128 => {
                 crate::syscall::syscall_dispatch(frame);
             }
+            // AP user-task report gate (SMP capstone): the ring-3 task an
+            // application processor runs traps here to hand back its result;
+            // the handler trampolines the AP back into kernel code.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            129 => {
+                crate::smp::ap_user_trap(frame);
+            }
             240 => {
                 crate::smp::ipi_handler();
             }

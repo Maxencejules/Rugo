@@ -5251,88 +5251,280 @@ cfg_r4! {
         }
     }
 
-    // Dynamic loading (full-os guide Part V.11): a dlopen/dlsym-style module
-    // loader. The dynamic linker for real ELF .so files is blocked on the PE->ELF
-    // toolchain (mingw refptr/auto-import breaks C binaries past 2 pages); this v1
-    // sidesteps that with a position-independent module the kernel ships embedded.
-    // A module is [u32 n_exports][exports: {name[12], u32 offset}][PIC code]; v1
-    // ships one module ("dlmod") exporting "addone" (rax = rdi + 1). The loader
-    // maps it into a fresh executable user region and resolves symbols from the
-    // loaded image's export table.
-    // Above the exec-app window [0x0140_0000,0x0180_0000) and the brk/mmap
-    // regions below it: the [0x0180_0000,0x0200_0000) gap is owned by no other
-    // user mapping, so the loaded module can never alias the caller's own ELF
-    // segments/heap/mmap.
+    // Dynamic loading (full-os guide Part V.11): a real ELF `.so` dynamic linker.
+    // The kernel ships one position-independent shared object embedded
+    // (`dl_module.so`, built by `nasm -f elf64` + `rust-lld -shared` from
+    // apps/dl/libdl.asm — sidestepping the blocked mingw PE->ELF C path that
+    // cannot produce a working multi-page binary). dlopen parses the ELF64
+    // program headers, maps each PT_LOAD segment into a fresh user region at
+    // DLOPEN_BASE+p_vaddr with W^X perms, and applies R_X86_64_RELATIVE
+    // relocations from PT_DYNAMIC; dlsym resolves a name from the .dynsym/.dynstr
+    // (symbol count from the SysV .hash nchain). The user demand window
+    // [0x0100_0000,0x0200_0000) is fully partitioned — brk [0x100,0x120), mmap
+    // [0x120,0x140), exec-app [0x140,0x180), demand-task stacks [0x190,0x200)
+    // (all in MiB) — leaving exactly ONE free 1 MiB sub-gap, [0x0180_0000,
+    // 0x0190_0000). DLOPEN_BASE sits there, so a loaded object (the shipped
+    // .so spans <0x4000) never aliases the caller's heap/mmap/exec segments OR
+    // a clone-thread's demand stack (which begins at 0x0190_0000). NOTE: this
+    // gap is below DEMAND_STACK_BASE by design; do not raise DLOPEN_BASE into
+    // [0x0190_0000,0x0200_0000) — that is the per-task stack region.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    const DLOPEN_BASE: u64 = 0x0190_0000;
+    const DLOPEN_BASE: u64 = 0x0180_0000;
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static DL_MODULE: [u8; 25] = [
-        0x01, 0x00, 0x00, 0x00, // n_exports = 1
-        b'a', b'd', b'd', b'o', b'n', b'e', 0, 0, 0, 0, 0, 0, // name[12] = "addone"
-        0x14, 0x00, 0x00, 0x00, // offset = 20 (start of the code)
-        0x48, 0x8D, 0x47, 0x01, 0xC3, // lea rax,[rdi+1] ; ret  (PIC)
-    ];
+    static DL_SO: &[u8] = include_bytes!("dl_module.so");
 
-    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> module base VA (loads
-    /// the named embedded module into an executable user region), op 2 =
-    /// dlsym(name) -> resolved function VA from the loaded module's export table.
-    /// -1 on unknown module/symbol or a mapping failure.
+    /// Convert a `.so` virtual address to a byte offset in the file image by
+    /// walking the PT_LOAD program headers.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn dl_vaddr_to_off(so: &[u8], vaddr: u64) -> Option<usize> {
+        if so.len() < 64 {
+            return None;
+        }
+        let e_phoff = u64::from_le_bytes(so[32..40].try_into().ok()?) as usize;
+        let e_phentsize = u16::from_le_bytes(so[54..56].try_into().ok()?) as usize;
+        let e_phnum = u16::from_le_bytes(so[56..58].try_into().ok()?) as usize;
+        let mut i = 0usize;
+        while i < e_phnum {
+            let ph = e_phoff + i * e_phentsize;
+            if ph + 56 > so.len() {
+                return None;
+            }
+            if u32::from_le_bytes(so[ph..ph + 4].try_into().ok()?) == 1 {
+                let p_offset = u64::from_le_bytes(so[ph + 8..ph + 16].try_into().ok()?);
+                let p_vaddr = u64::from_le_bytes(so[ph + 16..ph + 24].try_into().ok()?);
+                let p_filesz = u64::from_le_bytes(so[ph + 32..ph + 40].try_into().ok()?);
+                if vaddr >= p_vaddr && vaddr < p_vaddr + p_filesz {
+                    return Some((vaddr - p_vaddr + p_offset) as usize);
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Look up a tag in the `.so` PT_DYNAMIC array; returns its `d_val`.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn dl_dyn(so: &[u8], tag: u64) -> Option<u64> {
+        if so.len() < 64 {
+            return None;
+        }
+        let e_phoff = u64::from_le_bytes(so[32..40].try_into().ok()?) as usize;
+        let e_phentsize = u16::from_le_bytes(so[54..56].try_into().ok()?) as usize;
+        let e_phnum = u16::from_le_bytes(so[56..58].try_into().ok()?) as usize;
+        let mut dyn_off = 0usize;
+        let mut dyn_sz = 0usize;
+        let mut i = 0usize;
+        while i < e_phnum {
+            let ph = e_phoff + i * e_phentsize;
+            if ph + 56 > so.len() {
+                return None;
+            }
+            if u32::from_le_bytes(so[ph..ph + 4].try_into().ok()?) == 2 {
+                dyn_off = u64::from_le_bytes(so[ph + 8..ph + 16].try_into().ok()?) as usize;
+                dyn_sz = u64::from_le_bytes(so[ph + 32..ph + 40].try_into().ok()?) as usize;
+                break;
+            }
+            i += 1;
+        }
+        if dyn_sz == 0 || dyn_off + dyn_sz > so.len() {
+            return None;
+        }
+        let mut d = 0usize;
+        while d + 16 <= dyn_sz {
+            let t = u64::from_le_bytes(so[dyn_off + d..dyn_off + d + 8].try_into().ok()?);
+            let v = u64::from_le_bytes(so[dyn_off + d + 8..dyn_off + d + 16].try_into().ok()?);
+            if t == 0 {
+                break;
+            }
+            if t == tag {
+                return Some(v);
+            }
+            d += 16;
+        }
+        None
+    }
+
+    /// dlopen: map the embedded ELF `.so` into the user address space and apply
+    /// its relative relocations. Returns the load base, or ERR.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_load_elf() -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let so = DL_SO;
+        let base = DLOPEN_BASE;
+        if so.len() < 64 || so[0] != 0x7F || &so[1..4] != b"ELF" || so[4] != 2 {
+            return ERR; // not a 64-bit ELF
+        }
+        let e_phoff = u64::from_le_bytes(so[32..40].try_into().unwrap()) as usize;
+        let e_phentsize = u16::from_le_bytes(so[54..56].try_into().unwrap()) as usize;
+        let e_phnum = u16::from_le_bytes(so[56..58].try_into().unwrap()) as usize;
+        // Pass 1: map each PT_LOAD RW and copy its file contents in.
+        let mut i = 0usize;
+        while i < e_phnum {
+            let ph = e_phoff + i * e_phentsize;
+            if ph + 56 > so.len() {
+                return ERR;
+            }
+            let p_type = u32::from_le_bytes(so[ph..ph + 4].try_into().unwrap());
+            if p_type == 1 {
+                let p_offset = u64::from_le_bytes(so[ph + 8..ph + 16].try_into().unwrap()) as usize;
+                let p_vaddr = u64::from_le_bytes(so[ph + 16..ph + 24].try_into().unwrap());
+                let p_filesz = u64::from_le_bytes(so[ph + 32..ph + 40].try_into().unwrap()) as usize;
+                let p_memsz = u64::from_le_bytes(so[ph + 40..ph + 48].try_into().unwrap());
+                if p_memsz > 0 {
+                    let mut va = (base + p_vaddr) & !0xFFF;
+                    let end = base + p_vaddr + p_memsz;
+                    while va < end {
+                        if !crate::mm::vm_map_current(va, 2) || !crate::mm::vm_protect_current(va, 2)
+                        {
+                            return ERR; // RW (force, so a re-dlopen can re-copy)
+                        }
+                        va += 0x1000;
+                    }
+                    if p_filesz > 0 {
+                        if p_offset + p_filesz > so.len() {
+                            return ERR;
+                        }
+                        if copyout_user(base + p_vaddr, &so[p_offset..p_offset + p_filesz], p_filesz)
+                            .is_err()
+                        {
+                            return ERR;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        // Pass 2: apply R_X86_64_RELATIVE relocations (*(base+off) = base+addend).
+        if let (Some(rela_va), Some(rela_sz)) = (dl_dyn(so, 7), dl_dyn(so, 8)) {
+            if let Some(rela_off) = dl_vaddr_to_off(so, rela_va) {
+                let rela_sz = rela_sz as usize;
+                if rela_off + rela_sz <= so.len() {
+                    let mut r = 0usize;
+                    while r + 24 <= rela_sz {
+                        let o = rela_off + r;
+                        let r_offset = u64::from_le_bytes(so[o..o + 8].try_into().unwrap());
+                        let r_info = u64::from_le_bytes(so[o + 8..o + 16].try_into().unwrap());
+                        let r_addend = u64::from_le_bytes(so[o + 16..o + 24].try_into().unwrap());
+                        if r_info & 0xFFFF_FFFF == 8 {
+                            let val = base.wrapping_add(r_addend);
+                            if copyout_user(base + r_offset, &val.to_le_bytes(), 8).is_err() {
+                                return ERR;
+                            }
+                        }
+                        r += 24;
+                    }
+                }
+            }
+        }
+        // Pass 3: set each PT_LOAD to its final perms (R-X for X, RW for W, else R).
+        i = 0;
+        while i < e_phnum {
+            let ph = e_phoff + i * e_phentsize;
+            let p_type = u32::from_le_bytes(so[ph..ph + 4].try_into().unwrap());
+            if p_type == 1 {
+                let p_vaddr = u64::from_le_bytes(so[ph + 16..ph + 24].try_into().unwrap());
+                let p_memsz = u64::from_le_bytes(so[ph + 40..ph + 48].try_into().unwrap());
+                let p_flags = u32::from_le_bytes(so[ph + 4..ph + 8].try_into().unwrap());
+                if p_memsz > 0 {
+                    let prot = (if p_flags & 1 != 0 { 4 } else { 0 })
+                        | (if p_flags & 2 != 0 { 2 } else { 0 });
+                    let mut va = (base + p_vaddr) & !0xFFF;
+                    let end = base + p_vaddr + p_memsz;
+                    while va < end {
+                        if !crate::mm::vm_protect_current(va, prot) {
+                            return ERR;
+                        }
+                        va += 0x1000;
+                    }
+                }
+            }
+            i += 1;
+        }
+        base
+    }
+
+    /// dlsym: resolve `target` from the embedded `.so` .dynsym/.dynstr; returns
+    /// its loaded VA (base + st_value), or ERR.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_resolve(target: &[u8]) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let so = DL_SO;
+        let symtab = match dl_dyn(so, 6).and_then(|v| dl_vaddr_to_off(so, v)) {
+            Some(o) => o,
+            None => return ERR,
+        };
+        let strtab = match dl_dyn(so, 5).and_then(|v| dl_vaddr_to_off(so, v)) {
+            Some(o) => o,
+            None => return ERR,
+        };
+        let hash = match dl_dyn(so, 4).and_then(|v| dl_vaddr_to_off(so, v)) {
+            Some(o) => o,
+            None => return ERR,
+        };
+        if hash + 8 > so.len() {
+            return ERR;
+        }
+        // SysV hash: nchain (word 1) == number of .dynsym entries.
+        let nchain = u32::from_le_bytes(so[hash + 4..hash + 8].try_into().unwrap()) as usize;
+        let mut s = 1usize; // skip the index-0 null symbol
+        while s < nchain {
+            let sym = symtab + s * 24;
+            if sym + 24 > so.len() {
+                break;
+            }
+            let st_name = u32::from_le_bytes(so[sym..sym + 4].try_into().unwrap()) as usize;
+            let st_value = u64::from_le_bytes(so[sym + 8..sym + 16].try_into().unwrap());
+            let nm = strtab + st_name;
+            let mut k = 0usize;
+            let mut ok = true;
+            while k < target.len() {
+                if nm + k >= so.len() || so[nm + k] != target[k] {
+                    ok = false;
+                    break;
+                }
+                k += 1;
+            }
+            // Exact match: the .so name must terminate right after `target`.
+            if ok && nm + target.len() < so.len() && so[nm + target.len()] == 0 {
+                return DLOPEN_BASE + st_value;
+            }
+            s += 1;
+        }
+        ERR
+    }
+
+    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> ELF `.so` load base VA,
+    /// op 2 = dlsym(name) -> resolved symbol VA. -1 on unknown module/symbol or a
+    /// mapping/relocation failure.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_dlctl(op: u64, a2: u64, _a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         match op {
             1 => {
-                // dlopen: only "dlmod" is shipped in v1.
+                // dlopen: the kernel ships one embedded .so, named "libdl".
                 let mut name = [0u8; 8];
                 if copyin_user(&mut name, a2, 8).is_err() {
                     return ERR;
                 }
-                if &name[..6] != b"dlmod\0" {
+                if &name[..6] != b"libdl\0" {
                     return ERR;
                 }
-                // Map RW, copy the module image in, then re-protect read+execute
-                // (W^X: never writable and executable at once). Idempotent: a
-                // repeat dlopen finds the page already mapped (R-X from the prior
-                // load), so force it back to RW before the re-copy rather than
-                // failing the copyout.
-                if !crate::mm::vm_map_current(DLOPEN_BASE, 2) {
-                    return ERR;
-                }
-                if !crate::mm::vm_protect_current(DLOPEN_BASE, 2) {
-                    return ERR;
-                }
-                if copyout_user(DLOPEN_BASE, &DL_MODULE, DL_MODULE.len()).is_err() {
-                    return ERR;
-                }
-                if !crate::mm::vm_protect_current(DLOPEN_BASE, 4) {
-                    return ERR;
-                }
-                DLOPEN_BASE
+                dl_load_elf()
             }
             2 => {
-                // dlsym: resolve from the LOADED module's export table.
-                let mut sym = [0u8; 12];
-                if copyin_user(&mut sym, a2, 12).is_err() {
+                // dlsym: resolve a name from the loaded object's .dynsym.
+                let mut nm = [0u8; 16];
+                if copyin_user(&mut nm, a2, 16).is_err() {
                     return ERR;
                 }
-                let mut hdr = [0u8; 4];
-                if copyin_user(&mut hdr, DLOPEN_BASE, 4).is_err() {
+                let mut len = 0usize;
+                while len < 16 && nm[len] != 0 {
+                    len += 1;
+                }
+                if len == 0 {
                     return ERR;
                 }
-                let n = u32::from_le_bytes(hdr) as usize;
-                let mut e = 0usize;
-                while e < n && e < 16 {
-                    let mut ent = [0u8; 16];
-                    if copyin_user(&mut ent, DLOPEN_BASE + 4 + (e * 16) as u64, 16).is_err() {
-                        return ERR;
-                    }
-                    if ent[..12] == sym[..] {
-                        let off = u32::from_le_bytes([ent[12], ent[13], ent[14], ent[15]]) as u64;
-                        return DLOPEN_BASE + off;
-                    }
-                    e += 1;
-                }
-                ERR
+                dl_resolve(&nm[..len])
             }
             _ => ERR,
         }

@@ -80,13 +80,24 @@ single safe boot-verified slice and several have hard prerequisites.
    undisturbed). **Cross-CPU work dispatch** is also in place (`ap_work_v1.md`):
    the BSP hands a kernel work item to the APs, exactly one AP claims it (atomic
    CAS) and runs it on its own core, reporting the result (`SMP: ap work ok`).
-   The APs now run real dispatched kernel work, not just park. **Remaining (the
-   capstone, a dedicated core effort):** wire `tlb_shootdown` into the `munmap`/
-   `mprotect`/CoW paths; turn the single-item work mailbox into a per-CPU run
-   queue holding `current`/tasks; add per-CPU GDT/TSS so an AP takes a ring3->ring0
-   trap on its own kernel stack; and make the scheduler/syscall/page-fault paths
-   SMP-safe (today they assume one CPU with interrupts-off syscalls) so the
-   scheduler can run USER tasks on the APs.
+   The APs now run real dispatched kernel work, not just park. **Capstone DONE —
+   a ring-3 USER task runs on an application processor** (`smp_user_task_v1.md`):
+   the single shared TSS became **per-CPU** (one TSS + private `rsp0`/kernel stack
+   per CPU, descriptors at `GDT[5+2·slot]`, selector `0x28+0x10·slot`), so an AP
+   takes a ring-3→ring-0 trap on its **own** kernel stack. The BSP builds a
+   private address space (the spawned-app `mm` path) with a ring-3 payload,
+   dispatches it (work kind 2); an AP claims it, loads that CR3, `iretq`s to ring
+   3 with the arg in RDI, runs the code on its own core, reports `arg·2+1` via a
+   DPL=3 gate (`int 0x81`), and is trampolined back into the kernel on its own
+   stack — `SMP: ap user task ok` (result verified + reporting CPU slot ≥ 1, the
+   BSP never enters ring 3). The kernel CR3 is restored before `WORK_DONE` is
+   published, so the BSP safely reclaims the address space (no UAF/leak).
+   **Remaining (turning the mechanism into a running multi-CPU scheduler):** wire
+   `tlb_shootdown` into the `munmap`/`mprotect`/CoW paths; turn the single-item
+   work mailbox into per-CPU run queues holding `current`/tasks; migrate R4 tasks
+   onto APs with per-CPU `current`; and make the scheduler/syscall/page-fault
+   paths SMP-safe on every core (today the BSP's are interrupts-off single-CPU) so
+   ordinary user tasks are scheduled across all CPUs, not just the boot self-test.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000 — controller DETECTION done.** The OS
    now discovers a USB xHCI host controller (`-device qemu-xhci`), maps its BAR
    (the PCI MMIO hole is not in the HHDM, so `mmio_map_4k` walks CR3 and installs
@@ -106,17 +117,23 @@ single safe boot-verified slice and several have hard prerequisites.
    **shared-memory pixel surfaces** (vs v1 solid-color rects), damage regions,
    alpha; a standing compositor **process** owning the FB; and an input event
    queue routing clicks to the top window.
-4. **V.11 dynamic loading — dlopen/dlsym mechanism done; real ELF .so still blocked.**
-   `sys_dlctl` (id 60) implements `dlopen`/`dlsym` (`dynlink_v1.md`): it loads a
-   position-independent module the kernel ships embedded into a fresh executable
-   user region (map RW → copy → mprotect R-X), resolves a symbol from the loaded
-   image's export table, and `dlprobe` calls it (`DLPROBE: dlsym ok`). The
-   loading + resolution + execute mechanism works. What remains is a real ELF
-   **.so** linker (dynamic relocations, GOT/PLT), which is still **blocked** on
-   the PE→ELF toolchain: mingw's refptr/auto-import + `tools/pe_to_elf_v1.py`
-   break C binaries past 2 pages (proved via `page3probe`). Fix `pe_to_elf` (or
-   switch the C apps to a real ELF linker) to produce `.so` files, then extend
-   `sys_dlctl` with ELF parsing + relocation.
+4. **V.11 dynamic loading — real ELF `.so` dynamic linker done.**
+   `sys_dlctl` (id 60) is a genuine ELF64 dynamic linker (`dynlink_v1.md`):
+   `dlopen` parses the embedded `.so`'s program headers, maps each `PT_LOAD`
+   segment at `DLOPEN_BASE+p_vaddr` (map RW → `copyout_user` file bytes → apply
+   relocations → re-protect per `p_flags` with W^X), **applies its
+   `R_X86_64_RELATIVE` relocations** from `PT_DYNAMIC`, and `dlsym` resolves a
+   name from the `.dynsym`/`.dynstr` (count via the SysV `.hash` `nchain`).
+   `dlprobe` calls `getval()` (returns 42 *only if* the relative relocation was
+   applied) and `addtwo(40)==42` in ring 3 (`DLPROBE: dlsym ok`). The C `.so`
+   toolchain blocker (mingw refptr/auto-import + `tools/pe_to_elf_v1.py` break C
+   binaries past 2 pages, proved via `page3probe`) is **routed around**: the
+   shared object is authored in assembly (`apps/dl/libdl.asm`) and linked as a
+   real PIC ELF `.so` via `nasm -f elf64` + `rust-lld -shared` (`make dl-module`),
+   so the linker is exercised on a genuine `.so` without the C path. What remains:
+   symbolic relocations (`GLOB_DAT`/`JUMP_SLOT` → GOT/PLT, lazy binding),
+   `DT_NEEDED` dependency chains, multiple loaded objects + `dlclose`, on-disk
+   `.so` loading, and an allocator-chosen load base (v1 uses one fixed slot).
 5. **V.11 installer + UEFI + package fetch + self-hosting — disk provisioning + UEFI boot done.**
    The installer finds a target disk, writes a boot record, and verifies the
    write/read round-trip (`installer_v1.md`, confirmed host-side). The kernel also

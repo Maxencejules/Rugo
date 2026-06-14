@@ -133,6 +133,11 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: percpu ok",
         # Cross-CPU work dispatch: the AP claimed + ran a dispatched computation.
         "SMP: ap work ok",
+        # Capstone: a real ring-3 USER task ran on the application processor
+        # (not the BSP). The AP entered ring 3 on its own per-CPU TSS rsp0, the
+        # task computed arg*2+1 and reported it via int 0x81, and the AP returned
+        # to the kernel cleanly (verified result + AP slot >= 1).
+        "SMP: ap user task ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

@@ -202,6 +202,15 @@ $(OUT)/app-%.o: apps/coreutils/%.asm | $(OUT)
 $(OUT)/app-%.elf: $(OUT)/app-%.o apps/base-shell/linker.ld | $(OUT)
 	$(LD) -nostdlib -static -T apps/base-shell/linker.ld -o $@ $<
 
+# Regenerate the embedded dynamic-loader ELF .so (committed at
+# kernel_rs/src/dl_module.so; the kernel include_bytes!'s it). Run after editing
+# apps/dl/libdl.asm, then commit the regenerated .so. Built as a real ELF shared
+# object via nasm + rust-lld -shared (sidesteps the blocked mingw PE->ELF path).
+.PHONY: dl-module
+dl-module: | $(OUT)
+	$(NASM) -f elf64 apps/dl/libdl.asm -o $(OUT)/libdl.o
+	$(LD) -shared -o kernel_rs/src/dl_module.so $(OUT)/libdl.o
+
 # --- rlibc: C programs, linked in PE then rewrapped as ELF -------------------
 # The host gcc/ld only target PE-COFF, and objcopy mistranslates PE
 # REL32 relocations into ELF (the implicit -4 addend is lost). So the

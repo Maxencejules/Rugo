@@ -68,15 +68,23 @@ struct DtPtr {
     base: u64,
 }
 
-static mut GDT: [u64; 7] = [
-    0x0000_0000_0000_0000,
-    0x00AF_9A00_0000_FFFF,
-    0x00CF_9200_0000_FFFF,
-    0x00CF_F200_0000_FFFF,
-    0x00AF_FA00_0000_FFFF,
-    0,
-    0,
-];
+// Segment descriptors at indices 0..5 (null, kernel code, kernel data, user
+// data, user code). Indices 5.. hold up to MAX_TSS 16-byte (two-slot) TSS
+// descriptors, one per CPU that runs ring-3 tasks: CPU `c`'s descriptor is at
+// GDT[5 + 2*c], selector 0x28 + 0x10*c. Per-CPU TSS descriptors are what let an
+// application processor take a ring-3→ring-0 transition onto its OWN kernel
+// stack (full-os guide Part I.3, SMP scheduler capstone). The BSP is slot 0
+// (selector 0x28), unchanged from the single-TSS layout.
+pub(crate) const MAX_TSS: usize = 8;
+static mut GDT: [u64; 5 + 2 * MAX_TSS] = {
+    let mut g = [0u64; 5 + 2 * MAX_TSS];
+    g[0] = 0x0000_0000_0000_0000;
+    g[1] = 0x00AF_9A00_0000_FFFF;
+    g[2] = 0x00CF_9200_0000_FFFF;
+    g[3] = 0x00CF_F200_0000_FFFF;
+    g[4] = 0x00AF_FA00_0000_FFFF;
+    g
+};
 
 pub(crate) unsafe fn gdt_init() {
     let limit = (core::mem::size_of_val(&GDT) - 1) as u16;
@@ -100,6 +108,7 @@ pub(crate) unsafe fn gdt_init() {
 }
 
 cfg_user! {
+    #[derive(Clone, Copy)]
     #[repr(C, packed)]
     struct Tss {
         reserved0: u32,
@@ -113,7 +122,7 @@ cfg_user! {
         iopb_offset: u16,
     }
 
-    static mut TSS: Tss = Tss {
+    const TSS_EMPTY: Tss = Tss {
         reserved0: 0,
         rsp0: 0, rsp1: 0, rsp2: 0,
         reserved1: 0,
@@ -123,25 +132,41 @@ cfg_user! {
         iopb_offset: 104,
     };
 
-    pub(crate) unsafe fn tss_init(kernel_stack_top: u64) {
-        TSS.rsp0 = kernel_stack_top;
-        let tss_addr = &TSS as *const Tss as u64;
-        GDT[5] = (103u64)
+    // One TSS per CPU that can run ring-3 code (full-os guide Part I.3): each
+    // CPU's TSS carries its OWN rsp0, so two CPUs taking a ring-3→ring-0
+    // transition land on disjoint kernel stacks (the prerequisite for running
+    // user tasks on more than one core at once).
+    static mut TSS: [Tss; MAX_TSS] = [TSS_EMPTY; MAX_TSS];
+
+    /// Install CPU `slot`'s TSS (rsp0 = `kernel_stack_top`) into its GDT
+    /// descriptor and load it (`ltr`). Slot 0 is the BSP (selector 0x28); an
+    /// AP passes its per-CPU index. The GDT word pair for distinct slots never
+    /// overlaps, so concurrent CPUs each touch only their own descriptor.
+    pub(crate) unsafe fn tss_init_cpu(slot: usize, kernel_stack_top: u64) {
+        if slot >= MAX_TSS {
+            return;
+        }
+        TSS[slot].rsp0 = kernel_stack_top;
+        let tss_addr = core::ptr::addr_of!(TSS[slot]) as u64;
+        let d = 5 + 2 * slot;
+        GDT[d] = (103u64)
                 | ((tss_addr & 0xFFFF) << 16)
                 | (((tss_addr >> 16) & 0xFF) << 32)
                 | (0x89u64 << 40)
                 | (((tss_addr >> 24) & 0xFF) << 56);
-        GDT[6] = tss_addr >> 32;
+        GDT[d + 1] = tss_addr >> 32;
         let limit = (core::mem::size_of_val(&GDT) - 1) as u16;
         let base = GDT.as_ptr() as u64;
         let gdt_ptr = DtPtr { limit, base };
         core::arch::asm!("lgdt [{}]", in(reg) &gdt_ptr);
-        core::arch::asm!(
-            "mov ax, 0x28",
-            "ltr ax",
-            out("ax") _,
-            options(nostack),
-        );
+        let sel = (d * 8) as u16; // 0x28 + 0x10*slot
+        core::arch::asm!("ltr {sel:x}", sel = in(reg) sel, options(nostack));
+    }
+
+    /// BSP convenience: install + load the boot CPU's TSS (slot 0, selector
+    /// 0x28). Preserves the original single-TSS call site/behaviour.
+    pub(crate) unsafe fn tss_init(kernel_stack_top: u64) {
+        tss_init_cpu(0, kernel_stack_top);
     }
 
     pub(crate) unsafe fn enter_ring3_at(code_va: u64, user_sp: u64) -> ! {
@@ -173,6 +198,48 @@ cfg_user! {
             code = in(reg) code_va,
             options(noreturn),
         );
+    }
+
+    /// Enter ring 3 at `code_va` with `user_sp`, passing `arg` in RDI (the
+    /// SysV first-argument register). IF clear (not preemptible), so the brief
+    /// user task runs without a timer landing mid-flight. Used by the SMP
+    /// capstone to launch a ring-3 task on an application processor.
+    #[cfg(feature = "go_test")]
+    pub(crate) unsafe fn enter_ring3_with_arg(code_va: u64, user_sp: u64, arg: u64) -> ! {
+        core::arch::asm!(
+            "push 0x1B",
+            "push {stack}",
+            "push 0x002",
+            "push 0x23",
+            "push {code}",
+            "mov rdi, {arg}",
+            "iretq",
+            stack = in(reg) user_sp,
+            code = in(reg) code_va,
+            arg = in(reg) arg,
+            options(noreturn),
+        );
+    }
+
+    // Per-CPU kernel stacks for application processors that run ring-3 tasks
+    // (SMP capstone). Each AP's TSS rsp0 points at the top of its own stack, so
+    // a ring-3→ring-0 transition (syscall/interrupt) on one AP never collides
+    // with another CPU's kernel stack. Slot 0 is the BSP (it uses the boot
+    // `stack_top`); AP slots 1..MAX_TSS use these.
+    #[cfg(feature = "go_test")]
+    const AP_KSTACK_SIZE: usize = 16384;
+    #[cfg(feature = "go_test")]
+    #[repr(align(16))]
+    struct ApKstack([u8; AP_KSTACK_SIZE]);
+    #[cfg(feature = "go_test")]
+    static mut AP_KSTACK: [ApKstack; MAX_TSS] =
+        [const { ApKstack([0u8; AP_KSTACK_SIZE]) }; MAX_TSS];
+
+    /// Top (highest address, 16-aligned) of AP `slot`'s kernel stack.
+    #[cfg(feature = "go_test")]
+    pub(crate) unsafe fn ap_kstack_top(slot: usize) -> u64 {
+        let base = core::ptr::addr_of!(AP_KSTACK[slot]) as u64;
+        (base + AP_KSTACK_SIZE as u64) & !0xF
     }
 }
 
@@ -230,6 +297,9 @@ pub(crate) unsafe fn idt_init() {
         // unconditionally — not only in the native/test lanes.
         fn isr_stub_65();
         fn isr_stub_128();
+        // Vector 0x81: AP user-task report gate (SMP capstone, go lane only).
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        fn isr_stub_129();
         fn isr_stub_240();
         fn isr_stub_241();
         fn isr_stub_242();
@@ -260,6 +330,24 @@ pub(crate) unsafe fn idt_init() {
         offset_high: (handler >> 32) as u32,
         reserved: 0,
     };
+
+    // Vector 0x81 (SMP capstone): a DPL=3 gate the ring-3 task an application
+    // processor runs uses to report its result back to the kernel. Go lane
+    // only — no other lane raises int 0x81, and gating it keeps the base/M3
+    // lanes byte-for-byte unchanged.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    {
+        let h = isr_stub_129 as *const () as u64;
+        IDT[129] = IdtEntry {
+            offset_low: h as u16,
+            selector: 0x08,
+            ist: 0,
+            type_attr: 0xEE,
+            offset_mid: (h >> 16) as u16,
+            offset_high: (h >> 32) as u32,
+            reserved: 0,
+        };
+    }
 
     // SMP IPI + per-CPU LAPIC timer + TLB-shootdown vectors (full-os guide
     // Part I.3): interrupt gates (DPL=0). Installed in every lane so APs can
