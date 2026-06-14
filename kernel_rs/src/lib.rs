@@ -3679,8 +3679,8 @@ cfg_r4! {
     /// A query (a2 = name pointer, a3 = len | port << 16), op 3 = poll —
     /// returns u64::MAX while pending, then the IPv4 result once. op 4 =
     /// ICMP echo self-test, op 5 = ARP responder self-test, op 6 = TCP
-    /// passive-open self-test, op 7 = ICMPv6 echo self-test (each returns 1 on
-    /// success, 0 on fail).
+    /// passive-open self-test, op 7 = ICMPv6 echo self-test, op 8 = UDP echo
+    /// self-test (each returns 1 on success, 0 on fail).
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_net_query(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -3707,6 +3707,7 @@ cfg_r4! {
             5 => netcfg::arp_selftest(),
             6 => tcp::tcp_listen_selftest(),
             7 => netcfg::icmpv6_selftest(),
+            8 => netcfg::udp_echo_selftest(),
             _ => ERR,
         }
     }
@@ -8436,6 +8437,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::icmp_selftest();
         let _ = netcfg::arp_selftest();
         let _ = netcfg::icmpv6_selftest();
+        let _ = netcfg::udp_echo_selftest();
         let _ = tcp::tcp_listen_selftest();
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
