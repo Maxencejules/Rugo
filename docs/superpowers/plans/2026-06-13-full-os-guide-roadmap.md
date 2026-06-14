@@ -52,6 +52,8 @@ Spanning all 5 guide parts:
 - **V lseek** — `f38b5c2`, `lseek_v1.md`
 
 - **IV.9 timerfd** — `c5854e9`, `clock_v1.md` (sys_time op 3)
+- **II.7 PCI device enumeration** — `3c59d83`, `driver_model_v1.md`
+- **IV.10 stack ASLR** — `d6ef4da`
 
 Key infra unlocked: per-task CR3 + private address spaces; CoW refcounts;
 PTE_COW software bit; a CoW-aware user-write path (copyout breaks CoW); a real
