@@ -1183,3 +1183,113 @@ pub(crate) unsafe fn tcp_fastrexmit_selftest() -> u64 {
     serial_write(b"TCP: fast rexmit ok\n");
     1
 }
+
+// ---- multi-segment send window (full-os guide Part II.6) ----
+//
+// A sliding send window over multiple outstanding segments, bounded by
+// min(cwnd, peer receive window), with cumulative-ACK retirement — vs the live
+// CONN's single-outstanding-segment model. v1: the window state machine + a
+// self-test; unifying it with the live CONN's per-segment RTO/retransmit slots
+// (so the wire path sends multiple segments) is the larger refactor and is
+// carry-forward (the single-segment live path + its RTO/RTT/CC tests are
+// unchanged). This proves the windowed-send accounting independently.
+const SNDWIN_MAX_SEG: usize = 16;
+
+struct SndWindow {
+    una: u32,                       // oldest unacknowledged sequence
+    nxt: u32,                       // next sequence to send
+    cwnd: u32,                      // congestion window (bytes)
+    rwnd: u32,                      // peer's advertised receive window (bytes)
+    nseg: usize,                    // number of outstanding segments
+    seglen: [u32; SNDWIN_MAX_SEG],  // their lengths, oldest first
+}
+
+impl SndWindow {
+    /// Bytes currently in flight (sent, unacknowledged).
+    fn inflight(&self) -> u32 {
+        self.nxt.wrapping_sub(self.una)
+    }
+    /// The usable window: min(cwnd, rwnd) minus what is already in flight.
+    fn usable(&self) -> u32 {
+        let win = if self.cwnd < self.rwnd { self.cwnd } else { self.rwnd };
+        win.saturating_sub(self.inflight())
+    }
+    /// Try to send a `len`-byte segment: allowed only if it fits the usable window
+    /// and a free segment slot exists. Records it and advances snd_nxt.
+    fn send(&mut self, len: u32) -> bool {
+        if len == 0 || len > self.usable() || self.nseg >= SNDWIN_MAX_SEG {
+            return false;
+        }
+        self.seglen[self.nseg] = len;
+        self.nseg += 1;
+        self.nxt = self.nxt.wrapping_add(len);
+        true
+    }
+    /// Retire every segment fully covered by a cumulative ACK, sliding snd_una.
+    fn ack(&mut self, ack: u32) {
+        while self.nseg > 0 {
+            let end = self.una.wrapping_add(self.seglen[0]);
+            // Covered when ack - una >= seglen[0] (wrapping, forward only).
+            if ack.wrapping_sub(self.una) < self.seglen[0]
+                || ack.wrapping_sub(self.una) >= 0x8000_0000
+            {
+                break;
+            }
+            self.una = end;
+            let mut i = 1;
+            while i < self.nseg {
+                self.seglen[i - 1] = self.seglen[i];
+                i += 1;
+            }
+            self.nseg -= 1;
+        }
+    }
+}
+
+/// Multi-segment send-window self-test (full-os guide Part II.6): fill the window
+/// up to cwnd, confirm a segment exceeding it is refused, retire part of it with a
+/// cumulative ACK (sliding the window), and confirm more can then be sent.
+/// Returns 1 on success.
+pub(crate) unsafe fn tcp_sndwin_selftest() -> u64 {
+    let mss = 512u32;
+    let mut w = SndWindow {
+        una: 1000,
+        nxt: 1000,
+        cwnd: 2000,
+        rwnd: 8000,
+        nseg: 0,
+        seglen: [0; SNDWIN_MAX_SEG],
+    };
+    // 1) Three 512-byte segments fit (1536 <= cwnd 2000); the fourth (2048) does not.
+    if !w.send(mss) || !w.send(mss) || !w.send(mss) {
+        return 0;
+    }
+    if w.send(mss) {
+        return 0; // the 4th must be refused: cwnd-bound (in-flight would be 2048)
+    }
+    if w.nseg != 3 || w.inflight() != 1536 || w.nxt != 1000 + 1536 {
+        return 0;
+    }
+    // 2) A cumulative ACK for two segments slides the window and frees space.
+    w.ack(1000 + 1024); // acks the first two segments
+    if w.nseg != 1 || w.una != 1000 + 1024 || w.inflight() != 512 {
+        return 0;
+    }
+    // 3) With 512 in flight and cwnd 2000, two more segments fit; a third overflows.
+    if !w.send(mss) || !w.send(mss) {
+        return 0; // in-flight 512 -> 1024 -> 1536
+    }
+    if w.send(mss) {
+        return 0; // 2048 > 2000
+    }
+    if w.nseg != 3 || w.inflight() != 1536 {
+        return 0;
+    }
+    // 4) The receive window also bounds sending: shrink rwnd below the in-flight.
+    w.rwnd = 1536;
+    if w.send(mss) {
+        return 0; // usable = min(cwnd,rwnd) - inflight = 1536 - 1536 = 0
+    }
+    serial_write(b"TCP: sndwin ok\n");
+    1
+}

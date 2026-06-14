@@ -1516,3 +1516,6 @@ test-tcp6-listen-v1: image-go
 
 test-mouse-irq-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_mouse_irq_v1.py -v --junitxml=$(OUT)/pytest-mouse-irq-v1.xml
+
+test-tcp-sndwin-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_sndwin_v1.py -v --junitxml=$(OUT)/pytest-tcp-sndwin-v1.xml
