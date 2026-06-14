@@ -103,10 +103,13 @@ single safe boot-verified slice and several have hard prerequisites.
    Intel **e1000 NIC** (`-device e1000`, `e1000_v1.md`: maps BAR0, reads STATUS +
    the MAC out of the EEPROM via EERD), maps device MMIO (`mmio_map_4k`), and has
    a **DMA allocator** (`dma_v1.md`: a contiguous-frame pool carved from the PMM,
-   first-fit `dma_alloc`/`dma_free`, self-test `DMA: selftest ok`). What remains:
-   an XHCI controller **driver** (command/event rings, port reset, device
+   first-fit `dma_alloc`/`dma_free`, self-test `DMA: selftest ok`), and reads PCI
+   config space through **PCIe ECAM** (`ecam_v1.md`: the memory-mapped window from
+   the q35 PCIEXBAR, cross-checked against the legacy I/O path). What remains: an
+   XHCI controller **driver** (command/event rings, port reset, device
    enumeration) + a HID boot-protocol driver; an e1000 TX/RX-ring driver (built on
-   the DMA pool); and migrating the virtio/NVMe probes onto `dma_alloc`.
+   the DMA pool); MSI/MSI-X; and migrating the virtio/NVMe probes onto `dma_alloc`
+   + routing all config access through ECAM.
 3. **III input + compositor/window-server + audio — mouse, z-order compositor, HD-Audio detection done.**
    The mouse device is reset + identified at boot (`mouse_v1.md`), the compositor
    composites multiple surfaces to the framebuffer in **z-order**
@@ -151,16 +154,19 @@ single safe boot-verified slice and several have hard prerequisites.
    (`tcp_rtt_v1.md`: RFC 6298 SRTT/RTTVAR in integer fixed-point + Karn's
    algorithm, driving an adaptive RTO), and **congestion control**
    (`tcp_congestion_v1.md`: RFC 5681 slow start + congestion avoidance + timeout
-   collapse) exist. What remains: a real send window beyond one outstanding
-   segment (cwnd is computed but the single-segment send path does not yet clamp
-   to it), fast retransmit / fast recovery (3-dup-ACK); the guest *sending* its
-   own NDP solicitations + a neighbor cache (NUD) + DAD; SLAAC / Router Discovery
-   for a global address; and routing.
+   collapse), **longest-prefix-match routing** (`routing_v1.md`), and a
+   **guest-initiated IPv6 neighbor cache / NUD** (`nud_v1.md`: the guest sends its
+   own Neighbor Solicitation + caches the MAC from the returning advertisement)
+   exist. What remains: a real send window beyond one outstanding segment (cwnd is
+   computed but the single-segment send path does not yet clamp to it), fast
+   retransmit / fast recovery (3-dup-ACK); the full NUD state machine
+   (STALE/DELAY/PROBE timers) + DAD on the guest's own address; SLAAC / Router
+   Discovery for a global address; and per-route gateway resolution before send.
 
 ## ABI op map (current)
 - `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,
-  7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO, 11 TCP-RTT, 12 TCP-congestion
-  (4–12 are self-tests).
+  7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO, 11 TCP-RTT, 12 TCP-congestion,
+  13 routing, 14 IPv6-NUD (4–14 are self-tests).
 - `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
@@ -169,4 +175,5 @@ single safe boot-verified slice and several have hard prerequisites.
 - `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid, 5 login.
 - Boot self-tests (markers, no syscall): SMP (spinlock, IPI, per-CPU timers, TLB
   shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**), DMA pool,
-  block buffer cache; PCI detection (xHCI, e1000, HD-Audio).
+  block buffer cache, AES-128 (FIPS-197 KAT, backs disk crypto); PCI detection
+  (xHCI, e1000, HD-Audio, **PCIe ECAM**).

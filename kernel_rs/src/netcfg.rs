@@ -987,6 +987,254 @@ pub(crate) unsafe fn ndp_selftest() -> u64 {
     1
 }
 
+// IPv6 neighbor cache / NUD (full-os guide Part II.6): unlike the responder
+// above (which answers a host's Neighbor Solicitation), this is the guest
+// INITIATING resolution — sending its own NS for a target it wants to reach and
+// caching the MAC learned from the returning Neighbor Advertisement (RFC 4861
+// §7.3, Neighbor Unreachability Detection states).
+const NEIGH_MAX: usize = 8;
+const NUD_INCOMPLETE: u8 = 1;
+const NUD_REACHABLE: u8 = 2;
+
+#[derive(Clone, Copy)]
+struct Neighbor {
+    ip6: [u8; 16],
+    mac: [u8; 6],
+    state: u8, // 0 = free, NUD_INCOMPLETE, NUD_REACHABLE
+}
+
+static mut NEIGH_CACHE: [Neighbor; NEIGH_MAX] =
+    [Neighbor { ip6: [0; 16], mac: [0; 6], state: 0 }; NEIGH_MAX];
+
+/// Find the cache slot for `target`, or None.
+unsafe fn nud_find(target: &[u8; 16]) -> Option<usize> {
+    let mut i = 0;
+    while i < NEIGH_MAX {
+        if NEIGH_CACHE[i].state != 0 && NEIGH_CACHE[i].ip6 == *target {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Look up a resolved neighbor's MAC (REACHABLE only).
+unsafe fn nud_lookup(target: &[u8; 16]) -> Option<[u8; 6]> {
+    match nud_find(target) {
+        Some(i) if NEIGH_CACHE[i].state == NUD_REACHABLE => Some(NEIGH_CACHE[i].mac),
+        _ => None,
+    }
+}
+
+/// Build a guest-originated Neighbor Solicitation to resolve `target`: dst = the
+/// target's solicited-node multicast (ff02::1:ffXX:XXXX, MAC 33:33:ff:XX:XX:XX),
+/// src = the guest, with the guest's Source Link-Layer Address option. Records an
+/// INCOMPLETE cache entry. Returns the frame length in `out`.
+unsafe fn build_neighbor_solicit(target: &[u8; 16], out: &mut [u8]) -> Option<usize> {
+    let total = 14 + 40 + 32;
+    if out.len() < total {
+        return None;
+    }
+    let g6 = guest_ip6();
+    let mac = net::net_mac();
+    // Solicited-node multicast of the target.
+    let mut snm = [0u8; 16];
+    snm[0] = 0xff;
+    snm[1] = 0x02;
+    snm[11] = 0x01;
+    snm[12] = 0xff;
+    snm[13] = target[13];
+    snm[14] = target[14];
+    snm[15] = target[15];
+    for b in out[..total].iter_mut() {
+        *b = 0;
+    }
+    // Ethernet: dst = solicited-node multicast MAC, src = guest.
+    out[0] = 0x33;
+    out[1] = 0x33;
+    out[2] = 0xff;
+    out[3] = target[13];
+    out[4] = target[14];
+    out[5] = target[15];
+    out[6..12].copy_from_slice(&mac);
+    out[12] = 0x86;
+    out[13] = 0xDD;
+    {
+        let ip6 = &mut out[14..54];
+        ip6[0] = 0x60;
+        let plen = (32u16).to_be_bytes();
+        ip6[4] = plen[0];
+        ip6[5] = plen[1];
+        ip6[6] = 58; // ICMPv6
+        ip6[7] = 255; // hop limit (RFC 4861)
+        ip6[8..24].copy_from_slice(&g6);
+        ip6[24..40].copy_from_slice(&snm);
+    }
+    {
+        let ns = &mut out[54..total];
+        ns[0] = 135; // Neighbor Solicitation
+        ns[8..24].copy_from_slice(target); // target being resolved
+        ns[24] = 1; // Source Link-Layer Address option
+        ns[25] = 1;
+        ns[26..32].copy_from_slice(&mac);
+        let ck = icmpv6_checksum(&g6, &snm, ns);
+        ns[2] = (ck >> 8) as u8;
+        ns[3] = (ck & 0xFF) as u8;
+    }
+    // Record/refresh an INCOMPLETE entry awaiting the advertisement.
+    let slot = nud_find(target).or_else(|| {
+        let mut i = 0;
+        while i < NEIGH_MAX {
+            if NEIGH_CACHE[i].state == 0 {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    });
+    if let Some(i) = slot {
+        NEIGH_CACHE[i].ip6 = *target;
+        NEIGH_CACHE[i].state = NUD_INCOMPLETE;
+    }
+    Some(total)
+}
+
+/// Ingest a received Neighbor Advertisement (type 136): learn the advertiser's
+/// MAC from its Target Link-Layer Address option and mark the neighbor REACHABLE.
+/// Returns true if the cache was updated.
+unsafe fn nud_ingest_advert(frame: &[u8]) -> bool {
+    if frame.len() < 14 + 40 + 32 {
+        return false;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != 0x86DD {
+        return false;
+    }
+    let icmp_off = 14 + 40;
+    if frame[icmp_off] != 136 {
+        return false; // not a Neighbor Advertisement
+    }
+    let target: [u8; 16] = match frame[icmp_off + 8..icmp_off + 24].try_into() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    // Target Link-Layer Address option (type 2, len 1) carries the MAC.
+    if frame[icmp_off + 24] != 2 || frame[icmp_off + 25] != 1 {
+        return false;
+    }
+    let mut mac = [0u8; 6];
+    mac.copy_from_slice(&frame[icmp_off + 26..icmp_off + 32]);
+    let slot = nud_find(&target).or_else(|| {
+        let mut i = 0;
+        while i < NEIGH_MAX {
+            if NEIGH_CACHE[i].state == 0 {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    });
+    match slot {
+        Some(i) => {
+            NEIGH_CACHE[i].ip6 = target;
+            NEIGH_CACHE[i].mac = mac;
+            NEIGH_CACHE[i].state = NUD_REACHABLE;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Neighbor-cache / NUD self-test (op 14): the guest builds an NS to resolve a
+/// host (INCOMPLETE, lookup misses), then a matching NA is ingested and the
+/// lookup resolves to the advertised MAC (REACHABLE). Verifies the NS is
+/// wire-correct (solicited-node multicast dst, guest src, SLLA option, checksum
+/// folds to zero). Returns 1 on success (full-os guide Part II.6).
+pub(crate) unsafe fn nud_selftest() -> u64 {
+    // Clear the cache for a deterministic run.
+    let mut i = 0;
+    while i < NEIGH_MAX {
+        NEIGH_CACHE[i].state = 0;
+        i += 1;
+    }
+    let g6 = guest_ip6();
+    let target: [u8; 16] = [
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0x55, 0x0a, 0xff, 0xfe, 0x00, 0x02, 0x09,
+    ];
+    let target_mac = [0x52u8, 0x55, 0x0a, 0x00, 0x02, 0x09];
+
+    // 1) The guest sends an NS; the entry is INCOMPLETE so a lookup misses.
+    let mut ns = [0u8; 14 + 40 + 32];
+    let nlen = match build_neighbor_solicit(&target, &mut ns) {
+        Some(l) => l,
+        None => return 0,
+    };
+    if nud_lookup(&target).is_some() {
+        return 0; // must be unresolved before the advertisement
+    }
+    // NS wire correctness: solicited-node multicast eth dst, guest src, type 135,
+    // target field, SLLA = guest MAC, and a checksum that folds to zero.
+    let mac = net::net_mac();
+    if ns[0] != 0x33 || ns[1] != 0x33 || ns[2] != 0xff || ns[6..12] != mac {
+        return 0;
+    }
+    if ns[54] != 135 || ns[54 + 8..54 + 24] != target || ns[54 + 24] != 1 || ns[54 + 26..54 + 32] != mac {
+        return 0;
+    }
+    if ns[21] != 255 {
+        return 0; // hop limit MUST be 255
+    }
+    {
+        let mut snm = [0u8; 16];
+        snm[0] = 0xff;
+        snm[1] = 0x02;
+        snm[11] = 0x01;
+        snm[12] = 0xff;
+        snm[13] = target[13];
+        snm[14] = target[14];
+        snm[15] = target[15];
+        let mut s = 0u32;
+        csum_words(&mut s, &g6);
+        csum_words(&mut s, &snm);
+        s += 32;
+        s += 58;
+        csum_words(&mut s, &ns[54..nlen]);
+        if csum_fold(s) != 0 {
+            return 0;
+        }
+    }
+
+    // 2) Synthesize the target's Neighbor Advertisement and ingest it.
+    let mut na = [0u8; 14 + 40 + 32];
+    na[0..6].copy_from_slice(&mac); // to the guest
+    na[6..12].copy_from_slice(&target_mac);
+    na[12] = 0x86;
+    na[13] = 0xDD;
+    na[14] = 0x60;
+    na[19] = 32; // payload length
+    na[20] = 58; // ICMPv6
+    na[21] = 255;
+    na[22..38].copy_from_slice(&target); // src = target
+    na[38..54].copy_from_slice(&g6); // dst = guest
+    na[54] = 136; // Neighbor Advertisement
+    na[54 + 4] = 0x60; // Solicited + Override
+    na[54 + 8..54 + 24].copy_from_slice(&target);
+    na[54 + 24] = 2; // Target Link-Layer Address option
+    na[54 + 25] = 1;
+    na[54 + 26..54 + 32].copy_from_slice(&target_mac);
+    if !nud_ingest_advert(&na) {
+        return 0;
+    }
+
+    // 3) The lookup now resolves to the advertised MAC (REACHABLE).
+    match nud_lookup(&target) {
+        Some(m) if m == target_mac => {
+            serial_write(b"NUD: resolve ok\n");
+            1
+        }
+        _ => 0,
+    }
+}
+
 const UDP_ECHO_PORT: u16 = 7;
 
 /// Build a UDP echo reply for a received Ethernet frame: IPv4/UDP to the guest

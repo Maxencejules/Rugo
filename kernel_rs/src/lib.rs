@@ -43,6 +43,8 @@ macro_rules! cfg_r4 {
 
 mod arch_x86;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod aes;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod cache;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod dma;
@@ -731,25 +733,19 @@ unsafe fn fat16_list() -> u64 {
     count
 }
 
-/// Symmetric block cipher for at-rest disk encryption (full-os guide Part
-/// IV.10). XORs `buf` with a per-LBA xorshift64 keystream seeded from a fixed
-/// key, so encrypt == decrypt. NOTE: an xorshift keystream is NOT
-/// cryptographically secure and there is no integrity tag — a real AEAD
-/// (AES-GCM / ChaCha20-Poly1305) with a KDF'd key is carry-forward. v1 proves
-/// the transparent encrypt-on-write / decrypt-on-read path.
+/// Symmetric cipher for at-rest disk encryption (full-os guide Part IV.10).
+/// AES-128 in CTR mode keyed on a fixed key, per-LBA counter, so encrypt ==
+/// decrypt. The AES core is verified against the FIPS-197 known-answer test at
+/// boot (`aes::aes_selftest`). NOTE: a real system needs a KDF'd key + an
+/// integrity tag (AES-GCM / ChaCha20-Poly1305 AEAD) and constant-time tables;
+/// CTR-without-MAC and a fixed key are the v1 boundary.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn disk_crypt(lba: u64, buf: &mut [u8]) {
-    const DISK_KEY: u64 = 0x9E37_79B9_7F4A_7C15;
-    let mut s = DISK_KEY ^ lba.wrapping_mul(0x0000_0100_0000_01B3);
-    if s == 0 {
-        s = 1; // xorshift must not be seeded with 0
-    }
-    for b in buf.iter_mut() {
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        *b ^= (s & 0xFF) as u8;
-    }
+    const DISK_KEY: [u8; 16] = [
+        0x9e, 0x37, 0x79, 0xb9, 0x7f, 0x4a, 0x7c, 0x15, 0xf3, 0x9c, 0xc0, 0x60, 0x5c, 0xed, 0xc8,
+        0x34,
+    ];
+    aes::ctr_xor(&DISK_KEY, lba, buf);
 }
 
 fn serial_can_read() -> bool {
@@ -3954,6 +3950,8 @@ cfg_r4! {
             10 => tcp::tcp_rto_selftest(),
             11 => tcp::tcp_rtt_selftest(),
             12 => tcp::tcp_cc_selftest(),
+            13 => net::route_selftest(),
+            14 => netcfg::nud_selftest(),
             _ => ERR,
         }
     }
@@ -7497,6 +7495,55 @@ unsafe fn hda_report(bdf: PciBdf) {
     serial_write(b"\n");
 }
 
+/// PCIe ECAM self-test (full-os guide Part II.7, PCIe ECAM): read PCI config
+/// space through the memory-mapped Enhanced Configuration Access Mechanism and
+/// confirm it agrees with the legacy 0xCF8/0xCFC I/O path. The ECAM base is read
+/// from the q35 MCH PCIEXBAR (host-bridge config offset 0x60), not hardcoded.
+/// Config address = base + (bus<<20) + (dev<<15) + (func<<12) + offset.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ecam_selftest() -> u64 {
+    // PCIEXBAR (0:0:0 offset 0x60): bit 0 = enable, bits[2:1] = length
+    // (00 => 256 MiB), base in the high bits (256 MiB-aligned).
+    let bar = pci_read32(0, 0, 0, 0x60);
+    if bar & 1 == 0 {
+        serial_write(b"ECAM: disabled\n");
+        return 0;
+    }
+    let base = (bar as u64) & 0xF000_0000;
+    serial_write(b"ECAM: base=0x");
+    serial_write_hex(base);
+    serial_write(b"\n");
+    // Verify ECAM agrees with legacy config reads for two q35 functions: the MCH
+    // host bridge (0:0:0) and the LPC/ISA bridge (0:0x1F:0). Each lives in its
+    // own 4 KiB ECAM page, mapped one at a time into the kernel MMIO window.
+    let mut ok = true;
+    let probes: [(u8, u8, u8); 2] = [(0, 0, 0), (0, 0x1F, 0)];
+    let mut i = 0usize;
+    while i < probes.len() {
+        let (b, d, f) = probes[i];
+        let legacy = pci_read32(b, d, f, 0);
+        let phys =
+            base + ((b as u64) << 20) + ((d as u64) << 15) + ((f as u64) << 12);
+        match mmio_map_4k(phys) {
+            Some(va) => {
+                let ecam = core::ptr::read_volatile(va as *const u32);
+                if ecam != legacy {
+                    ok = false;
+                }
+            }
+            None => ok = false,
+        }
+        i += 1;
+    }
+    if ok {
+        serial_write(b"ECAM: selftest ok\n");
+        1
+    } else {
+        serial_write(b"ECAM: selftest fail\n");
+        0
+    }
+}
+
 /// Claim a PCI function once so one function does not get initialized by
 /// multiple in-kernel drivers.
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "net_test", feature = "go_test"))]
@@ -9773,6 +9820,7 @@ pub extern "C" fn kmain() -> ! {
         xhci_detect(); // full-os Part II.7: USB xHCI controller discovery
         e1000_detect(); // full-os Part II.7: Intel e1000 NIC discovery
         hda_detect(); // full-os Part III: Intel HD Audio controller discovery
+        let _ = ecam_selftest(); // full-os Part II.7: PCIe ECAM config access
         let _ = kbd::mouse_selftest(); // full-os Part III: PS/2 mouse bring-up
         net::r4_c4_runtime_init();
         // Net responder self-tests (full-os guide Part II.6): exercise the same
@@ -9786,8 +9834,11 @@ pub extern "C" fn kmain() -> ! {
         let _ = tcp::tcp_rto_selftest();
         let _ = tcp::tcp_rtt_selftest();
         let _ = tcp::tcp_cc_selftest();
+        let _ = net::route_selftest();
+        let _ = netcfg::nud_selftest();
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
+        let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;

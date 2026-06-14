@@ -1004,6 +1004,18 @@ test-login-v1: image-go
 test-blockcache-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_blockcache_v1.py -v --junitxml=$(OUT)/pytest-blockcache-v1.xml
 
+test-aes-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_aes_v1.py -v --junitxml=$(OUT)/pytest-aes-v1.xml
+
+test-routing-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_routing_v1.py -v --junitxml=$(OUT)/pytest-routing-v1.xml
+
+test-ecam-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_ecam_v1.py -v --junitxml=$(OUT)/pytest-ecam-v1.xml
+
+test-nud-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_nud_v1.py -v --junitxml=$(OUT)/pytest-nud-v1.xml
+
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
 

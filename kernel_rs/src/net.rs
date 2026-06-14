@@ -727,6 +727,60 @@ unsafe fn r4_net_find_route(family: u8, dest: &[u8; 16]) -> Option<usize> {
     best
 }
 
+/// Routing-table self-test (full-os guide Part II.6): install overlapping routes
+/// and confirm `r4_net_find_route` selects the LONGEST-prefix match for several
+/// destinations. Saves/restores the live route table so it leaves no residue.
+/// Returns 1 on success.
+#[cfg(feature = "go_test")]
+pub(crate) unsafe fn route_selftest() -> u64 {
+    let saved = R4_NET_ROUTES;
+    let mut i = 0;
+    while i < R4_NET_ROUTE_MAX {
+        R4_NET_ROUTES[i] = R4NetRoute::EMPTY;
+        i += 1;
+    }
+    let af = R4_NET_AF_INET as u8;
+    let route = |prefix: u8, d: [u8; 4]| -> R4NetRoute {
+        let mut dest = [0u8; 16];
+        dest[0] = d[0];
+        dest[1] = d[1];
+        dest[2] = d[2];
+        dest[3] = d[3];
+        R4NetRoute { active: true, family: af, prefix_len: prefix, if_index: 0, dest }
+    };
+    // Deliberately out of prefix order, so success depends on longest-match, not
+    // table position: 10.0.2.0/24 (most specific), 10.0.0.0/8, 0.0.0.0/0.
+    R4_NET_ROUTES[0] = route(0, [0, 0, 0, 0]);
+    R4_NET_ROUTES[1] = route(8, [10, 0, 0, 0]);
+    R4_NET_ROUTES[2] = route(24, [10, 0, 2, 0]);
+
+    let prefix_for = |d: [u8; 4]| -> i32 {
+        let mut dest = [0u8; 16];
+        dest[0] = d[0];
+        dest[1] = d[1];
+        dest[2] = d[2];
+        dest[3] = d[3];
+        unsafe {
+            match r4_net_find_route(af, &dest) {
+                Some(idx) => R4_NET_ROUTES[idx].prefix_len as i32,
+                None => -1,
+            }
+        }
+    };
+    let ok = prefix_for([10, 0, 2, 5]) == 24   // matches /24 over /8 and default
+        && prefix_for([10, 5, 5, 5]) == 8       // matches /8 over default
+        && prefix_for([8, 8, 8, 8]) == 0;       // only the default matches
+
+    R4_NET_ROUTES = saved;
+    if ok {
+        serial_write(b"ROUTE: selftest ok\n");
+        1
+    } else {
+        serial_write(b"ROUTE: selftest fail\n");
+        0
+    }
+}
+
 #[cfg(feature = "go_test")]
 unsafe fn r4_net_alloc_socket() -> Option<usize> {
     for idx in 0..R4_NET_SOCKET_MAX {
