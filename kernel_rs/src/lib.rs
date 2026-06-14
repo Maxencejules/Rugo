@@ -5241,6 +5241,93 @@ cfg_r4! {
                 serial_write(b"CRYPT: disk roundtrip ok\n");
                 1
             }
+            // op 10 = FS journaling round trip (full-os guide Part II.5): log a
+            // write to the journal (data + committed header), verify the target
+            // is NOT yet updated (simulating a crash before apply), then replay
+            // the journal and confirm the target now holds the logged data.
+            // -> 1 on success, 0 on failure.
+            10 => {
+                const TGT: u64 = 1601;
+                const JHDR: u64 = 1602;
+                const JDATA: u64 = 1603;
+                const JMAGIC: u32 = 0x4A52_4E4C; // "JRNL"
+                let data: [u8; 16] = *b"journaled-write!";
+                if !storage::r4_storage_available() {
+                    return 0;
+                }
+                // 0) zero the target sector (pre-write state).
+                core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+                if !block_io_dispatch(true, TGT, 512, false) {
+                    return 0;
+                }
+                // 1) write-ahead log: journal data sector, then the committed
+                //    header (atomicity boundary: header written last).
+                core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+                BLK_DATA_PAGE.0[..16].copy_from_slice(&data);
+                if !block_io_dispatch(true, JDATA, 512, false) {
+                    return 0;
+                }
+                core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+                BLK_DATA_PAGE.0[0..4].copy_from_slice(&JMAGIC.to_le_bytes());
+                BLK_DATA_PAGE.0[4..12].copy_from_slice(&TGT.to_le_bytes());
+                BLK_DATA_PAGE.0[12] = 1; // committed
+                if !block_io_dispatch(true, JHDR, 512, false) {
+                    return 0;
+                }
+                // 2) crash simulated here: the target is still un-applied.
+                if !block_io_dispatch(false, TGT, 512, false) {
+                    return 0;
+                }
+                if BLK_DATA_PAGE.0[..16] == data {
+                    return 0; // target must NOT be written before replay
+                }
+                // 3) replay: read the committed header, apply the journal data.
+                if !block_io_dispatch(false, JHDR, 512, false) {
+                    return 0;
+                }
+                let magic = u32::from_le_bytes([
+                    BLK_DATA_PAGE.0[0],
+                    BLK_DATA_PAGE.0[1],
+                    BLK_DATA_PAGE.0[2],
+                    BLK_DATA_PAGE.0[3],
+                ]);
+                let tgt = u64::from_le_bytes([
+                    BLK_DATA_PAGE.0[4],
+                    BLK_DATA_PAGE.0[5],
+                    BLK_DATA_PAGE.0[6],
+                    BLK_DATA_PAGE.0[7],
+                    BLK_DATA_PAGE.0[8],
+                    BLK_DATA_PAGE.0[9],
+                    BLK_DATA_PAGE.0[10],
+                    BLK_DATA_PAGE.0[11],
+                ]);
+                if magic != JMAGIC || BLK_DATA_PAGE.0[12] != 1 || tgt != TGT {
+                    return 0;
+                }
+                if !block_io_dispatch(false, JDATA, 512, false) {
+                    return 0;
+                }
+                let mut jbuf = [0u8; 512];
+                jbuf.copy_from_slice(&BLK_DATA_PAGE.0[..512]);
+                BLK_DATA_PAGE.0[..512].copy_from_slice(&jbuf);
+                if !block_io_dispatch(true, tgt, 512, false) {
+                    return 0;
+                }
+                // 4) clear the committed flag (journal consumed).
+                core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+                if !block_io_dispatch(true, JHDR, 512, false) {
+                    return 0;
+                }
+                // 5) verify the target now holds the journaled data.
+                if !block_io_dispatch(false, TGT, 512, false) {
+                    return 0;
+                }
+                if BLK_DATA_PAGE.0[..16] != data {
+                    return 0;
+                }
+                serial_write(b"JOURNAL: replay ok\n");
+                1
+            }
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }
