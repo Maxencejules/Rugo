@@ -101,9 +101,14 @@ single safe boot-verified slice and several have hard prerequisites.
    toolchain does not). Fix `pe_to_elf` (or switch the C apps to a real ELF
    linker) first, then add `sys_dlctl` (map-segment/resolve) + ELF dynamic
    relocation.
-5. **V.11 installer + UEFI + package fetch + self-hosting** — UEFI is a second
-   Limine boot path; the installer writes the SimpleFS/app-region image to a
-   target disk; package fetch needs the TCP client (have) + a repo server.
+5. **V.11 installer + UEFI + package fetch + self-hosting — disk provisioning done.**
+   The installer now finds a target disk, writes a boot record, and verifies the
+   write/read round-trip (`installer_v1.md`: `INSTALL: image written+verified ok`,
+   confirmed host-side on the target disk file). What remains: a full bootable
+   install (partition table, copy the kernel + a SimpleFS/app-region image onto a
+   target partition, install the bootloader so the target boots standalone); UEFI
+   (a second Limine boot path); package fetch over the TCP client (have) + a repo
+   server; and self-hosting.
 6. **II.6 TCP congestion control, IPv6 SLAAC, routing** — the client/listener,
    v4/v6 echo, IPv6 **Neighbor Discovery responder** (`ndp_v1.md`), and **TCP
    retransmission/RTO** (`tcp_rto_v1.md`: arm-on-send, ACK-clears, exponential

@@ -6871,6 +6871,147 @@ unsafe fn block_flush_dispatch() -> bool {
     }
 }
 
+/// Installer (full-os guide Part V.11): provision a target disk with an OS boot
+/// record. Finds a SECOND virtio-blk device (the install target) — a generic
+/// boot has only the boot disk, so this is a safe no-op there; only a lane that
+/// attaches a blank second disk exercises the write. Switches the block driver
+/// to the target, writes a boot record (a "RUGOINST" magic + version + the
+/// 0x55AA MBR signature), reads it back to verify, then restores the boot disk.
+/// v1 boundary: it provisions one image block and verifies the write/read path;
+/// a full bootable install (partition layout, kernel copy, bootloader) is
+/// carry-forward.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn installer_selftest() {
+    // The boot disk is the first virtio-blk (already initialized by storage boot).
+    let boot = match pci_find_device(0x1AF4, 0x1001) {
+        Some(b) => b,
+        None => return, // not a virtio-blk lane (e.g. NVMe): nothing to do
+    };
+    // Find a SECOND virtio-blk after the boot disk: the install target.
+    let mut tdev = boot.dev + 1;
+    let mut target = None;
+    while tdev < 32 {
+        let id = pci_read32(0, tdev, 0, 0);
+        if (id & 0xFFFF) as u16 == 0x1AF4 && ((id >> 16) & 0xFFFF) as u16 == 0x1001 {
+            target = Some(PciBdf { bus: 0, dev: tdev, func: 0 });
+            break;
+        }
+        tdev += 1;
+    }
+    let tgt = match target {
+        Some(b) => b,
+        None => {
+            serial_write(b"INSTALL: no target\n");
+            return;
+        }
+    };
+    let tgt_iobase = match pci_bar0_iobase(tgt) {
+        Some(io) => io,
+        None => {
+            serial_write(b"INSTALL: target no bar\n");
+            return;
+        }
+    };
+    let boot_iobase = match pci_bar0_iobase(boot) {
+        Some(io) => io,
+        None => return,
+    };
+    pci_enable_io_bus_master(tgt);
+    // Switch the block driver to the target disk and provision it.
+    if !virtio_blk_init(tgt_iobase) {
+        serial_write(b"INSTALL: target init fail\n");
+        let _ = virtio_blk_init(boot_iobase); // restore the boot disk
+        return;
+    }
+    // This self-test runs on EVERY go boot, so it must NEVER clobber an unrelated
+    // data disk: only provision a target whose sector 0 is blank (a fresh disk)
+    // or already carries our magic (idempotent re-install).
+    let provisionable = install_target_provisionable();
+    let ok = provisionable && install_write_and_verify();
+    // Reset the target so it releases the shared virtqueue (only one device may
+    // be bound to VQ_MEM at a time), then restore the boot disk.
+    outb(tgt_iobase + VIRTIO_DEVICE_STATUS, 0);
+    if !virtio_blk_init(boot_iobase) {
+        // The boot disk just initialized successfully at storage boot, so this
+        // should not happen; if it does, fail loudly rather than feed the shell
+        // a half-initialized disk0.
+        serial_write(b"INSTALL: boot restore FAIL\n");
+        qemu_exit(0x31);
+        loop {
+            core::arch::asm!("cli; hlt", options(nomem, nostack));
+        }
+    }
+    if !provisionable {
+        serial_write(b"INSTALL: target not blank, refusing\n");
+    } else if ok {
+        serial_write(b"INSTALL: image written+verified ok\n");
+    } else {
+        serial_write(b"INSTALL: verify FAIL\n");
+    }
+}
+
+/// Read the active (target) device's sector 0 and report whether it is safe to
+/// provision: all-zero (a fresh disk) or already carrying our boot-record magic.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn install_target_provisionable() -> bool {
+    const MAGIC: &[u8; 8] = b"RUGOINST";
+    let dp = BLK_DATA_PAGE.0.as_mut_ptr();
+    core::ptr::write_bytes(dp, 0, 512);
+    if !virtio_blk_io(false, 0, 512) {
+        return false; // cannot read -> do not write (safe)
+    }
+    let mut i = 0usize;
+    let mut blank = true;
+    while i < 512 {
+        if *dp.add(i) != 0 {
+            blank = false;
+            break;
+        }
+        i += 1;
+    }
+    if blank {
+        return true;
+    }
+    i = 0;
+    while i < 8 {
+        if *dp.add(i) != MAGIC[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true // already our image -> idempotent re-provision
+}
+
+/// Write a boot-record image to sector 0 of the active (target) block device and
+/// read it back to confirm a byte-exact round-trip.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn install_write_and_verify() -> bool {
+    const MAGIC: &[u8; 8] = b"RUGOINST";
+    let dp = BLK_DATA_PAGE.0.as_mut_ptr();
+    core::ptr::write_bytes(dp, 0, 512);
+    core::ptr::copy_nonoverlapping(MAGIC.as_ptr(), dp, 8);
+    *dp.add(8) = 0x01; // image version
+    *dp.add(510) = 0x55; // MBR boot signature
+    *dp.add(511) = 0xAA;
+    if !virtio_blk_io(true, 0, 512) {
+        return false;
+    }
+    // Clear the buffer, then read sector 0 back into it (so a stale match in the
+    // page cannot pass the check).
+    core::ptr::write_bytes(dp, 0, 512);
+    if !virtio_blk_io(false, 0, 512) {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < 8 {
+        if *dp.add(i) != MAGIC[i] {
+            return false;
+        }
+        i += 1;
+    }
+    *dp.add(8) == 0x01 && *dp.add(510) == 0x55 && *dp.add(511) == 0xAA
+}
+
 // --------------- M5: VirtIO block init ---------------------------------------
 
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "go_test"))]
@@ -8767,6 +8908,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::ndp_selftest();
         let _ = tcp::tcp_listen_selftest();
         let _ = tcp::tcp_rto_selftest();
+        installer_selftest(); // full-os Part V.11: provision an install target disk
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;
