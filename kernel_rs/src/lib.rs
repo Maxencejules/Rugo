@@ -3173,7 +3173,22 @@ cfg_r4! {
 
     unsafe fn r4_wake_waiter(parent_tid: usize, child_tid: usize) {
         let status_ptr = R4_TASKS[parent_tid].wait_status_ptr;
-        if r4_copy_wait_status(status_ptr, R4_TASKS[child_tid].exit_status) {
+        // This runs when the EXITING child (or SHARED) address space is
+        // current, NOT the parent's. Write the status into the parent's own
+        // table by walking it explicitly; falling back to the current-CR3
+        // copyout only on lanes without per-task address spaces (pml4_phys 0).
+        let ok = if status_ptr == 0 {
+            true
+        } else {
+            let st = R4_TASKS[child_tid].exit_status.to_le_bytes();
+            let pml4 = R4_TASKS[parent_tid].pml4_phys;
+            if pml4 != 0 {
+                mm::as_copyout(pml4, status_ptr, &st)
+            } else {
+                copyout_user(status_ptr, &st, st.len()).is_ok()
+            }
+        };
+        if ok {
             R4_TASKS[parent_tid].saved_frame[14] = child_tid as u64;
         } else {
             R4_TASKS[parent_tid].saved_frame[14] = 0xFFFF_FFFF_FFFF_FFFF;
@@ -3356,6 +3371,24 @@ cfg_r4! {
                                      options(nostack));
                     mm::address_space_release(cur_pml4);
                     R4_TASKS[cur].pml4_phys = SHARED_PML4_PHYS;
+                    // Reclaim our own already-exited clone threads that shared
+                    // this (now freed) address space. They are orphans (their
+                    // parent is us, and we are exiting), so no one will reap
+                    // them; mark them Dead to free the slot and clear the now
+                    // dangling pml4 reference.
+                    let mut z = 0usize;
+                    while z < R4_NUM_TASKS {
+                        if z != cur
+                            && R4_TASKS[z].pml4_phys == cur_pml4
+                            && R4_TASKS[z].parent_tid == cur
+                            && matches!(R4_TASKS[z].state, R4State::Exited)
+                        {
+                            R4_TASKS[z].pml4_phys = SHARED_PML4_PHYS;
+                            R4_TASKS[z].state = R4State::Dead;
+                            R4_TASKS[z].exit_status = 0;
+                        }
+                        z += 1;
+                    }
                     serial_write(b"ASRELEASE: tid=0x");
                     serial_write_hex(cur as u64);
                     serial_write(b" as=0x");
@@ -3980,12 +4013,20 @@ cfg_r4! {
                 }
             }
             2 => {
+                // A null futex word is never a valid waiter; reject it so a
+                // wake(0) cannot alias tasks blocked for non-futex reasons
+                // (nanosleep/wait/ipc_recv all leave futex_uaddr == 0).
+                if uaddr == 0 {
+                    *frame.add(14) = ERR;
+                    return;
+                }
                 let cur_pml4 = R4_TASKS[R4_CURRENT].pml4_phys;
                 let limit = if val == 0 { u64::MAX } else { val };
                 let mut woken = 0u64;
                 let mut t = 0usize;
                 while t < R4_NUM_TASKS && woken < limit {
                     if matches!(R4_TASKS[t].state, R4State::Blocked)
+                        && R4_TASKS[t].futex_uaddr != 0
                         && R4_TASKS[t].futex_uaddr == uaddr
                         && R4_TASKS[t].pml4_phys == cur_pml4
                     {
@@ -4110,21 +4151,27 @@ cfg_r4! {
     /// tick counter, 1 = REALTIME seconds since the Unix epoch from the
     /// CMOS RTC). -1 on bad op/clockid.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_time(frame: *mut u64, op: u64, a2: u64) -> u64 {
+    unsafe fn sys_time(frame: *mut u64, op: u64, a2: u64) {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        // nanosleep (op 2) switches tasks, so it sets RAX in the frame itself
+        // (like sys_futex); the dispatcher must NOT assign sys_time's return
+        // afterward or it would clobber the switched-to task's RAX.
         match op {
-            1 => match a2 {
-                0 => R4_PREEMPT_TICKS.wrapping_mul(10_000_000),
-                1 => cmos_unix_seconds(),
-                _ => ERR,
-            },
+            1 => {
+                *frame.add(14) = match a2 {
+                    0 => R4_PREEMPT_TICKS.wrapping_mul(10_000_000),
+                    1 => cmos_unix_seconds(),
+                    _ => ERR,
+                };
+            }
             2 => {
                 // nanosleep(a2 = nanoseconds): block until the deadline (10 ms
                 // PIT resolution). Other tasks run meanwhile; if none are
                 // runnable the scheduler idles until the PIT wakes us.
                 let ticks = (a2 + 9_999_999) / 10_000_000;
                 if ticks == 0 {
-                    return 0;
+                    *frame.add(14) = 0;
+                    return;
                 }
                 let cur = R4_CURRENT;
                 *frame.add(14) = 0; // value seen on resume
@@ -4140,9 +4187,10 @@ cfg_r4! {
                         r4_enter_idle_or_done(frame);
                     }
                 }
-                0
             }
-            _ => ERR,
+            _ => {
+                *frame.add(14) = ERR;
+            }
         }
     }
 
@@ -4758,7 +4806,15 @@ cfg_r4! {
             if (R4_TASKS[wt].recv_cap as usize) < n {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
-            if copyout_user(R4_TASKS[wt].recv_buf, &kbuf[..n], n).is_err() {
+            // Deliver into the RECEIVER's address space, not the sender's
+            // current CR3 (they may differ under per-process address spaces).
+            let wt_pml4 = R4_TASKS[wt].pml4_phys;
+            let delivered = if wt_pml4 != 0 {
+                mm::as_copyout(wt_pml4, R4_TASKS[wt].recv_buf, &kbuf[..n])
+            } else {
+                copyout_user(R4_TASKS[wt].recv_buf, &kbuf[..n], n).is_ok()
+            };
+            if !delivered {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
             R4_TASKS[wt].saved_frame[14] = n as u64; // return value for recv

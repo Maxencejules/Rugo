@@ -85,7 +85,10 @@ pub(crate) unsafe fn check_page_user_perms(va: u64, hhdm: u64, required_perms: u
     if pte & 1 == 0 || pte & 4 == 0 {
         return false;
     }
-    if need_write && pte & 2 == 0 {
+    // A copy-on-write page (PTE_COW, bit 9) reads as non-writable but is
+    // writable-on-write: a kernel/user write will break it. Accept it for
+    // WRITE; copyout_user breaks it before the actual store.
+    if need_write && pte & 2 == 0 && pte & 0x200 == 0 {
         return false;
     }
     true
@@ -165,6 +168,19 @@ pub(crate) unsafe fn copyout_user(user_ptr: u64, src: &[u8], len: usize) -> Resu
         return Err(());
     }
     if len > 0 {
+        // Break copy-on-write across the destination so the store targets a
+        // private, writable frame instead of faulting on (or silently
+        // corrupting) a shared read-only CoW page. cow_break is a no-op on
+        // pages that are not CoW.
+        let mut pg = user_ptr & !0xFFF;
+        let last = (user_ptr + (len as u64) - 1) & !0xFFF;
+        loop {
+            crate::mm::cow_break(pg);
+            if pg >= last {
+                break;
+            }
+            pg += 4096;
+        }
         core::ptr::copy_nonoverlapping(src.as_ptr(), user_ptr as *mut u8, len);
     }
     Ok(())

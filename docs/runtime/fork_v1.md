@@ -20,7 +20,7 @@ are superseded):
   the parent (`rax`) and `0` to the child. Only a task that already owns a
   private address space may fork (the boot task on the shared table cannot,
   in v1) — otherwise -1.
-- **op 2 = clone.** `rdi`/a2 = entry point. Spawns a new thread sharing the
+- **op 2 = clone.** `rdi` = op selector (2); `rsi` (= a2) = entry point. Spawns a new thread sharing the
   caller's address space (same `pml4_phys`), with its own demand-paged
   stack. Returns the new tid, or -1. (Thin wrapper over the existing
   thread-spawn path, which the keystone already made address-space aware.)
@@ -59,7 +59,20 @@ fault, before fault containment):
 
 `address_space_release` releases leaves through `cow_release_leaf`, so a
 forked frame is freed only by its last owner; page-table frames are always
-freed.
+freed. Only genuinely-writable source pages are marked CoW at fork; a
+read-only page (`mmap(PROT_READ)`, mprotect-RO) is shared as-is so a later
+write still faults to containment rather than being silently promoted.
+
+## Kernel writes into a forked address space
+
+After fork the parent's (and child's) writable pages are read-only+CoW, so
+the user-access path is CoW-aware: `check_page_user_perms` accepts a CoW page
+for WRITE, and `copyout_user` breaks CoW across the destination (private
+writable frame) before the store — so `read`/`getrandom`/`waitpid(&status)`
+into a not-yet-written post-fork buffer work correctly. A child's exit
+status is delivered into the **parent's** address space explicitly
+(`mm::as_copyout` against the parent's PML4), since the waker runs while the
+exiting child's / shared table is current, not the parent's.
 
 ## Markers
 

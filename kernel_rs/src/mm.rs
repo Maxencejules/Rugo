@@ -731,10 +731,18 @@ pub unsafe fn address_space_fork(parent_pml4: u64) -> Option<u64> {
             while j < 512 {
                 let pte = *p_pt.add(j);
                 if pte & 1 != 0 {
-                    // Share the data frame read-only and mark it CoW; both
-                    // sides fault on the first write. No new physical frame,
-                    // so the demand accounting is unchanged here.
-                    let ro = (pte & !PTE_W) | PTE_COW;
+                    // Share the data frame between parent and child. A
+                    // writable page becomes read-only + CoW so the first write
+                    // on either side traps and copies; a genuinely read-only
+                    // page (PROT_READ mmap, mprotect-RO) is shared AS-IS with no
+                    // CoW mark, so a write to it still faults to containment
+                    // (no silent promotion). The refcount is bumped either way
+                    // so address_space_release stays balanced.
+                    let ro = if pte & PTE_W != 0 {
+                        (pte & !PTE_W) | PTE_COW
+                    } else {
+                        pte
+                    };
                     *p_pt.add(j) = ro;
                     *c_pt.add(j) = ro;
                     cow_incr(pte & PHYS_MASK);
