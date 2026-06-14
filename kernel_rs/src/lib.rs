@@ -456,6 +456,127 @@ unsafe fn fat16_read_named(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
     Some(n)
 }
 
+/// Write a single-cluster file to the FAT16 root directory (full-os guide Part
+/// II.5, FS maturity): allocate the first free cluster, mark it EOC in every FAT
+/// copy, write the data into that cluster, and fill a free root-dir 8.3 entry.
+/// v1 boundary: one cluster (≤512 B), root dir only, no overwrite/append/chain.
+/// Returns true on success. Shares the BPB parse with `fat16_read_named`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn fat16_write_named(target: &[u8; 11], data: &[u8]) -> bool {
+    const VOL_LBA: u64 = 2048;
+    if !storage::r4_storage_available() || data.is_empty() || data.len() > 512 {
+        return false;
+    }
+    if !block_io_dispatch(false, VOL_LBA, 512, false) {
+        return false;
+    }
+    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
+    let spc = BLK_DATA_PAGE.0[13] as u64;
+    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
+    let nfats = BLK_DATA_PAGE.0[16] as u64;
+    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
+    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
+    if bps != 512 || spc == 0 || nfats == 0 || spf == 0 {
+        return false;
+    }
+    let fat_lba = VOL_LBA + reserved;
+    let root_lba = fat_lba + nfats * spf;
+    let root_sectors = (root_entries * 32 + 511) / 512;
+    let data_lba = root_lba + root_sectors;
+
+    // 1) Find a free root-dir slot AND reject a duplicate name -- BEFORE any
+    // on-disk mutation, so a full directory or an already-present name leaks
+    // nothing (the deterministic leak the review found). Scan to the first 0x00
+    // (end-of-directory): entries beyond it are unused.
+    let mut slot_lba = 0u64;
+    let mut slot_off = 0usize;
+    let mut found_slot = false;
+    let mut ended = false;
+    let mut s = 0u64;
+    while s < root_sectors && !ended {
+        if !block_io_dispatch(false, root_lba + s, 512, false) {
+            return false;
+        }
+        let mut e = 0usize;
+        while e < 16 {
+            let base = e * 32;
+            let b0 = BLK_DATA_PAGE.0[base];
+            if b0 == 0x00 {
+                // End of directory: the first free slot if none seen earlier.
+                if !found_slot {
+                    slot_lba = root_lba + s;
+                    slot_off = base;
+                    found_slot = true;
+                }
+                ended = true;
+                break;
+            }
+            if b0 != 0xE5 && BLK_DATA_PAGE.0[base..base + 11] == *target {
+                return false; // name already exists -> refuse (no duplicate entry)
+            }
+            if b0 == 0xE5 && !found_slot {
+                slot_lba = root_lba + s;
+                slot_off = base;
+                found_slot = true;
+            }
+            e += 1;
+        }
+        s += 1;
+    }
+    if !found_slot {
+        return false; // directory full -> nothing committed
+    }
+    // 2) Find a free cluster (first FAT sector, clusters 2..255) -- still no
+    // mutation, so a full FAT also leaks nothing.
+    if !block_io_dispatch(false, fat_lba, 512, false) {
+        return false;
+    }
+    let mut cluster = 0u64;
+    let mut c = 2usize;
+    while c < 256 {
+        if u16::from_le_bytes([BLK_DATA_PAGE.0[c * 2], BLK_DATA_PAGE.0[c * 2 + 1]]) == 0 {
+            cluster = c as u64;
+            break;
+        }
+        c += 1;
+    }
+    if cluster < 2 {
+        return false; // no free cluster -> nothing committed
+    }
+    // 3) Commit: mark the cluster end-of-chain in every FAT copy, write the data
+    // cluster, then link it from the directory entry. (A mid-commit device-write
+    // failure can still leave an orphaned cluster or divergent FAT copies; that
+    // is inherent to a non-journaling FAT writer -- see the v1 boundary.)
+    BLK_DATA_PAGE.0[(cluster as usize) * 2] = 0xFF;
+    BLK_DATA_PAGE.0[(cluster as usize) * 2 + 1] = 0xFF;
+    let mut f = 0u64;
+    while f < nfats {
+        if !block_io_dispatch(true, fat_lba + f * spf, 512, false) {
+            return false;
+        }
+        f += 1;
+    }
+    let cluster_lba = data_lba + (cluster - 2) * spc;
+    core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+    BLK_DATA_PAGE.0[..data.len()].copy_from_slice(data);
+    if !block_io_dispatch(true, cluster_lba, 512, false) {
+        return false;
+    }
+    // Re-read the chosen directory sector (the buffer was reused above) and fill
+    // the slot we reserved in step 1.
+    if !block_io_dispatch(false, slot_lba, 512, false) {
+        return false;
+    }
+    core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr().add(slot_off), 0, 32);
+    BLK_DATA_PAGE.0[slot_off..slot_off + 11].copy_from_slice(target);
+    BLK_DATA_PAGE.0[slot_off + 11] = 0x20; // attr = archive
+    BLK_DATA_PAGE.0[slot_off + 26] = (cluster & 0xFF) as u8;
+    BLK_DATA_PAGE.0[slot_off + 27] = ((cluster >> 8) & 0xFF) as u8;
+    BLK_DATA_PAGE.0[slot_off + 28..slot_off + 32]
+        .copy_from_slice(&(data.len() as u32).to_le_bytes());
+    block_io_dispatch(true, slot_lba, 512, false)
+}
+
 /// List the FAT16 root directory (full-os guide Part II.5): log each live 8.3
 /// entry as `FATLS: <name11> size=0x<hex>` and return the count, or u64::MAX on
 /// a bad volume. Skips free (0x00), deleted (0xE5), and long-name (attr 0x0F)
@@ -5503,6 +5624,26 @@ cfg_r4! {
                     return 0;
                 }
                 serial_write(b"JOURNAL: replay ok\n");
+                1
+            }
+            // op 11 = FAT16 write self-test (full-os guide Part II.5): write a
+            // single-cluster file to the FAT volume, then read it back via the
+            // existing reader and confirm a byte-exact round-trip.
+            11 => {
+                let name: [u8; 11] = *b"WRTEST  TXT";
+                let content: &[u8] = b"fat-write-v1!";
+                if !fat16_write_named(&name, content) {
+                    return 0;
+                }
+                let mut out = [0u8; 64];
+                let n = match fat16_read_named(&name, &mut out) {
+                    Some(v) => v,
+                    None => return 0,
+                };
+                if n != content.len() || &out[..n] != content {
+                    return 0;
+                }
+                serial_write(b"FATWR: write+read ok\n");
                 1
             }
             _ => 0xFFFF_FFFF_FFFF_FFFF,

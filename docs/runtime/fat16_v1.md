@@ -1,9 +1,9 @@
-# FAT16 read — contract v1
+# FAT16 read + write — contract v1
 
-Status: boot-verified via `make test-fat16-v1`
-Source: `kernel_rs/src/lib.rs` (`sys_sysinfo` op 6),
-`apps/coreutils/fatprobe.asm`.
-Proof: `tests/runtime/test_fat16_v1.py`.
+Status: boot-verified via `make test-fat16-v1` and `make test-fatwrite-v1`
+Source: `kernel_rs/src/lib.rs` (`sys_sysinfo` op 6 read, op 8 list, op 11 write;
+`fat16_write_named`), `apps/coreutils/fatprobe.asm`, `apps/coreutils/fatwrprobe.asm`.
+Proof: `tests/runtime/test_fat16_v1.py`, `tests/runtime/test_fatwrite_v1.py`.
 
 Full-OS implementation guide Part II.5 (filesystem maturity), FAT slice —
 read a file from a foreign FAT16 volume on the block device. This is the first
@@ -43,10 +43,29 @@ read-only `FatFile` fd is returned. Any program (e.g. the shell's `fscat`)
 reaches FAT files through the normal `open`/`read`/`close` path — no
 FAT-specific syscall needed. v1 caches one open `/mnt` file at a time.
 
+### File write (`op 11`)
+
+`sys_sysinfo` (id 61) **op 11** = FAT16 write self-test: `fat16_write_named`
+creates a **single-cluster** file in the root directory. To leak nothing on the
+deterministic failure paths, it first (a) scans the root directory for a free
+slot **and** rejects a duplicate 8.3 name, then (b) finds a free cluster — both
+*before* any on-disk mutation. Only then does it commit: mark the cluster
+end-of-chain (`0xFFFF`) in **every** FAT copy, write the data into the cluster,
+and fill the reserved directory entry (name, attr `0x20`, first cluster, size).
+The self-test writes `WRTEST.TXT` and reads it back via `fat16_read_named` to
+confirm a byte-exact round-trip (`FATWR: write+read ok`).
+
 ## v1 boundary / carry-forward
 
-- **Read-only, one fixed file, single cluster.** No FAT chain walk (files must
-  fit in one cluster), no write, no create/delete, no timestamps.
+- **Read-only reads of one fixed file; writes are single-cluster, no overwrite.**
+  No FAT chain walk (files must fit in one cluster), no append, no create over an
+  existing name (a duplicate name is refused), no delete, no timestamps. The
+  free-cluster scan covers only the first FAT sector (clusters 2..255).
+- **Non-journaling write.** The pre-commit checks remove the deterministic leaks
+  (full directory, full FAT, duplicate name). A device-write failure *during* the
+  multi-sector commit can still orphan a cluster or leave FAT copies divergent —
+  inherent to a non-journaling FAT writer; a `fsck`-style repair (or journaling
+  the FAT update) is carry-forward.
 - **Root directory only.** No subdirectory traversal, no long file names (LFN).
 - **Fixed volume LBA (2048).** The `/mnt` namespace mount works, but the volume
   LBA is fixed — using the MBR parser ([`partitions_v1.md`](partitions_v1.md)) to
@@ -62,3 +81,9 @@ FAT-specific syscall needed. v1 caches one open `/mnt` file at a time.
 `HELLO.TXT` = `fat16-file-content`) at LBA 2048 of a 4 MiB data disk. `fatprobe`
 calls op 6 and echoes the file; the transcript shows `fat16-file-content` then
 `FATPROBE: ok`.
+
+`make test-fatwrite-v1`: on that same crafted volume (HELLO.TXT at cluster 2 /
+root slot 0), `fatwrprobe` calls op 11; the kernel allocates cluster 3 and root
+slot 1, writes `WRTEST.TXT`, and reads it back — the transcript shows
+`FATWR: write+read ok`, and host-side the volume holds both `WRTEST  TXT` and the
+untouched `HELLO   TXT`.

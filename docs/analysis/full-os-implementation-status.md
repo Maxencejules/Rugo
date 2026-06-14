@@ -25,9 +25,12 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 
 ### Part II — Core subsystems
 - **II.5 Filesystem**: tmpfs `/tmp` (`pseudo_fs_v1.md`), MBR partition parse
-  (`partitions_v1.md`), FAT16 read + `/mnt` namespace mount + directory list
-  (`fat16_v1.md`), write-ahead journaling + replay (`journal_v1.md`); plus the
-  pre-existing SimpleFS `/data` tree and `/dev`, `/proc/self/stat`.
+  (`partitions_v1.md`), FAT16 read + `/mnt` namespace mount + directory list +
+  **single-cluster file write** (`fat16_v1.md`; write allocates a free cluster,
+  marks it EOC in every FAT copy, fills a free root-dir entry, verified by
+  read-back: `FATWR: write+read ok`), write-ahead journaling + replay
+  (`journal_v1.md`); plus the pre-existing SimpleFS `/data` tree and `/dev`,
+  `/proc/self/stat`.
 - **II.6 Networking**: DHCP/DNS clients (`netcfg_v1.md`), and a comprehensively
   reachable host — ARP responder (`arp_v1.md`), ICMP echo (`icmp_v1.md`),
   ICMPv6 echo (`icmpv6_v1.md`), TCP client **and** passive-open/listener
@@ -140,7 +143,7 @@ single safe boot-verified slice and several have hard prerequisites.
 - `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
-  6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal.
+  6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal, 11 FAT-write.
 - `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid.
 - SMP self-tests (boot markers, no syscall): spinlock lock-count, IPI ack,
   per-CPU LAPIC timers, TLB shootdown, per-CPU GS, cross-CPU work dispatch.
