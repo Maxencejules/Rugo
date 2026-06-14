@@ -665,6 +665,33 @@ cfg_m3! {
             M8_FD_TABLE[fd as usize].rights = effective;
             return fd;
         }
+        // /dev character devices (full-os guide Part II.5): public, no cap.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            let dev_kind = if m8_path_matches(bytes, b"/dev/zero") {
+                Some(M8FdKind::DevZero)
+            } else if m8_path_matches(bytes, b"/dev/null") {
+                Some(M8FdKind::DevNull)
+            } else if m8_path_matches(bytes, b"/dev/urandom") {
+                Some(M8FdKind::DevUrandom)
+            } else {
+                None
+            };
+            if let Some(kind) = dev_kind {
+                let max = m10_rights_for_kind(kind);
+                let effective = requested | M10_RIGHT_POLL;
+                if effective & !max != 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let fd = m8_alloc_fd(kind);
+                if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                    return fd;
+                }
+                M8_FD_TABLE[fd as usize].rights = effective;
+                M8_FD_TABLE[fd as usize].offset = 0;
+                return fd;
+            }
+        }
         if m8_path_matches(bytes, b"/compat/hello.txt") {
             #[cfg(feature = "go_test")]
             if !r4_current_has_cap(R4_TASK_CAP_STORAGE) {
@@ -913,6 +940,24 @@ cfg_m3! {
             }
             #[cfg(all(feature = "go_test", feature = "compat_real_test"))]
             M8FdKind::VfsFile | M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevZero => {
+                let n = len as usize;
+                let z = [0u8; 256];
+                let mut done = 0usize;
+                while done < n {
+                    let chunk = core::cmp::min(z.len(), n - done);
+                    if copyout_user(buf + done as u64, &z[..chunk], chunk).is_err() {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    done += chunk;
+                }
+                n as u64
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevUrandom => sys_getrandom(buf, len),
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevNull => 0, // EOF
             #[cfg(feature = "go_test")]
             M8FdKind::PipeR => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1029,6 +1074,10 @@ cfg_m3! {
             M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(all(feature = "go_test", feature = "compat_real_test"))]
             M8FdKind::VfsFile | M8FdKind::VfsDir => 0xFFFF_FFFF_FFFF_FFFF,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevNull => len, // discard
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevZero | M8FdKind::DevUrandom => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(feature = "go_test")]
             M8FdKind::PipeW => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1367,6 +1416,18 @@ cfg_m3! {
                                 revents |= POLLOUT;
                             }
                         }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::DevZero | M8FdKind::DevUrandom => {
+                            if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 {
+                                revents |= POLLIN;
+                            }
+                        }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::DevNull => {
+                            if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
+                                revents |= POLLOUT;
+                            }
+                        }
                         #[cfg(not(feature = "go_test"))]
                         _ => revents |= POLLERR,
                     }
@@ -1585,6 +1646,13 @@ cfg_m3! {
         VfsDir,
         PipeR,
         PipeW,
+        // /dev character devices (full-os guide Part II.5, pseudo-fs).
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        DevZero,
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        DevNull,
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        DevUrandom,
     }
 
     // VFS node index per fd (parallel to M8_FD_TABLE; the fd's offset
@@ -1849,6 +1917,10 @@ cfg_m3! {
             M8FdKind::VfsDir => M10_RIGHT_READ | M10_RIGHT_POLL,
             M8FdKind::PipeR => M10_RIGHT_READ | M10_RIGHT_POLL,
             M8FdKind::PipeW => M10_RIGHT_WRITE | M10_RIGHT_POLL,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevZero | M8FdKind::DevUrandom => M10_RIGHT_READ | M10_RIGHT_POLL,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::DevNull => M10_RIGHT_WRITE | M10_RIGHT_POLL,
         }
     }
 
@@ -3339,14 +3411,24 @@ cfg_r4! {
             BLK_DATA_PAGE.0[7],
         ]) as usize;
 
+        // File table spans two sectors (32 entries x 32 bytes).
+        let mut table = [0u8; 1024];
         if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR + 1, 512, false) {
             exec_log(name, b"ioerr");
             return ERR;
         }
-        let mut table = [0u8; 512];
         core::ptr::copy_nonoverlapping(BLK_DATA_PAGE.0.as_ptr(), table.as_mut_ptr(), 512);
+        if !block_io_dispatch(false, EXEC_APP_REGION_SECTOR + 2, 512, false) {
+            exec_log(name, b"ioerr");
+            return ERR;
+        }
+        core::ptr::copy_nonoverlapping(
+            BLK_DATA_PAGE.0.as_ptr(),
+            table.as_mut_ptr().add(512),
+            512,
+        );
 
-        let fc = core::cmp::min(file_count, 16);
+        let fc = core::cmp::min(file_count, 32);
         let mut file_sector = 0u64;
         let mut file_size = 0usize;
         let mut found = false;

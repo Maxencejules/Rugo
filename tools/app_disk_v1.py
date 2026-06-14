@@ -5,9 +5,9 @@ Layout (all offsets relative to --base-sector, default 64, clear of the
 runtime-state sectors 8..11):
   base+0: SimpleFS superblock  magic "SF31" u32 | file_count u32 |
           data_start u32 (absolute sector) | next_free u32
-  base+1: file table, 16 entries x 32 bytes:
+  base+1..base+2: file table, 32 entries x 32 bytes (two sectors):
           name[24] zero-padded | start_sector u32 (absolute) | size u32
-  base+2...: file payloads, each PKG v1-framed:
+  base+3...: file payloads, each PKG v1-framed:
           magic u32 (0x01474B50) | bin_size u32 | name[24] | sha256[32]
           followed by bin_size payload bytes.
 
@@ -57,12 +57,12 @@ def main() -> int:
         apps.append((name, Path(elf_path).read_bytes()))
     if args.elf:
         apps.append((args.name, Path(args.elf).read_bytes()))
-    if not apps or len(apps) > 16:
-        raise SystemExit("app-disk: between 1 and 16 apps required")
+    if not apps or len(apps) > 32:
+        raise SystemExit("app-disk: between 1 and 32 apps required")
 
     base = args.base_sector
-    data_sector = base + 2
-    table = bytearray(SECTOR)
+    data_sector = base + 3
+    table = bytearray(2 * SECTOR)
     payloads = bytearray()
     cursor = data_sector
     for index, (name, elf) in enumerate(apps):
@@ -83,7 +83,7 @@ def main() -> int:
         disk.extend(b"\x00" * (needed - len(disk)))
 
     disk[base * SECTOR : base * SECTOR + SECTOR] = superblock.ljust(SECTOR, b"\x00")
-    disk[(base + 1) * SECTOR : (base + 2) * SECTOR] = table
+    disk[(base + 1) * SECTOR : (base + 3) * SECTOR] = table
     disk[data_sector * SECTOR : data_sector * SECTOR + len(payloads)] = payloads
 
     disk_path.write_bytes(bytes(disk))
