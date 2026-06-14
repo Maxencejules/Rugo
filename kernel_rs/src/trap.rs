@@ -54,6 +54,15 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
                     if crate::mm::try_demand_map(demand_cr2) {
                         return;
                     }
+                    // Copy-on-write break (full-os guide Part I.2): a write
+                    // fault on a present page is a forked CoW page; give the
+                    // writer a private copy and retry.
+                    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                    {
+                        if error_code & 0x2 != 0 && crate::mm::cow_break(demand_cr2) {
+                            return;
+                        }
+                    }
                     #[cfg(feature = "go_test")]
                     {
                         let cr2: u64;

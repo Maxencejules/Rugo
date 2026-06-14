@@ -3473,6 +3473,71 @@ cfg_r4! {
         tid as u64
     }
 
+    /// sys_proc_ctl (ABI v3.2 id 51, op-multiplexed): op 1 = fork (a
+    /// copy-on-write duplicate of the caller), op 2 = clone (a new thread
+    /// sharing the caller's address space, entry in a2). fork returns the
+    /// child tid to the parent and 0 to the child; clone returns the new
+    /// tid. -1 on error.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_proc_ctl(frame: *mut u64, op: u64, a2: u64, _a3: u64) {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => sys_fork_v1(frame),
+            2 => {
+                *frame.add(14) = sys_thread_spawn_r4(a2);
+            }
+            _ => {
+                *frame.add(14) = ERR;
+            }
+        }
+    }
+
+    /// fork: duplicate the calling task into a copy-on-write child. Only a
+    /// task that already owns a private address space can be forked (the
+    /// boot task on the shared table cannot, in v1).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_fork_v1(frame: *mut u64) {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let parent = R4_CURRENT;
+        let parent_pml4 = R4_TASKS[parent].pml4_phys;
+        if parent_pml4 == 0 || parent_pml4 == SHARED_PML4_PHYS {
+            *frame.add(14) = ERR;
+            return;
+        }
+        let child = match r4_find_spawn_slot() {
+            Some(t) => t,
+            None => {
+                *frame.add(14) = ERR;
+                return;
+            }
+        };
+        let child_pml4 = match mm::address_space_fork(parent_pml4) {
+            Some(p) => p,
+            None => {
+                *frame.add(14) = ERR;
+                return;
+            }
+        };
+        // The child inherits caps/uid/limits from the parent (r4_init_task)
+        // and resumes at the exact same point in its own CoW copy.
+        r4_init_task(child, *frame.add(17), *frame.add(20), parent);
+        for i in 0..22 {
+            R4_TASKS[child].saved_frame[i] = *frame.add(i);
+        }
+        R4_TASKS[child].saved_frame[14] = 0; // child: rax = 0
+        R4_TASKS[child].pml4_phys = child_pml4;
+        R4_TASKS[child].state = R4State::Ready;
+        R4_THREADS_CREATED += 1;
+        // The parent's page tables were just marked read-only; flush its TLB.
+        core::arch::asm!("mov cr3, {}", in(reg) parent_pml4, options(nostack));
+        serial_write(b"FORK: child tid=0x");
+        serial_write_hex(child as u64);
+        serial_write(b" as=0x");
+        serial_write_hex(child_pml4);
+        serial_write(b"\n");
+        *frame.add(14) = child as u64; // parent: rax = child tid
+    }
+
     unsafe fn r4_find_spawn_slot() -> Option<usize> {
         for tid in 1..R4_NUM_TASKS {
             if R4_TASKS[tid].state == R4State::Dead {

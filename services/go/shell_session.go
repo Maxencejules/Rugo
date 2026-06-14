@@ -197,6 +197,11 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 		// each isolated in its own address space.
 		return false, asConc()
 	}
+	if cmd == "forkprobe" {
+		// Copy-on-write fork proof: the probe forks itself; the child's
+		// write to a shared global does not disturb the parent's copy.
+		return false, spawnRun(appNameForkprobe, "")
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

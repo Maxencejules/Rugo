@@ -378,8 +378,40 @@ const DEMAND_STACK_GUARD: u64 = 0x4000;
 static mut DEMAND_MAPPED: u64 = 0;
 
 const PTE_P_W_U: u64 = 0x07;
+const PTE_W: u64 = 0x02;
 const PTE_NX: u64 = 1 << 63;
 const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+
+// Copy-on-write refcounts (full-os guide Part I.2). Indexed by frame
+// number. The value is the count of owners BEYOND the first: 0 = a single
+// owner (the common case, untracked), N = N+1 owners sharing the frame.
+// u8 caps at 256 owners, far above R4_MAX_TASKS, so saturation never bites.
+static mut COW_REFCOUNT: [u8; MAX_FRAMES] = [0u8; MAX_FRAMES];
+
+#[inline]
+unsafe fn cow_incr(phys: u64) {
+    let idx = (phys / FRAME_SIZE) as usize;
+    if idx < MAX_FRAMES {
+        COW_REFCOUNT[idx] = COW_REFCOUNT[idx].saturating_add(1);
+    }
+}
+
+/// Release one reference to a leaf data frame. If other owners remain,
+/// just drop the refcount; only the last owner frees the frame (and rolls
+/// back the demand-frame accounting, since DEMAND_MAPPED counts physical
+/// frames, not mappings).
+#[inline]
+unsafe fn cow_release_leaf(phys: u64) {
+    let idx = (phys / FRAME_SIZE) as usize;
+    if idx < MAX_FRAMES && COW_REFCOUNT[idx] > 0 {
+        COW_REFCOUNT[idx] -= 1;
+        return;
+    }
+    free_frame(phys);
+    if DEMAND_MAPPED > 0 {
+        DEMAND_MAPPED -= 1;
+    }
+}
 
 // Exec app window: ELF segments load through the same demand path, so
 // these pages stay executable. Everything else in the window is data
@@ -628,10 +660,9 @@ pub unsafe fn address_space_release(pml4_phys: u64) {
                     while j < 512 {
                         let pte = *pt.add(j);
                         if pte & 1 != 0 {
-                            free_frame(pte & PHYS_MASK);
-                            if DEMAND_MAPPED > 0 {
-                                DEMAND_MAPPED -= 1;
-                            }
+                            // Leaf data frames may be CoW-shared with another
+                            // address space; only the last owner frees them.
+                            cow_release_leaf(pte & PHYS_MASK);
                         }
                         j += 1;
                     }
@@ -644,4 +675,121 @@ pub unsafe fn address_space_release(pml4_phys: u64) {
         free_frame(pdpt_phys);
     }
     free_frame(pml4_phys & PHYS_MASK);
+}
+
+// ---- fork + copy-on-write (full-os guide Part I.2) ----
+
+/// Fork `parent_pml4` into a copy-on-write child. The kernel half is
+/// cloned; the user leaf data frames are SHARED read-only between parent
+/// and child (refcount bumped, W cleared in both), while the page-table
+/// frames (PT) are copied so each space has its own tree. The first write
+/// from either side traps into cow_break, which gives the writer a private
+/// copy. Returns the child PML4 physical address.
+pub unsafe fn address_space_fork(parent_pml4: u64) -> Option<u64> {
+    // Fresh child PML4/PDPT/PD with the kernel half cloned from the parent.
+    let child = address_space_create(parent_pml4)?;
+    let child_pml4 = phys_to_virt(child & PHYS_MASK) as *mut u64;
+    let child_pdpt = phys_to_virt(*child_pml4 & PHYS_MASK) as *mut u64;
+    let child_pd = phys_to_virt(*child_pdpt & PHYS_MASK) as *mut u64;
+
+    let p_pml4 = phys_to_virt(parent_pml4 & PHYS_MASK) as *const u64;
+    let p_pml4e = *p_pml4; // user half is PML4[0]
+    if p_pml4e & 1 == 0 {
+        return Some(child);
+    }
+    let p_pdpt = phys_to_virt(p_pml4e & PHYS_MASK) as *const u64;
+    let p_pdpte = *p_pdpt; // PDPT[0]
+    if p_pdpte & 1 == 0 {
+        return Some(child);
+    }
+    let p_pd = phys_to_virt(p_pdpte & PHYS_MASK) as *mut u64;
+
+    let mut i = 0usize;
+    while i < 512 {
+        let p_pde = *p_pd.add(i);
+        if p_pde & 1 != 0 {
+            let c_pt_phys = match alloc_frame() {
+                Some(f) => f,
+                None => {
+                    address_space_release(child);
+                    return None;
+                }
+            };
+            let p_pt = phys_to_virt(p_pde & PHYS_MASK) as *mut u64;
+            let c_pt = phys_to_virt(c_pt_phys) as *mut u64;
+            let mut j = 0usize;
+            while j < 512 {
+                let pte = *p_pt.add(j);
+                if pte & 1 != 0 {
+                    // Share the data frame read-only; both sides fault on
+                    // the first write. No new physical frame, so the demand
+                    // accounting is unchanged here.
+                    let ro = pte & !PTE_W;
+                    *p_pt.add(j) = ro;
+                    *c_pt.add(j) = ro;
+                    cow_incr(pte & PHYS_MASK);
+                }
+                j += 1;
+            }
+            *child_pd.add(i) = c_pt_phys | PTE_P_W_U;
+        }
+        i += 1;
+    }
+    Some(child)
+}
+
+/// Resolve a copy-on-write write fault at `va` against the current CR3.
+/// Returns true if it was a CoW page and has been made writable (the
+/// faulting instruction must retry). If the page has a single owner it is
+/// simply re-marked writable; otherwise the writer gets a private copy.
+pub unsafe fn cow_break(va: u64) -> bool {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return false;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return false;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pde = *pd.add(((va >> 21) & 0x1FF) as usize);
+    if pde & 1 == 0 {
+        return false;
+    }
+    let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as usize;
+    let pte = *pt.add(pt_idx);
+    // Only a present, non-writable user page is a CoW candidate.
+    if pte & 1 == 0 || pte & PTE_W != 0 {
+        return false;
+    }
+    let frame = pte & PHYS_MASK;
+    let idx = (frame / FRAME_SIZE) as usize;
+    if idx < MAX_FRAMES && COW_REFCOUNT[idx] == 0 {
+        // Sole owner: just restore write permission, no copy needed.
+        *pt.add(pt_idx) = pte | PTE_W;
+        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+        return true;
+    }
+    // Shared: take a private copy and drop our reference to the shared one.
+    let fresh = match alloc_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+    core::ptr::copy_nonoverlapping(
+        phys_to_virt(frame) as *const u8,
+        phys_to_virt(fresh) as *mut u8,
+        FRAME_SIZE as usize,
+    );
+    if idx < MAX_FRAMES && COW_REFCOUNT[idx] > 0 {
+        COW_REFCOUNT[idx] -= 1;
+    }
+    *pt.add(pt_idx) = fresh | (pte & !PHYS_MASK) | PTE_W;
+    DEMAND_MAPPED += 1;
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
 }

@@ -21,6 +21,7 @@ var (
 	appNameSigprobe = []byte("sigprobe")
 	appNameFsperm  = []byte("fsperm")
 	appNameAsprobe = []byte("asprobe")
+	appNameForkprobe = []byte("forkprobe")
 	msgShellRunErr = []byte("APP: run err\n")
 	msgShellPipeOK = []byte("GOSH: pipe ok\n")
 	msgAsConcOK    = []byte("GOSH: asconc ok\n")
