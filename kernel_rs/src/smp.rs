@@ -6,9 +6,44 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::{serial_write, serial_write_hex};
+
+// SMP kernel locking (full-os guide Part I.3): a test-and-set spinlock guarding
+// a deliberately NON-atomic shared counter. Every CPU (BSP + each AP) hammers
+// it `SMP_LOCK_ITERS` times before parking; if the lock works the total is
+// exactly cpus*ITERS, while a broken lock loses updates under real contention.
+static SMP_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut SMP_GUARDED: u64 = 0;
+const SMP_LOCK_ITERS: u64 = 2000;
+
+unsafe fn smp_lock_acquire() {
+    while SMP_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+unsafe fn smp_lock_release() {
+    SMP_LOCK.store(0, Ordering::Release);
+}
+
+/// One CPU's contribution: ITERS locked, intentionally non-atomic increments of
+/// the shared counter. Read-modify-write through volatile so the compiler can't
+/// fuse it; correctness depends entirely on the spinlock serializing CPUs.
+unsafe fn smp_lock_hammer() {
+    let mut i = 0u64;
+    while i < SMP_LOCK_ITERS {
+        smp_lock_acquire();
+        let v = core::ptr::read_volatile(core::ptr::addr_of!(SMP_GUARDED));
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SMP_GUARDED), v + 1);
+        smp_lock_release();
+        i += 1;
+    }
+}
 
 #[repr(C)]
 struct LimineSmpInfo {
@@ -54,6 +89,11 @@ static APS_ONLINE: AtomicU64 = AtomicU64::new(0);
 /// tables. Check in and park - no prints (serial is not multi-CPU
 /// safe), no shared kernel state beyond the atomic.
 extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
+    // Contend on the spinlock BEFORE checking in, so once the BSP sees all
+    // APs online every AP's locked increments are already committed.
+    unsafe {
+        smp_lock_hammer();
+    }
     APS_ONLINE.fetch_add(1, Ordering::SeqCst);
     loop {
         unsafe {
@@ -62,33 +102,36 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
     }
 }
 
-/// Start every AP and report. Called once from kmain on the BSP.
+/// Start every AP and report. Called once from kmain on the BSP. Also runs a
+/// spinlock contention self-test: every CPU hammers a lock-guarded counter and
+/// the BSP verifies no updates were lost (full-os guide Part I.3 kernel locking).
 pub fn smp_init() {
     unsafe {
         let resp = core::ptr::read_volatile(core::ptr::addr_of!(SMP_REQUEST.response));
-        if resp.is_null() {
-            serial_write(b"SMP: cpus=0x0000000000000001\n");
-            serial_write(b"SMP: aps online=0x0000000000000000\n");
-            return;
-        }
-        let count = (*resp).cpu_count;
+        let count = if resp.is_null() { 1 } else { (*resp).cpu_count };
         serial_write(b"SMP: cpus=0x");
         serial_write_hex(count);
         serial_write(b"\n");
-        let bsp = (*resp).bsp_lapic_id;
-        let mut i = 0u64;
-        while i < count {
-            let info = *(*resp).cpus.add(i as usize);
-            if (*info).lapic_id != bsp {
-                // The write to goto_address releases the AP.
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*info).goto_address),
-                    ap_entry as *const () as u64,
-                );
+        if !resp.is_null() {
+            let bsp = (*resp).bsp_lapic_id;
+            let mut i = 0u64;
+            while i < count {
+                let info = *(*resp).cpus.add(i as usize);
+                if (*info).lapic_id != bsp {
+                    // The write to goto_address releases the AP (it begins
+                    // hammering the spinlock immediately).
+                    core::ptr::write_volatile(
+                        core::ptr::addr_of_mut!((*info).goto_address),
+                        ap_entry as *const () as u64,
+                    );
+                }
+                i += 1;
             }
-            i += 1;
         }
-        // Wait for check-ins (bounded; ~enough for QEMU at any load).
+        // The BSP joins the contention while the APs run.
+        smp_lock_hammer();
+        // Wait for check-ins (bounded; ~enough for QEMU at any load). Each AP
+        // checks in only after finishing its locked increments.
         let expected = count.saturating_sub(1);
         let mut spins = 0u64;
         while APS_ONLINE.load(Ordering::SeqCst) < expected && spins < 200_000_000 {
@@ -98,5 +141,15 @@ pub fn smp_init() {
         serial_write(b"SMP: aps online=0x");
         serial_write_hex(APS_ONLINE.load(Ordering::SeqCst));
         serial_write(b"\n");
+        // Verify the spinlock serialized every CPU: total must be cpus*ITERS.
+        let total = core::ptr::read_volatile(core::ptr::addr_of!(SMP_GUARDED));
+        let want = count.wrapping_mul(SMP_LOCK_ITERS);
+        serial_write(b"SMP: lock count=0x");
+        serial_write_hex(total);
+        if total == want {
+            serial_write(b" ok\n");
+        } else {
+            serial_write(b" FAIL\n");
+        }
     }
 }

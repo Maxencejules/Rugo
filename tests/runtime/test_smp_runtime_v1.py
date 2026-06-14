@@ -91,8 +91,13 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "RUGO: boot ok",
         "SMP: cpus=0x0000000000000004",
         "SMP: aps online=0x0000000000000003",
+        # Spinlock contention: 4 CPUs x 2000 locked increments = 8000 = 0x1F40,
+        # with no lost updates -> the lock serialized every core.
+        "SMP: lock count=0x0000000000001F40 ok",
         "RUGO: halt ok",
     ])
+    assert "SMP: lock count" in out
+    assert " FAIL" not in out
 
 
 def test_default_lane_boots_clean_on_multicore(find_in_order):
@@ -105,9 +110,12 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
     find_in_order(out, [
         "SMP: cpus=0x0000000000000002",
         "SMP: aps online=0x0000000000000001",
+        # 2 CPUs x 2000 locked increments = 4000 = 0xFA0, no lost updates.
+        "SMP: lock count=0x0000000000000FA0 ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "USERPF" not in out
     assert "GOINIT: err" not in out
+    assert " FAIL" not in out
