@@ -7742,14 +7742,58 @@ unsafe fn xhci_report(bdf: PciBdf) {
     serial_write(b"\n");
 }
 
-/// xHCI controller bring-up + command/event-ring self-test (full-os guide Part
-/// II.7, USB driver). Resets and starts the controller, sets up the DCBAA, the
-/// command ring, and the event ring (+ ERST/interrupter 0), then issues a No-Op
-/// command and confirms the controller DMAs back a Command Completion Event with
-/// a Success code — proving the command/event-ring DMA handshake (the core of an
-/// xHCI driver) works end to end. Called from xhci_detect when a controller is
-/// present. v1 boundary: the ring handshake; port reset + device-slot enumeration
-/// + a HID driver are carry-forward.
+/// Consume xHCI event-ring TRBs sequentially until one of `want_type` is found
+/// (xHCI spec 4.9.4). Tracks the dequeue index + consumer cycle state, skips
+/// unrelated events (e.g. Port Status Change while waiting for a Command
+/// Completion), advances ERDP (interrupter 0, with the Event Handler Busy bit)
+/// after each consumed TRB, and returns the event's dword2 (completion code in
+/// bits 24-31) and dword3 (type + slot id in bits 24-31), or None on timeout.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn xhci_wait_event(
+    mmio: u64,
+    ev_va: u64,
+    event_ring_phys: u64,
+    ir0: u64,
+    ev_idx: &mut u64,
+    ev_ccs: &mut u32,
+    want_type: u32,
+) -> Option<(u32, u32)> {
+    let mut spins = 0u64;
+    while spins < 10_000_000 {
+        let off = *ev_idx * 16;
+        let d3 = core::ptr::read_volatile((ev_va + off + 12) as *const u32);
+        if (d3 & 1) == *ev_ccs {
+            let d2 = core::ptr::read_volatile((ev_va + off + 8) as *const u32);
+            let ttype = (d3 >> 10) & 0x3F;
+            *ev_idx += 1;
+            if *ev_idx >= 16 {
+                *ev_idx = 0;
+                *ev_ccs ^= 1;
+            }
+            let erdp = event_ring_phys + *ev_idx * 16;
+            core::ptr::write_volatile((mmio + ir0 + 0x18) as *mut u32, (erdp as u32) | (1 << 3));
+            core::ptr::write_volatile((mmio + ir0 + 0x18 + 4) as *mut u32, (erdp >> 32) as u32);
+            if ttype == want_type {
+                return Some((d2, d3));
+            }
+            // else: an unrelated event (consume it and keep waiting)
+        } else {
+            spins += 1;
+            core::hint::spin_loop();
+        }
+    }
+    None
+}
+
+/// xHCI controller bring-up + command/event-ring self-test + device enumeration
+/// (full-os guide Part II.7, USB driver). Resets and starts the controller, sets
+/// up the DCBAA, the command ring, and the event ring (+ ERST/interrupter 0),
+/// issues a No-Op command (Command Completion Event handshake), and — if a device
+/// is attached to a root port — ENUMERATES it: resets the port, Enable Slot,
+/// builds the device + input contexts and an EP0 transfer ring, Address Device,
+/// then a GET_DESCRIPTOR(device) control transfer that reads the 18-byte USB
+/// device descriptor (vendor/product id) — the full USB enumeration path a HID
+/// driver builds on. Called from xhci_detect when a controller is present.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn xhci_ring_selftest(bdf: PciBdf) {
     let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
@@ -7774,17 +7818,21 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
     };
     let caplength = (rd(0) & 0xFF) as u64;
     let max_slots = rd(4) & 0xFF;
+    let max_ports = ((rd(4) >> 24) & 0xFF) as u64;
     let dboff = (rd(0x14) & !0x3) as u64;
     let rtsoff = (rd(0x18) & !0x1F) as u64;
     // Bound the HIGHEST byte actually accessed in each block (not just the base
     // offset) against the 32 KiB window, and require a page-aligned BAR (the
     // window returns base + (phys & 0xFFF)). Highest accesses: op + 0x3C
-    // (CONFIG/DCBAAP-hi), interrupter 0 at rtsoff + 0x20 .. + 0x3C (ERDP-hi),
-    // doorbell at dboff .. dboff + 3.
+    // (CONFIG/DCBAAP-hi); interrupter 0 at rtsoff + 0x20 .. + 0x3C (ERDP-hi); the
+    // PORTSC array at op + 0x400 + (port-1)*0x10 (highest port reaches op + 0x400 +
+    // max_ports*0x10); and the per-slot doorbells at dboff + slot*4 (slots
+    // 0..=max_slots, so highest is dboff + (max_slots+1)*4).
     if base & 0xFFF != 0
         || caplength + 0x3C > 0x8000
         || rtsoff + 0x40 > 0x8000
-        || dboff + 4 > 0x8000
+        || dboff + (max_slots as u64 + 1) * 4 > 0x8000
+        || caplength + 0x400 + max_ports * 0x10 > 0x8000
     {
         serial_write(b"XHCI: regs out of window\n");
         return;
@@ -7869,46 +7917,193 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
         s += 1;
     } // wait HCHalted clear
 
-    // Enqueue a No-Op command TRB (type 23) with the producer cycle bit, then ring
-    // the command doorbell (DB[0] = 0).
+    // ---- No-Op command: the command/event-ring DMA handshake. ----
     let cmd_va = mm::phys_to_virt(cmd_ring);
-    core::ptr::write_volatile((cmd_va + 12) as *mut u32, (23u32 << 10) | 1); // type | cycle
-    wr(dboff, 0); // command doorbell
-
-    // Poll the event ring for a Command Completion Event (type 33) with the cycle
-    // bit set (the controller's producer cycle starts at 1) and a Success code.
-    // SCAN the first event slots rather than assuming slot 0: a controller may
-    // post an earlier event (e.g. a Port Status Change) before the completion, so
-    // the CCE can land at a later TRB. Advance ERDP past it (with the EHB bit).
     let ev_va = mm::phys_to_virt(event_ring);
-    let mut ok = false;
-    s = 0;
-    'poll: while s < 5_000_000 {
-        let mut i = 0u64;
-        while i < 8 {
-            let off = i * 16;
-            let d3 = core::ptr::read_volatile((ev_va + off + 12) as *const u32);
-            if d3 & 1 == 1 && (d3 >> 10) & 0x3F == 33 {
-                let code = core::ptr::read_volatile((ev_va + off + 8) as *const u32) >> 24;
-                ok = code == 1; // Command Completion Event + Success
-                wr64(ir0 + 0x18, (event_ring + (i + 1) * 16) | (1 << 3)); // ERDP + EHB
-                break 'poll;
+    let mut cmd_idx = 0u64; // command-ring enqueue index (producer cycle stays 1; no wrap)
+    let mut ev_idx = 0u64; // event-ring dequeue index
+    let mut ev_ccs = 1u32; // event-ring consumer cycle state
+    core::ptr::write_volatile((cmd_va + cmd_idx * 16 + 12) as *mut u32, (23u32 << 10) | 1);
+    cmd_idx += 1;
+    wr(dboff, 0); // ring the command doorbell
+    let noop_ok = matches!(
+        xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 33),
+        Some((d2, _)) if (d2 >> 24) == 1
+    );
+
+    // ---- Device enumeration (USB-HID foundation): if a device is on a root port,
+    // reset it, Enable Slot, Address Device, then GET_DESCRIPTOR(device). ----
+    let ctx_size: u64 = if (rd(0x10) >> 2) & 1 != 0 { 64 } else { 32 }; // HCCPARAMS1.CSZ
+    let mut found_port = 0u64;
+    let mut pspeed = 0u32;
+    {
+        let mut port = 1u64;
+        while port <= max_ports {
+            let portsc = rd(op + 0x400 + (port - 1) * 0x10);
+            if portsc & 1 != 0 {
+                found_port = port; // Current Connect Status set
+                pspeed = (portsc >> 10) & 0xF;
+                break;
             }
-            i += 1;
+            port += 1;
         }
-        s += 1;
-        core::hint::spin_loop();
     }
-    // Stop the controller again and release the structures.
+    let devctx = dma::dma_alloc(1);
+    let inctx = dma::dma_alloc(1);
+    let ep0ring = dma::dma_alloc(1);
+    let databuf = dma::dma_alloc(1);
+    let mut enum_ok = false;
+    let mut vid = 0u32;
+    let mut pid = 0u32;
+    if let (true, Some(devctx), Some(inctx), Some(ep0ring), Some(databuf)) =
+        (found_port != 0, devctx, inctx, ep0ring, databuf)
+    {
+        core::ptr::write_bytes(mm::phys_to_virt(devctx) as *mut u8, 0, 4096);
+        core::ptr::write_bytes(mm::phys_to_virt(inctx) as *mut u8, 0, 4096);
+        core::ptr::write_bytes(mm::phys_to_virt(ep0ring) as *mut u8, 0, 4096);
+        core::ptr::write_bytes(mm::phys_to_virt(databuf) as *mut u8, 0, 4096);
+
+        // Reset the connected port unless it is already enabled (SuperSpeed ports
+        // auto-enable on connect). PORTSC.PED (bit 1) is write-1-to-DISABLE, so the
+        // PR write must clear it (and the RW1C change bits 17-23) in the value
+        // written, or it would disable an already-enabled port. Then wait for PED.
+        let psc_off = op + 0x400 + (found_port - 1) * 0x10;
+        if rd(psc_off) & (1 << 1) == 0 {
+            let cur = rd(psc_off) & !0x00FE_0002; // drop RW1C change bits + PED
+            wr(psc_off, cur | (1 << 4)); // assert PR
+            let mut s2 = 0u32;
+            while rd(psc_off) & (1 << 1) == 0 && s2 < 5_000_000 {
+                s2 += 1;
+            }
+        }
+        pspeed = (rd(psc_off) >> 10) & 0xF; // speed (after any reset)
+        // EP0 max packet size by speed (PSI: 4=SuperSpeed, 3=High, else Full/Low).
+        let mps: u32 = match pspeed {
+            4 => 512,
+            3 => 64,
+            _ => 8,
+        };
+
+        // Enable Slot (TRB type 9); the Command Completion Event carries the slot id.
+        core::ptr::write_volatile((cmd_va + cmd_idx * 16 + 12) as *mut u32, (9u32 << 10) | 1);
+        cmd_idx += 1;
+        wr(dboff, 0);
+        let slot = match xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 33)
+        {
+            Some((d2, d3)) if (d2 >> 24) == 1 => ((d3 >> 24) & 0xFF) as u64,
+            _ => 0,
+        };
+        if slot != 0 {
+            // Input context: Add flags A0 (slot) + A1 (EP0/DCI 1).
+            let in_va = mm::phys_to_virt(inctx);
+            core::ptr::write_volatile((in_va + 4) as *mut u32, (1 << 0) | (1 << 1));
+            // Slot context: speed (20-23), context entries=1 (27-31); root hub port.
+            let slot_ctx = in_va + ctx_size;
+            core::ptr::write_volatile(slot_ctx as *mut u32, (pspeed << 20) | (1u32 << 27));
+            core::ptr::write_volatile((slot_ctx + 4) as *mut u32, (found_port as u32) << 16);
+            // EP0 context: CErr=3 (1-2), EP type Control=4 (3-5), MPS (16-31); TR
+            // dequeue ptr | DCS; average TRB length.
+            let ep0_ctx = in_va + 2 * ctx_size;
+            core::ptr::write_volatile(
+                (ep0_ctx + 4) as *mut u32,
+                (3u32 << 1) | (4u32 << 3) | (mps << 16),
+            );
+            core::ptr::write_volatile((ep0_ctx + 8) as *mut u32, (ep0ring as u32) | 1);
+            core::ptr::write_volatile((ep0_ctx + 12) as *mut u32, (ep0ring >> 32) as u32);
+            core::ptr::write_volatile((ep0_ctx + 16) as *mut u32, 8);
+            // DCBAA[slot] = device (output) context.
+            core::ptr::write_volatile(
+                (mm::phys_to_virt(dcbaa) + slot * 8) as *mut u64,
+                devctx,
+            );
+
+            // Address Device (TRB type 11): input context pointer + slot id.
+            core::ptr::write_volatile((cmd_va + cmd_idx * 16) as *mut u64, inctx);
+            core::ptr::write_volatile(
+                (cmd_va + cmd_idx * 16 + 12) as *mut u32,
+                (11u32 << 10) | ((slot as u32) << 24) | 1,
+            );
+            cmd_idx += 1;
+            wr(dboff, 0);
+            let addressed = matches!(
+                xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 33),
+                Some((d2, _)) if (d2 >> 24) == 1
+            );
+            if addressed {
+                // GET_DESCRIPTOR(device, 18) control transfer on the EP0 ring:
+                // Setup (IDT, TRT=IN), Data (IN), Status (OUT, IOC) stage TRBs.
+                let er = mm::phys_to_virt(ep0ring);
+                core::ptr::write_volatile(er as *mut u32, 0x0100_0680); // bmRT80 bReq06 wValue0100
+                core::ptr::write_volatile((er + 4) as *mut u32, 0x0012_0000); // wIndex0 wLength18
+                core::ptr::write_volatile((er + 8) as *mut u32, 8); // setup data length
+                core::ptr::write_volatile(
+                    (er + 12) as *mut u32,
+                    (2u32 << 10) | (3u32 << 16) | (1 << 6) | 1, // type|TRT=IN|IDT|cycle
+                );
+                core::ptr::write_volatile((er + 16) as *mut u32, databuf as u32);
+                core::ptr::write_volatile((er + 20) as *mut u32, (databuf >> 32) as u32);
+                core::ptr::write_volatile((er + 24) as *mut u32, 18); // data length
+                core::ptr::write_volatile((er + 28) as *mut u32, (3u32 << 10) | (1 << 16) | 1); // type|DIR=IN|cycle
+                core::ptr::write_volatile((er + 40) as *mut u32, 0);
+                core::ptr::write_volatile((er + 44) as *mut u32, (4u32 << 10) | (1 << 5) | 1); // type|IOC|cycle (DIR=OUT)
+                wr(dboff + slot * 4, 1); // ring the device's EP0 doorbell (DCI 1)
+                let xfer_ok = matches!(
+                    xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 32),
+                    Some((d2, _)) if { let c = d2 >> 24; c == 1 || c == 13 } // Success or Short Packet
+                );
+                if xfer_ok {
+                    let db = mm::phys_to_virt(databuf) as *const u8;
+                    let blen = core::ptr::read_volatile(db);
+                    let dtype = core::ptr::read_volatile(db.add(1));
+                    if blen == 18 && dtype == 1 {
+                        vid = core::ptr::read_volatile(db.add(8)) as u32
+                            | (core::ptr::read_volatile(db.add(9)) as u32) << 8;
+                        pid = core::ptr::read_volatile(db.add(10)) as u32
+                            | (core::ptr::read_volatile(db.add(11)) as u32) << 8;
+                        enum_ok = true;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(p) = devctx {
+        dma::dma_free(p, 1);
+    }
+    if let Some(p) = inctx {
+        dma::dma_free(p, 1);
+    }
+    if let Some(p) = ep0ring {
+        dma::dma_free(p, 1);
+    }
+    if let Some(p) = databuf {
+        dma::dma_free(p, 1);
+    }
+
+    // Stop the controller and release the core structures.
     wr(op, rd(op) & !1);
     dma::dma_free(dcbaa, 1);
     dma::dma_free(cmd_ring, 1);
     dma::dma_free(event_ring, 1);
     dma::dma_free(erst, 1);
-    if ok {
+    if noop_ok {
         serial_write(b"XHCI: noop ok\n");
     } else {
         serial_write(b"XHCI: noop fail\n");
+    }
+    if found_port != 0 {
+        if enum_ok {
+            serial_write(b"XHCI: hid enumerated port=0x");
+            serial_write_hex(found_port);
+            serial_write(b" vid=0x");
+            serial_write_hex(vid as u64);
+            serial_write(b" pid=0x");
+            serial_write_hex(pid as u64);
+            serial_write(b"\n");
+        } else {
+            serial_write(b"XHCI: enum fail port=0x");
+            serial_write_hex(found_port);
+            serial_write(b"\n");
+        }
     }
 }
 

@@ -118,10 +118,14 @@ single safe boot-verified slice and several have hard prerequisites.
    first-fit `dma_alloc`/`dma_free`, self-test `DMA: selftest ok`), and reads PCI
    config space through **PCIe ECAM** (`ecam_v1.md`: the memory-mapped window from
    the q35 PCIEXBAR, cross-checked against the legacy I/O path). What remains: an
-   the XHCI **command/event-ring handshake** is done (`xhci_v1.md`: reset + run +
-   DCBAA/command-ring/event-ring setup + a No-Op command that completes with a
-   Success event); port reset + device enumeration + a HID boot-protocol driver
-   remain. The **e1000 TX ring driver** is done
+   the XHCI **command/event-ring handshake + full device enumeration** are done
+   (`xhci_v1.md`: reset + run + DCBAA/command-ring/event-ring + a No-Op command;
+   then, with a `usb-kbd` attached, port reset → Enable Slot → device/input
+   contexts + EP0 transfer ring → Address Device → a GET_DESCRIPTOR(device)
+   control transfer that reads the 18-byte device descriptor — `XHCI: hid
+   enumerated … vid=0x0627 pid=0x0001`). What remains for a full HID driver: the
+   config/HID descriptors, SET_CONFIGURATION/SET_PROTOCOL, and an interrupt-IN
+   endpoint reading actual key reports (needs QMP input injection). The **e1000 TX ring driver** is done
    (`e1000_v1.md`: a descriptor ring on the DMA pool transmits a frame and the
    device's Done bit confirms it); an **e1000 RX ring** (`e1000_v1.md`) now
    receives a real wire frame too — the kernel ARPs the slirp gateway 10.0.2.2 and

@@ -47,14 +47,41 @@ command/event-ring DMA handshake — the core of an xHCI driver:
 - polls the event ring for a **Command Completion Event** (type 33) with the
   cycle bit and a **Success** completion code — `XHCI: noop ok`.
 
+## Device enumeration (`make test-xhci-hid-v1`)
+
+When a device is attached to a root port (`-device usb-kbd,bus=xhci.0`), the same
+bring-up then **enumerates** it — the full USB enumeration path a HID driver
+builds on:
+
+- scans the root ports for a Current Connect Status (PORTSC.CCS) and **resets**
+  the connected port (PORTSC.PR), preserving the RW1C change bits, then reads its
+  speed;
+- **Enable Slot** command → the Command Completion Event yields a device slot id;
+- builds the **input context** (Add flags for the slot + EP0 contexts), the
+  **slot context** (speed, root-hub port, one context entry) and the **EP0
+  context** (Control type, max-packet-size by speed, a freshly allocated EP0
+  transfer ring as the TR dequeue pointer), and points `DCBAA[slot]` at the
+  device (output) context — honoring the controller's context size (HCCPARAMS1.CSZ);
+- **Address Device** command (input context + slot id) → Command Completion Event;
+- a **GET_DESCRIPTOR(device)** control transfer on the EP0 ring (Setup / Data-IN /
+  Status-OUT TRBs, ringing the device's EP0 doorbell) → Transfer Event, then reads
+  the **18-byte device descriptor** and verifies `bLength`/`bDescriptorType`.
+
+Events are consumed sequentially (`xhci_wait_event`: dequeue index + consumer
+cycle state, skipping unrelated events like Port Status Change, advancing ERDP).
+Reports `XHCI: hid enumerated port=<n> vid=<0x..> pid=<0x..>` — for the QEMU
+keyboard, vendor `0x0627`, product `0x0001`.
+
 ## v1 boundary / carry-forward
 
-- **Detection + capability read + the command/event-ring handshake.** A No-Op
-  command round-trips through the controller. What remains: port reset + device
-  enumeration (Enable Slot, Address Device, descriptor fetch), the transfer rings,
-  and a **HID boot-protocol** driver for a USB keyboard/mouse.
+- **Detection + capability read + command/event-ring handshake + full device
+  enumeration to the device descriptor.** What remains for a complete HID driver:
+  the configuration/interface/HID descriptors, SET_CONFIGURATION + SET_PROTOCOL
+  (boot), and an **interrupt IN** endpoint transfer ring reading actual key/mouse
+  reports (which on QEMU needs QMP input injection to generate events).
 - The event ring uses a single ERST segment + polled completion (no MSI-X
-  interrupt-driven event delivery yet).
+  interrupt-driven event delivery yet); one device is enumerated (first connected
+  port).
 
 ## Acceptance
 
