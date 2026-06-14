@@ -17,17 +17,22 @@ slice — the `/dev` character devices. Generated on the fly; no disk I/O.
 | `/dev/urandom` | RDONLY | CSPRNG bytes (`sys_getrandom` pool) | EPERM |
 | `/dev/null` | WRONLY | EOF (0) | accepted and discarded |
 
+`/proc/self/stat` (read-only) generates the caller's stat line on demand:
+`tid=0x<hex16> uid=0x<hex2> state=run\n` (hex in v1; `R4_CURRENT` is the
+reader). Read via `fscat /proc/self/stat`.
+
 No new syscall: these route through the existing `open`/`read`/`write`/
 `poll` (ids 18/19/20/23) by path, like `/dev/console`. They are public — no
 capability required (a sandboxed app can still read entropy). `poll` reports
-`/dev/zero` and `/dev/urandom` always readable and `/dev/null` always
+`/dev/zero`, `/dev/urandom`, `/proc/self/stat` readable and `/dev/null`
 writable.
 
 ## v1 boundary / carry-forward
 
-- Only the three classic character devices. `/proc/<tid>/stat`, `/tmp`
-  tmpfs, and a mount-table-driven pseudo-fs factory are carry-forward (they
-  need per-tid decimal formatting and the mount registry).
+- `/dev`: the three classic character devices. `/proc`: only
+  `/proc/self/stat` (hex fields). Per-`<tid>` `/proc` entries with decimal
+  fields and rss, `/tmp` tmpfs, and a mount-table pseudo-fs factory are
+  carry-forward.
 - `/dev/urandom` shares the `sys_getrandom` pool; its v1 entropy caveats
   (see [`rng_v1.md`](rng_v1.md)) apply.
 

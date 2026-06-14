@@ -674,6 +674,8 @@ cfg_m3! {
                 Some(M8FdKind::DevNull)
             } else if m8_path_matches(bytes, b"/dev/urandom") {
                 Some(M8FdKind::DevUrandom)
+            } else if m8_path_matches(bytes, b"/proc/self/stat") {
+                Some(M8FdKind::ProcSelfStat)
             } else {
                 None
             };
@@ -958,6 +960,34 @@ cfg_m3! {
             M8FdKind::DevUrandom => sys_getrandom(buf, len),
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::DevNull => 0, // EOF
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::ProcSelfStat => {
+                // Generate the caller's stat line on demand.
+                let mut line = [0u8; 64];
+                let mut w = 0usize;
+                let tag = b"tid=";
+                line[w..w + tag.len()].copy_from_slice(tag);
+                w += tag.len();
+                w += fmt_hex_u64(&mut line[w..], R4_CURRENT as u64);
+                let utag = b" uid=";
+                line[w..w + utag.len()].copy_from_slice(utag);
+                w += utag.len();
+                w += fmt_hex_u64(&mut line[w..], R4_TASKS[R4_CURRENT].uid as u64);
+                let stag = b" state=run\n";
+                line[w..w + stag.len()].copy_from_slice(stag);
+                w += stag.len();
+                let off = M8_FD_TABLE[idx].offset;
+                if off >= w {
+                    return 0;
+                }
+                let remaining = w - off;
+                let n = core::cmp::min(len as usize, remaining);
+                if copyout_user(buf, &line[off..off + n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset += n;
+                n as u64
+            }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeR => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1077,7 +1107,9 @@ cfg_m3! {
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::DevNull => len, // discard
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-            M8FdKind::DevZero | M8FdKind::DevUrandom => 0xFFFF_FFFF_FFFF_FFFF,
+            M8FdKind::DevZero | M8FdKind::DevUrandom | M8FdKind::ProcSelfStat => {
+                0xFFFF_FFFF_FFFF_FFFF
+            }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeW => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1428,6 +1460,12 @@ cfg_m3! {
                                 revents |= POLLOUT;
                             }
                         }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::ProcSelfStat => {
+                            if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 {
+                                revents |= POLLIN;
+                            }
+                        }
                         #[cfg(not(feature = "go_test"))]
                         _ => revents |= POLLERR,
                     }
@@ -1653,6 +1691,24 @@ cfg_m3! {
         DevNull,
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         DevUrandom,
+        // /proc/self/stat (full-os guide Part II.5, pseudo-fs).
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        ProcSelfStat,
+    }
+
+    /// Write "0x" + 16 zero-padded hex digits of `val` into `out` (>=18
+    /// bytes); returns the count written. Buffer analogue of serial_write_hex.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn fmt_hex_u64(out: &mut [u8], val: u64) -> usize {
+        out[0] = b'0';
+        out[1] = b'x';
+        let mut i = 0;
+        while i < 16 {
+            let nib = ((val >> ((15 - i) * 4)) & 0xF) as u8;
+            out[2 + i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+            i += 1;
+        }
+        18
     }
 
     // VFS node index per fd (parallel to M8_FD_TABLE; the fd's offset
@@ -1921,6 +1977,8 @@ cfg_m3! {
             M8FdKind::DevZero | M8FdKind::DevUrandom => M10_RIGHT_READ | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::DevNull => M10_RIGHT_WRITE | M10_RIGHT_POLL,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::ProcSelfStat => M10_RIGHT_READ | M10_RIGHT_POLL,
         }
     }
 
