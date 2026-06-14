@@ -213,6 +213,110 @@ unsafe fn smp_dispatch_work(kind: u64, arg: u64) -> Option<u64> {
     }
 }
 
+// ---- Per-CPU run queues (full-os guide Part I.3, SMP scheduler). The single
+// work mailbox above dispatches ONE item to whichever AP grabs it; a real SMP
+// scheduler instead gives EACH CPU its own run queue that it drains
+// independently and concurrently. This implements that data structure: the BSP
+// enqueues a batch of work to a chosen CPU's queue, each AP drains ONLY its own
+// queue (reached through its GS-based per-CPU slot, no cross-CPU locking) and
+// accumulates per-CPU state. v1 runs kernel work items; migrating actual R4
+// tasks onto these queues with a per-CPU `current` is the remaining scheduler
+// work. (Ungated: exercised on both the base -smp 4 lane and the -smp 2 go lane.)
+const RQ_LEN: usize = 8;
+static mut AP_RQ_KIND: [[u64; RQ_LEN]; MAX_CPUS] = [[0; RQ_LEN]; MAX_CPUS];
+static mut AP_RQ_ARG: [[u64; RQ_LEN]; MAX_CPUS] = [[0; RQ_LEN]; MAX_CPUS];
+static AP_RQ_COUNT: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+static AP_RQ_DONE: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+static AP_RQ_SUM: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// Drain THIS CPU's run queue (reached via its GS-based slot): run each newly
+/// enqueued item on this core and fold the result into the per-CPU accumulator.
+/// Called from the AP park loop after each wake. Lock-free: only this CPU writes
+/// its own DONE/SUM, only the BSP writes its KIND/ARG/COUNT (before publishing).
+unsafe fn ap_poll_rq() {
+    let slot: u64;
+    core::arch::asm!("mov {}, gs:[0]", out(reg) slot, options(nostack));
+    let slot = slot as usize;
+    if slot == 0 || slot >= MAX_CPUS {
+        return;
+    }
+    let count = AP_RQ_COUNT[slot].load(Ordering::Acquire);
+    let mut done = AP_RQ_DONE[slot].load(Ordering::Relaxed);
+    while done < count {
+        let i = (done as usize) % RQ_LEN;
+        let r = run_work(AP_RQ_KIND[slot][i], AP_RQ_ARG[slot][i]);
+        AP_RQ_SUM[slot].fetch_add(r, Ordering::AcqRel);
+        done += 1;
+        AP_RQ_DONE[slot].store(done, Ordering::Release);
+    }
+}
+
+/// Enqueue a batch of (kind, arg) work items to CPU `cpu`'s run queue, resetting
+/// its done/sum accumulators. The item count is published LAST so the consumer
+/// never sees a partially-filled queue.
+unsafe fn rq_enqueue(cpu: usize, items: &[(u64, u64)]) {
+    if cpu == 0 || cpu >= MAX_CPUS {
+        return;
+    }
+    AP_RQ_DONE[cpu].store(0, Ordering::Release);
+    AP_RQ_SUM[cpu].store(0, Ordering::Release);
+    let n = items.len().min(RQ_LEN);
+    let mut i = 0;
+    while i < n {
+        AP_RQ_KIND[cpu][i] = items[i].0;
+        AP_RQ_ARG[cpu][i] = items[i].1;
+        i += 1;
+    }
+    AP_RQ_COUNT[cpu].store(n as u64, Ordering::Release);
+}
+
+/// Per-CPU run-queue self-test (full-os guide Part I.3): give every online AP its
+/// own 3-item queue (sum 1..=100, 1..=200, 1..=300 = 70300), then confirm each AP
+/// drained its OWN queue concurrently and accumulated exactly that per-CPU total.
+/// Returns true if every AP's queue produced the right sum.
+unsafe fn ap_runqueue_selftest() -> bool {
+    let online = SMP_AP_COUNT.load(Ordering::Acquire) as usize;
+    if online == 0 {
+        return false;
+    }
+    let items = [(1u64, 100u64), (1, 200), (1, 300)];
+    let expect = 5050u64 + 20100 + 45150; // 70300
+    let mut slot = 1usize;
+    while slot <= online && slot < MAX_CPUS {
+        rq_enqueue(slot, &items);
+        slot += 1;
+    }
+    // Wait (bounded) for every AP to drain its own queue.
+    let mut spins = 0u64;
+    loop {
+        let mut all = true;
+        let mut s = 1usize;
+        while s <= online && s < MAX_CPUS {
+            if AP_RQ_DONE[s].load(Ordering::Acquire) != items.len() as u64 {
+                all = false;
+                break;
+            }
+            s += 1;
+        }
+        if all || spins >= 200_000_000 {
+            break;
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    let mut ok = true;
+    let mut s = 1usize;
+    while s <= online && s < MAX_CPUS {
+        if AP_RQ_DONE[s].load(Ordering::Acquire) != items.len() as u64
+            || AP_RQ_SUM[s].load(Ordering::Acquire) != expect
+        {
+            ok = false;
+        }
+        s += 1;
+    }
+    ok
+}
+
 // ---- SMP scheduler capstone: run a ring-3 USER task on an application
 // processor (full-os guide Part I.3). The primitives above (IPI, per-CPU LAPIC
 // timer, per-CPU GS, cross-CPU work dispatch, TLB shootdown) made an AP run
@@ -268,6 +372,7 @@ unsafe fn ap_run_user_task(gen: u64, arg: u64) -> ! {
         WORK_DONE.store(gen, Ordering::Release);
         loop {
             ap_poll_work();
+            ap_poll_rq();
             core::arch::asm!("sti; hlt", options(nomem, nostack));
         }
     }
@@ -315,6 +420,7 @@ extern "C" fn ap_user_done() -> ! {
         WORK_DONE.store(AP_USER_GEN.load(Ordering::Acquire), Ordering::Release);
         loop {
             ap_poll_work();
+            ap_poll_rq();
             core::arch::asm!("sti; hlt", options(nomem, nostack));
         }
     }
@@ -523,10 +629,12 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
         }
         APS_ONLINE.fetch_add(1, Ordering::SeqCst);
         loop {
-            // Run any work the BSP dispatched (no-op when none pending), then
-            // sleep until the next interrupt (the periodic LAPIC timer wakes us
-            // to poll again). This is the AP doing real kernel work, not parking.
+            // Run any work the BSP dispatched (no-op when none pending) + drain
+            // this CPU's own run queue, then sleep until the next interrupt (the
+            // periodic LAPIC timer wakes us to poll again). This is the AP doing
+            // real kernel work, not parking.
             ap_poll_work();
+            ap_poll_rq();
             core::arch::asm!("sti; hlt", options(nomem, nostack));
         }
     }
@@ -685,6 +793,24 @@ pub fn smp_init() {
                 serial_write(b"ok\n");
             } else {
                 serial_write(b"FAIL\n");
+            }
+            // Per-CPU run queues: give every AP its own queue and confirm each
+            // drained it concurrently with the right per-CPU total — the
+            // scheduler data structure a real SMP scheduler dispatches onto.
+            // Gated on a fully-online boot (like the lock/percpu self-tests):
+            // only then are slots 1..=online provably the checked-in,
+            // GS-initialized set this enqueues to. On the bounded-spin timeout
+            // path a claimed slot may have no GS base yet, so skip rather than
+            // stall on a queue no AP will drain.
+            if online >= expected {
+                serial_write(b"SMP: runqueue ");
+                if ap_runqueue_selftest() {
+                    serial_write(b"ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
+            } else {
+                serial_write(b"SMP: runqueue timeout FAIL\n");
             }
             // Capstone: run a real ring-3 USER task on an application processor.
             // The BSP builds the user address space + dispatches; an AP enters

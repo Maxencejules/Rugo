@@ -92,12 +92,15 @@ single safe boot-verified slice and several have hard prerequisites.
    stack — `SMP: ap user task ok` (result verified + reporting CPU slot ≥ 1, the
    BSP never enters ring 3). The kernel CR3 is restored before `WORK_DONE` is
    published, so the BSP safely reclaims the address space (no UAF/leak).
-   **Remaining (turning the mechanism into a running multi-CPU scheduler):** wire
-   `tlb_shootdown` into the `munmap`/`mprotect`/CoW paths; turn the single-item
-   work mailbox into per-CPU run queues holding `current`/tasks; migrate R4 tasks
-   onto APs with per-CPU `current`; and make the scheduler/syscall/page-fault
-   paths SMP-safe on every core (today the BSP's are interrupts-off single-CPU) so
-   ordinary user tasks are scheduled across all CPUs, not just the boot self-test.
+   **Per-CPU run queues DONE** (`runqueue_v1.md`): each CPU drains its OWN
+   lock-free queue (reached via its GS slot) concurrently (`SMP: runqueue ok` on
+   both the `-smp 4` and `-smp 2` lanes). **Remaining (turning the mechanism into
+   a running multi-CPU scheduler):** wire `tlb_shootdown` into the
+   `munmap`/`mprotect`/CoW paths; migrate actual R4 tasks onto the per-CPU queues
+   with a per-CPU `current` + load balancing; and make the
+   scheduler/syscall/page-fault paths SMP-safe on every core (today the BSP's are
+   interrupts-off single-CPU) so ordinary user tasks are scheduled across all
+   CPUs, not just the boot self-test.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000 — detection + DMA pool done.** The OS
    discovers a USB xHCI host controller (`-device qemu-xhci`, `xhci_v1.md`) and an
    Intel **e1000 NIC** (`-device e1000`, `e1000_v1.md`: maps BAR0, reads STATUS +
@@ -175,7 +178,8 @@ single safe boot-verified slice and several have hard prerequisites.
   12 FAT-chain-read.
 - `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid, 5 login.
 - Boot self-tests (markers, no syscall): SMP (spinlock, IPI, per-CPU timers, TLB
-  shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**), DMA pool,
+  shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**, **per-CPU
+  run queues**), DMA pool,
   block buffer cache, AES-128 (FIPS-197 KAT, backs disk crypto), **SHA-256
   (FIPS 180-4 KAT) + measured-boot PCR**, **2 MiB huge page**, **TTY line
   discipline**, **GPT parse**, **mount table**; PCI detection (xHCI, e1000,

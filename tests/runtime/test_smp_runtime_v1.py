@@ -105,6 +105,8 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "SMP: percpu ok",
         # Cross-CPU work dispatch: an AP claimed + ran a dispatched computation.
         "SMP: ap work ok",
+        # Per-CPU run queues: each AP drained its own queue to the right total.
+        "SMP: runqueue ok",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out
@@ -133,6 +135,8 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: percpu ok",
         # Cross-CPU work dispatch: the AP claimed + ran a dispatched computation.
         "SMP: ap work ok",
+        # Per-CPU run queues: the AP drained its own queue to the right total.
+        "SMP: runqueue ok",
         # Capstone: a real ring-3 USER task ran on the application processor
         # (not the BSP). The AP entered ring 3 on its own per-CPU TSS rsp0, the
         # task computed arg*2+1 and reported it via int 0x81, and the AP returned
