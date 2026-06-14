@@ -1694,6 +1694,237 @@ pub(crate) unsafe fn udp6_echo_selftest() -> u64 {
     1
 }
 
+// IPv6 TCP passive open / listener (full-os guide Part II.6, IPv6 on the wire).
+// A minimal handshake responder over IPv6 mirroring the IPv4 listener (tcp.rs):
+// LISTEN -> (bare SYN) SYN|ACK -> (ACK) ESTABLISHED, with the mandatory IPv6 TCP
+// checksum. v1: the three-way handshake only (no data/teardown); a full IPv6
+// connection table is carry-forward.
+const T6_CLOSED: u8 = 0;
+const T6_LISTEN: u8 = 1;
+const T6_SYN_RCVD: u8 = 2;
+const T6_ESTABLISHED: u8 = 3;
+
+struct Tcp6Conn {
+    state: u8,
+    peer6: [u8; 16],
+    peer_mac: [u8; 6],
+    lport: u16,
+    rport: u16,
+    snd_nxt: u32,
+    rcv_nxt: u32,
+}
+
+static mut TCP6: Tcp6Conn = Tcp6Conn {
+    state: T6_CLOSED,
+    peer6: [0; 16],
+    peer_mac: [0; 6],
+    lport: 0,
+    rport: 0,
+    snd_nxt: 0,
+    rcv_nxt: 0,
+};
+
+/// IPv6 TCP checksum: IPv6 pseudo-header (src+dst+upper-layer-length+next-header
+/// 6) + the TCP segment (checksum field zeroed). TCP's checksum is mandatory and
+/// transmitted as computed (no 0 -> 0xFFFF rule, unlike UDP).
+fn tcp6_checksum(src: &[u8; 16], dst: &[u8; 16], seg: &[u8]) -> u16 {
+    let mut s = 0u32;
+    csum_words(&mut s, src);
+    csum_words(&mut s, dst);
+    s += seg.len() as u32;
+    s += 6;
+    csum_words(&mut s, seg);
+    csum_fold(s)
+}
+
+/// Transmit a 20-byte (no-options, no-payload) IPv6 TCP segment from the guest to
+/// the current TCP6 peer with the given flags/seq/ack.
+unsafe fn tcp6_tx(flags: u8, seq: u32, ack: u32) -> bool {
+    let g6 = guest_ip6();
+    let mut f = [0u8; 14 + 40 + 20];
+    f[0..6].copy_from_slice(&TCP6.peer_mac);
+    f[6..12].copy_from_slice(&net::net_mac());
+    f[12] = 0x86;
+    f[13] = 0xDD;
+    {
+        let ip6 = &mut f[14..54];
+        ip6[0] = 0x60;
+        ip6[4] = 0;
+        ip6[5] = 20; // payload length = TCP header
+        ip6[6] = 6; // next header TCP
+        ip6[7] = 64;
+        ip6[8..24].copy_from_slice(&g6);
+        ip6[24..40].copy_from_slice(&TCP6.peer6);
+    }
+    {
+        let t = &mut f[54..74];
+        t[0..2].copy_from_slice(&TCP6.lport.to_be_bytes());
+        t[2..4].copy_from_slice(&TCP6.rport.to_be_bytes());
+        t[4..8].copy_from_slice(&seq.to_be_bytes());
+        t[8..12].copy_from_slice(&ack.to_be_bytes());
+        t[12] = 5 << 4; // data offset = 20 bytes
+        t[13] = flags;
+        t[14] = 0x10; // window 4096
+        let ck = tcp6_checksum(&g6, &TCP6.peer6, t);
+        t[16] = (ck >> 8) as u8;
+        t[17] = (ck & 0xFF) as u8;
+    }
+    net::wire_send(&f)
+}
+
+/// Handle an inbound IPv6 TCP segment addressed to the guest (live RX + the
+/// self-test). Drives the passive-open handshake.
+pub(crate) unsafe fn tcp6_input(frame: &[u8]) {
+    if TCP6.state == T6_CLOSED || frame.len() < 14 + 40 + 20 {
+        return;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != 0x86DD {
+        return;
+    }
+    let ip6 = &frame[14..];
+    if ip6[6] != 6 {
+        return; // next header must be TCP
+    }
+    let g6 = guest_ip6();
+    if ip6[24..40] != g6 {
+        return; // not for us
+    }
+    let t = &ip6[40..];
+    let src_port = u16::from_be_bytes([t[0], t[1]]);
+    let dst_port = u16::from_be_bytes([t[2], t[3]]);
+    if dst_port != TCP6.lport {
+        return;
+    }
+    let seq = u32::from_be_bytes([t[4], t[5], t[6], t[7]]);
+    let flags = t[13];
+    match TCP6.state {
+        T6_LISTEN => {
+            if flags & 0x12 == 0x02 {
+                // bare SYN -> SYN|ACK
+                TCP6.rcv_nxt = seq.wrapping_add(1);
+                TCP6.rport = src_port;
+                TCP6.peer6.copy_from_slice(&ip6[8..24]);
+                tcp6_tx(0x12, TCP6.snd_nxt, TCP6.rcv_nxt);
+                TCP6.snd_nxt = TCP6.snd_nxt.wrapping_add(1);
+                TCP6.state = T6_SYN_RCVD;
+                serial_write(b"TCP6: syn-rcvd\n");
+            }
+        }
+        T6_SYN_RCVD => {
+            // RFC 793: the client's ACK must acknowledge our SYN (ack == snd_nxt);
+            // a stale/forged ACK does not complete the open.
+            if flags & 0x10 != 0 {
+                let ack = u32::from_be_bytes([t[8], t[9], t[10], t[11]]);
+                if ack == TCP6.snd_nxt {
+                    TCP6.state = T6_ESTABLISHED;
+                    serial_write(b"TCP6: established\n");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Build a bare inbound IPv6 TCP segment (no checksum; tcp6_input does not
+/// validate it) for the self-test.
+unsafe fn build_tcp6_seg(
+    out: &mut [u8; 14 + 40 + 20],
+    src6: &[u8; 16],
+    src_port: u16,
+    dst_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+) {
+    *out = [0u8; 14 + 40 + 20];
+    out[0..6].copy_from_slice(&net::net_mac());
+    out[6..12].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02]);
+    out[12] = 0x86;
+    out[13] = 0xDD;
+    let g6 = guest_ip6();
+    {
+        let ip6 = &mut out[14..54];
+        ip6[0] = 0x60;
+        ip6[5] = 20;
+        ip6[6] = 6;
+        ip6[7] = 64;
+        ip6[8..24].copy_from_slice(src6);
+        ip6[24..40].copy_from_slice(&g6);
+    }
+    {
+        let t = &mut out[54..74];
+        t[0..2].copy_from_slice(&src_port.to_be_bytes());
+        t[2..4].copy_from_slice(&dst_port.to_be_bytes());
+        t[4..8].copy_from_slice(&seq.to_be_bytes());
+        t[8..12].copy_from_slice(&ack.to_be_bytes());
+        t[12] = 5 << 4;
+        t[13] = flags;
+        t[14] = 0x10;
+    }
+}
+
+/// IPv6 TCP passive-open self-test (op 18): bind a listener, feed a SYN, expect
+/// SYN_RCVD + a wire-correct SYN|ACK, feed the client ACK, expect ESTABLISHED.
+/// Returns 1 on success (full-os guide Part II.6, IPv6 on the wire).
+pub(crate) unsafe fn tcp6_listen_selftest() -> u64 {
+    if TCP6.state != T6_CLOSED {
+        return 0;
+    }
+    let host6: [u8; 16] = [
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0x55, 0x0a, 0xff, 0xfe, 0x00, 0x02, 0x02,
+    ];
+    TCP6.state = T6_LISTEN;
+    TCP6.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x02];
+    TCP6.lport = 8080;
+    TCP6.snd_nxt = 0x0000_3000;
+    let client_isn = 0x0000_4000u32;
+    let mut seg = [0u8; 14 + 40 + 20];
+    // 1) inbound SYN.
+    build_tcp6_seg(&mut seg, &host6, 50000, 8080, client_isn, 0, 0x02);
+    tcp6_input(&seg);
+    if TCP6.state != T6_SYN_RCVD {
+        TCP6.state = T6_CLOSED;
+        return 0;
+    }
+    // Verify the guest's SYN|ACK is wire-correct (checksum folds to zero over the
+    // reply addresses + segment).
+    {
+        let g6 = guest_ip6();
+        let synack_seq = 0x0000_3000u32; // our ISN
+        let mut reply = [0u8; 20];
+        reply[0..2].copy_from_slice(&8080u16.to_be_bytes());
+        reply[2..4].copy_from_slice(&50000u16.to_be_bytes());
+        reply[4..8].copy_from_slice(&synack_seq.to_be_bytes());
+        reply[8..12].copy_from_slice(&client_isn.wrapping_add(1).to_be_bytes());
+        reply[12] = 5 << 4;
+        reply[13] = 0x12;
+        reply[14] = 0x10;
+        let ck = tcp6_checksum(&g6, &host6, &reply);
+        reply[16] = (ck >> 8) as u8;
+        reply[17] = (ck & 0xFF) as u8;
+        let mut v = 0u32;
+        csum_words(&mut v, &g6);
+        csum_words(&mut v, &host6);
+        v += 20;
+        v += 6;
+        csum_words(&mut v, &reply);
+        if csum_fold(v) != 0 {
+            TCP6.state = T6_CLOSED;
+            return 0;
+        }
+    }
+    // 2) inbound ACK completing the handshake.
+    build_tcp6_seg(&mut seg, &host6, 50000, 8080, client_isn.wrapping_add(1), TCP6.snd_nxt, 0x10);
+    tcp6_input(&seg);
+    let ok = TCP6.state == T6_ESTABLISHED;
+    TCP6.state = T6_CLOSED; // leave no residue
+    if !ok {
+        return 0;
+    }
+    serial_write(b"TCP6: listen ok\n");
+    1
+}
+
 /// Poll (op 3): -1 while pending; the result once, then idle.
 pub(crate) unsafe fn poll_result() -> u64 {
     net::net_rx_pump();

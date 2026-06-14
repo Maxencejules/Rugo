@@ -4031,6 +4031,7 @@ cfg_r4! {
             15 => netcfg::slaac_selftest(),
             16 => tcp::tcp_fastrexmit_selftest(),
             17 => netcfg::udp6_echo_selftest(),
+            18 => netcfg::tcp6_listen_selftest(),
             _ => ERR,
         }
     }
@@ -10038,6 +10039,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::slaac_selftest();
         let _ = tcp::tcp_fastrexmit_selftest();
         let _ = netcfg::udp6_echo_selftest();
+        let _ = netcfg::tcp6_listen_selftest();
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
         mm::swap_selftest(); // full-os Part I.4: swap / page eviction

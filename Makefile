@@ -1510,3 +1510,6 @@ docker-legacy:
 		  -o -name "*.cfg" -o -name "*.conf" -o -name "*.go" \) \
 		  -exec sed -i "s/\r$$//" {} + \
 		&& make -C legacy clean build image test-qemu'
+
+test-tcp6-listen-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp6_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp6-listen-v1.xml

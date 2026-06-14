@@ -173,8 +173,8 @@ single safe boot-verified slice and several have hard prerequisites.
 ## ABI op map (current)
 - `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,
   7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO, 11 TCP-RTT, 12 TCP-congestion,
-  13 routing, 14 IPv6-NUD, 15 IPv6-SLAAC, 16 TCP-fast-retransmit, 17 IPv6-UDP-echo
-  (4–17 are self-tests).
+  13 routing, 14 IPv6-NUD, 15 IPv6-SLAAC, 16 TCP-fast-retransmit, 17 IPv6-UDP-echo,
+  18 IPv6-TCP-listen (4–18 are self-tests).
 - `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
