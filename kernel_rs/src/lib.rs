@@ -4789,6 +4789,75 @@ cfg_r4! {
                 }
                 count
             }
+            // op 6 = FAT16 read (full-os guide Part II.5): read the file
+            // HELLO.TXT from a FAT volume at a fixed LBA (partition-aware mount
+            // is carry-forward). a2 = user buffer, a3 = capacity -> file bytes
+            // copied (single cluster, v1), or u64::MAX on error.
+            6 => {
+                const VOL_LBA: u64 = 2048;
+                if !storage::r4_storage_available()
+                    || !block_io_dispatch(false, VOL_LBA, 512, false)
+                {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
+                let spc = BLK_DATA_PAGE.0[13] as u64;
+                let reserved =
+                    u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
+                let nfats = BLK_DATA_PAGE.0[16] as u64;
+                let root_entries =
+                    u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
+                let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
+                if bps != 512 || spc == 0 || nfats == 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let root_lba = VOL_LBA + reserved + nfats * spf;
+                let root_sectors = (root_entries * 32 + 511) / 512;
+                let data_lba = root_lba + root_sectors;
+                let target = b"HELLO   TXT";
+                let mut first_cluster = 0u64;
+                let mut file_size = 0u64;
+                let mut s = 0u64;
+                'scan: while s < root_sectors {
+                    if !block_io_dispatch(false, root_lba + s, 512, false) {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    let mut e = 0usize;
+                    while e < 16 {
+                        let base = e * 32;
+                        if BLK_DATA_PAGE.0[base] == 0 {
+                            break 'scan; // end of directory
+                        }
+                        if BLK_DATA_PAGE.0[base..base + 11] == *target {
+                            first_cluster = u16::from_le_bytes([
+                                BLK_DATA_PAGE.0[base + 26],
+                                BLK_DATA_PAGE.0[base + 27],
+                            ]) as u64;
+                            file_size = u32::from_le_bytes([
+                                BLK_DATA_PAGE.0[base + 28],
+                                BLK_DATA_PAGE.0[base + 29],
+                                BLK_DATA_PAGE.0[base + 30],
+                                BLK_DATA_PAGE.0[base + 31],
+                            ]) as u64;
+                            break 'scan;
+                        }
+                        e += 1;
+                    }
+                    s += 1;
+                }
+                if first_cluster < 2 || file_size == 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let cluster_lba = data_lba + (first_cluster - 2) * spc;
+                if !block_io_dispatch(false, cluster_lba, 512, false) {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let n = core::cmp::min(file_size, a3).min(512) as usize;
+                if copyout_user(a2, &BLK_DATA_PAGE.0[..n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                n as u64
+            }
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }

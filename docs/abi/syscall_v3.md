@@ -55,8 +55,9 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
   frames, op 3 = uptime ticks, op 4 = dmesg read(`rsi`=buf, `rdx`=cap) →
   bytes copied, op 5 = MBR partition parse → partition count (logs each
-  entry); contract in `docs/runtime/sysinfo_v1.md`,
-  `docs/runtime/dmesg_v1.md`, `docs/runtime/partitions_v1.md`).
+  entry), op 6 = FAT16 read HELLO.TXT(`rsi`=buf, `rdx`=cap) → file bytes;
+  contract in `docs/runtime/sysinfo_v1.md`, `docs/runtime/dmesg_v1.md`,
+  `docs/runtime/partitions_v1.md`, `docs/runtime/fat16_v1.md`).
 
 Spawned tasks get a copy-on-write-isolated private address space, a random
 page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),
