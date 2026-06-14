@@ -100,9 +100,44 @@ unsafe fn lapic_timer_start() {
     wrmsr(0x838, 0x0010_0000); // initial count (counts down, reloads each period)
 }
 
+// Per-CPU data via GS base (full-os guide Part I.3): the storage model a per-CPU
+// scheduler needs — each CPU's `current` task, run queue, and stats live in a
+// slot reached through the GS base, so an interrupt handler can touch THIS CPU's
+// data with no locking and no "which CPU am I" lookup. v1 proves the mechanism:
+// each AP points IA32_GS_BASE at its own slot, records its index THROUGH GS, and
+// its LAPIC-timer ISR bumps a per-CPU counter THROUGH GS. The BSP's GS base is
+// left untouched (the go lane runs userspace on the BSP), and only APs take the
+// LAPIC-timer vector, so no kernel `gs:` access ever runs without a base set.
+const MAX_CPUS: usize = 64;
+const IA32_GS_BASE: u32 = 0xC000_0101;
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct PerCpu {
+    cpu_index: u64,   // gs:[0] — written by each CPU through its own GS base
+    timer_ticks: u64, // gs:[8] — bumped by the per-CPU LAPIC-timer ISR
+}
+
+static mut PERCPU: [PerCpu; MAX_CPUS] = [PerCpu { cpu_index: 0, timer_ticks: 0 }; MAX_CPUS];
+static PERCPU_NEXT: AtomicU64 = AtomicU64::new(1); // slot 0 reserved for the BSP
+
+/// Point this CPU's GS base at PERCPU[slot] and record its index through GS.
+/// Writing cpu_index via `gs:[0]` (rather than PERCPU[slot] directly) is the
+/// load-bearing proof: if the GS base is wrong the value lands in the wrong slot
+/// and the BSP's verification fails.
+unsafe fn percpu_init(slot: usize) {
+    let base = core::ptr::addr_of!(PERCPU[slot]) as u64;
+    wrmsr(IA32_GS_BASE, base);
+    core::arch::asm!("mov qword ptr gs:[0], {v}", v = in(reg) slot as u64, options(nostack));
+}
+
 /// LAPIC-timer service routine (from trap_handler vector 241): tick + EOI.
 pub(crate) unsafe fn lapic_timer_handler() {
     AP_TICKS.fetch_add(1, Ordering::SeqCst);
+    // Bump THIS CPU's per-CPU tick counter through the GS base: no lock and no
+    // CPU-id lookup, because each CPU's GS base points at its own slot. This is
+    // the exact access pattern a per-CPU scheduler uses for `current`/run-queue.
+    core::arch::asm!("add qword ptr gs:[8], 1", options(nostack));
     x2apic_eoi();
 }
 
@@ -235,7 +270,17 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
         crate::arch_x86::gdt_init();
         crate::arch_x86::load_idt();
         x2apic_enable();
-        lapic_timer_start(); // this AP's own periodic preemption clock
+        // Claim a per-CPU slot and point this AP's GS base at it BEFORE arming
+        // the LAPIC timer, so the timer ISR's `gs:` access always has a base.
+        // If the slot overflows MAX_CPUS (more CPUs than slots) set NEITHER the
+        // GS base NOR the timer: otherwise the timer ISR would run `gs:[8]` with
+        // a zero GS base and fault. A surplus AP still checks in and parks (its
+        // IPI + spurious vectors work); it simply has no per-CPU preemption clock.
+        let slot = PERCPU_NEXT.fetch_add(1, Ordering::SeqCst) as usize;
+        if slot < MAX_CPUS {
+            percpu_init(slot);
+            lapic_timer_start(); // this AP's own periodic preemption clock
+        }
         APS_ONLINE.fetch_add(1, Ordering::SeqCst);
         loop {
             core::arch::asm!("sti; hlt", options(nomem, nostack));
@@ -353,6 +398,35 @@ pub fn smp_init() {
                 serial_write(b"ok\n");
             } else {
                 serial_write(b"FAIL\n");
+            }
+            // Per-CPU storage via GS: each online AP recorded its slot index
+            // THROUGH its own GS base; verify each slot holds the right index.
+            // ONLY on the success path (every AP checked in): an AP writes
+            // cpu_index before its SeqCst check-in, so once all are in the read
+            // is ordered after every write (race-free) and slots 1..=online are
+            // exactly the claimed, populated set. On the bounded-spin timeout
+            // path an AP may hold a slot without having checked in (slot-claim
+            // order is independent of check-in order) and could be mid-write, so
+            // the read would race — skip it and report a timeout instead.
+            if online >= expected {
+                let mut percpu_ok = online > 0;
+                let mut s = 1u64;
+                while s <= online && (s as usize) < MAX_CPUS {
+                    let idx =
+                        core::ptr::read_volatile(core::ptr::addr_of!(PERCPU[s as usize].cpu_index));
+                    if idx != s {
+                        percpu_ok = false;
+                    }
+                    s += 1;
+                }
+                serial_write(b"SMP: percpu ");
+                if percpu_ok {
+                    serial_write(b"ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
+            } else {
+                serial_write(b"SMP: percpu timeout FAIL\n");
             }
         }
     }

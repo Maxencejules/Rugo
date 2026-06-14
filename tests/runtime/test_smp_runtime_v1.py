@@ -101,6 +101,8 @@ def test_aps_check_in_on_quad_core(find_in_order):
         # TLB shootdown: the BSP directed all 3 APs to invalidate an address
         # and every one acknowledged (cross-CPU TLB invalidation works).
         "SMP: tlb shootdown ok",
+        # Per-CPU storage: each AP recorded its index through its own GS base.
+        "SMP: percpu ok",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out
@@ -125,6 +127,8 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: ap timers ok",
         # TLB shootdown: the BSP directed the single AP to invalidate and it acked.
         "SMP: tlb shootdown ok",
+        # Per-CPU storage: the AP recorded its index through its own GS base.
+        "SMP: percpu ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

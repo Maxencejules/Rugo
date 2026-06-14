@@ -53,10 +53,10 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 These each require dedicated, infra-heavy work; they do not decompose into a
 single safe boot-verified slice and several have hard prerequisites.
 
-1. **I.3 per-CPU scheduler — primitives + TLB shootdown DONE, run queue remains.**
-   The spinlock (locking), a working x2APIC IPI, per-CPU LAPIC timers, **and**
-   cross-CPU TLB shootdown are implemented (`smp_lock_v1.md`,
-   `tlb_shootdown_v1.md`): every AP runs its own periodic preemption clock
+1. **I.3 per-CPU scheduler — primitives + TLB shootdown + per-CPU GS DONE, run queue remains.**
+   The spinlock (locking), a working x2APIC IPI, per-CPU LAPIC timers,
+   cross-CPU TLB shootdown, **and** per-CPU GS-base storage are implemented
+   (`smp_lock_v1.md`, `tlb_shootdown_v1.md`, `percpu_v1.md`): every AP runs its own periodic preemption clock
    (`SMP: ap timers ok`) and acknowledges directed TLB invalidations
    (`SMP: tlb shootdown ok`). The spinlock+IPI details:
    the BSP broadcasts vector 240 to the APs, which acknowledge (`SMP: ipi ack`);
@@ -70,9 +70,14 @@ single safe boot-verified slice and several have hard prerequisites.
    populated IDT. Gating on `cpu_count > 1` keeps `-smp 1` lanes off the LAPIC;
    verified the `-smp 2` go-lane still preempts. Three adversarial-review bugs in
    the triad were fixed (unconditional vector-65 gate, two-step x2APIC enable,
-   success-gated lock-count read). **Remaining:** wire `tlb_shootdown` into the
-   `munmap`/`mprotect`/CoW paths and build a per-CPU run queue + per-CPU GDT/TSS
-   so the scheduler runs user tasks on the APs instead of parking them.
+   success-gated lock-count read). Per-CPU GS storage (`SMP: percpu ok`): each AP
+   points `IA32_GS_BASE` at its own `PerCpu` slot, records its index through GS,
+   and its LAPIC-timer ISR bumps a per-CPU counter through GS — lock-free per-CPU
+   addressing (the BSP's GS base is left untouched so the go lane's userspace is
+   undisturbed). **Remaining:** wire `tlb_shootdown` into the `munmap`/`mprotect`/
+   CoW paths; put a real `current`/run-queue in the per-CPU slots; add per-CPU
+   GDT/TSS so an AP can take a ring3→ring0 trap on its own kernel stack and run
+   user tasks instead of parking.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000** — needs `-device qemu-xhci` (and
    `-device e1000`) in a dedicated test profile, then an XHCI controller driver
    (command/event rings, port reset, device enumeration) and a HID boot-protocol
