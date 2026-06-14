@@ -22,3 +22,20 @@ def test_pty_bidirectional(qemu_go_c4_runtime, find_in_order):
         "RUGO: halt ok",
     ])
     assert "PTYPROBE: FAIL" not in out
+
+
+def test_pty_pool_recycled_on_exit(qemu_go_c4_runtime, find_in_order):
+    """ptyprobe opens a pty and exits WITHOUT closing it; the PtyObj pool
+    (PTY_MAX=2) must be recycled on task exit, so three sequential runs all
+    succeed. Without the exit-time pty_drop_end fix the third run fails."""
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot(
+        "probe ptyprobe\n"
+        "probe ptyprobe\n"
+        "probe ptyprobe\n"
+        "shutdown\n"
+    ).stdout
+
+    assert out.count("PTYPROBE: ok") == 3
+    assert "PTYPROBE: FAIL" not in out

@@ -856,6 +856,11 @@ cfg_m3! {
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         {
             if bytes.len() >= 6 && &bytes[..5] == b"/mnt/" && bytes[bytes.len() - 1] == 0 {
+                // The cache holds one file at a time; reject a second open
+                // rather than silently overwriting an in-use FatFile fd.
+                if FAT_FILE_BUSY {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
                 let rel = &bytes[5..bytes.len() - 1];
                 // Convert "name.ext" -> a space-padded 8.3 directory name.
                 let mut name83 = [b' '; 11];
@@ -904,6 +909,7 @@ cfg_m3! {
                 }
                 M8_FD_TABLE[fd as usize].rights = effective;
                 M8_FD_TABLE[fd as usize].offset = 0;
+                FAT_FILE_BUSY = true;
                 return fd;
             }
         }
@@ -1648,7 +1654,12 @@ cfg_m3! {
             }
             pipe_drop_end(idx);
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-            pty_drop_end(idx);
+            {
+                pty_drop_end(idx);
+                if M8_FD_TABLE[idx].kind == M8FdKind::FatFile {
+                    FAT_FILE_BUSY = false;
+                }
+            }
         }
         M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
         0
@@ -2299,6 +2310,10 @@ cfg_m3! {
     static mut FAT_FILE: [u8; 512] = [0; 512];
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut FAT_FILE_LEN: usize = 0;
+    // True while a /mnt FatFile fd is open: the cache holds one file at a time,
+    // so a second concurrent open is rejected rather than silently overwriting.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut FAT_FILE_BUSY: bool = false;
 
     /// Drop one pty end on close; recycle the PtyObj when both ends are gone.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -2644,6 +2659,15 @@ cfg_m3! {
                     offset: src.offset,
                     owner_tid: src.owner_tid,
                 };
+                // Carry the fd-indexed backing references to the new slot;
+                // otherwise a moved pipe/vfs/tmpfs/pty fd would point at a
+                // stale object (the side arrays are keyed by fd index).
+                M8_FD_PIPE[i] = M8_FD_PIPE[idx];
+                M8_FD_VFS_NODE[i] = M8_FD_VFS_NODE[idx];
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                {
+                    M8_FD_PTY[i] = M8_FD_PTY[idx];
+                }
                 M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
                 return i as u64;
             }
@@ -2666,6 +2690,16 @@ cfg_m3! {
                 && M8_FD_TABLE[idx].owner_tid == owner_tid
             {
                 pipe_drop_end(idx);
+                // Recycle pty/FatFile backing on task teardown too, mirroring
+                // the explicit-close path; otherwise a task that exits with an
+                // open pty leaks its PtyObj slot (PTY_MAX is small).
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                {
+                    pty_drop_end(idx);
+                    if M8_FD_TABLE[idx].kind == M8FdKind::FatFile {
+                        FAT_FILE_BUSY = false;
+                    }
+                }
                 M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
             }
         }
@@ -4874,7 +4908,13 @@ cfg_r4! {
                 }
                 let sfd = m8_alloc_fd(M8FdKind::PtySlave);
                 if sfd == 0xFFFF_FFFF_FFFF_FFFF {
+                    // Roll back the master alloc fully: free the table slot AND
+                    // the fd_count m8_alloc_fd incremented (mirrors the pipe
+                    // cleanup; otherwise a near-quota task leaks fd_count).
                     M8_FD_TABLE[mfd as usize] = M8FdEntry::EMPTY;
+                    if R4_TASKS[R4_CURRENT].fd_count != 0 {
+                        R4_TASKS[R4_CURRENT].fd_count -= 1;
+                    }
                     return ERR;
                 }
                 PTYS[p] = PtyObj::EMPTY;

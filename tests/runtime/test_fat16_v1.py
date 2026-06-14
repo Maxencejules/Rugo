@@ -94,11 +94,19 @@ def test_fat16_mount_namespace(qemu_go_c4_runtime, find_in_order):
     with open(disk_path, "wb") as f:
         f.write(disk)
 
-    # fscat is a generic shell builtin: open(path)+read. /mnt routing makes the
-    # FAT file appear in the namespace, so no FAT-specific userspace is needed.
-    out = boot("fscat /mnt/HELLO.TXT\nshutdown\n").stdout
+    # fscat is a generic shell builtin: open(path)+read+close. /mnt routing
+    # makes the FAT file appear in the namespace, so no FAT-specific userspace
+    # is needed. Two sequential reads also prove the one-file cache's busy flag
+    # is cleared on close (a second open would otherwise be rejected).
+    out = boot(
+        "fscat /mnt/HELLO.TXT\n"
+        "fscat /mnt/HELLO.TXT\n"
+        "shutdown\n"
+    ).stdout
 
     find_in_order(out, [
+        "fat16-file-content",
+        "FSH: cat ok",
         "fat16-file-content",
         "FSH: cat ok",
         "RUGO: halt ok",
