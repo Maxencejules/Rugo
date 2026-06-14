@@ -19,7 +19,7 @@ def _boot_smp(iso, smp, input_text=None, with_devices=False, timeout=30):
     serial_port = conftest._pick_serial_port()
     cmd = [
         conftest.QEMU_BIN,
-        "-machine", "q35", "-cpu", "qemu64", "-smp", str(smp), "-m", "256",
+        "-machine", "q35", "-cpu", "qemu64,+x2apic", "-smp", str(smp), "-m", "256",
         "-display", "none", "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
         "-cdrom", iso,
@@ -94,6 +94,8 @@ def test_aps_check_in_on_quad_core(find_in_order):
         # Spinlock contention: 4 CPUs x 2000 locked increments = 8000 = 0x1F40,
         # with no lost updates -> the lock serialized every core.
         "SMP: lock count=0x0000000000001F40 ok",
+        # IPI: the BSP broadcasts to all 3 APs, each takes vector 240 and acks.
+        "SMP: ipi ack=0x0000000000000003",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out
@@ -112,6 +114,8 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: aps online=0x0000000000000001",
         # 2 CPUs x 2000 locked increments = 4000 = 0xFA0, no lost updates.
         "SMP: lock count=0x0000000000000FA0 ok",
+        # IPI: the BSP signals the single AP, which takes vector 240 and acks.
+        "SMP: ipi ack=0x0000000000000001",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

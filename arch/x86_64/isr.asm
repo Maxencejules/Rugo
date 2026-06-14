@@ -39,6 +39,9 @@ ISR_NOERR 65               ; Local APIC spurious vector
 ; --- Software interrupt for syscalls (int 0x80 = vector 128) ---
 ISR_NOERR 128              ; Syscall gate (DPL=3 set in IDT by Rust)
 
+; --- Inter-processor interrupt (SMP, full-os guide Part I.3) ---
+ISR_NOERR 240             ; IPI vector 0xF0 (fixed delivery), handled per-CPU
+
 ; --- Common tail: save all GPRs, call Rust handler, restore, iretq ---
 ;
 ; Stack layout on entry (before GPR push):

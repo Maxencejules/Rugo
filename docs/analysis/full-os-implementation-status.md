@@ -53,28 +53,18 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 These each require dedicated, infra-heavy work; they do not decompose into a
 single safe boot-verified slice and several have hard prerequisites.
 
-1. **I.3 per-CPU scheduler + IPIs / TLB shootdown** — the spinlock (locking
-   half) is done. The IPI half needs a LAPIC layer that does not exist yet.
-   Concrete plan: add `ISR_NOERR 240` in `arch/x86_64/isr.asm`; a `trap_handler`
-   vector-240 arm (`ipi_handler`: bump an atomic + x2APIC EOI via `wrmsr 0x80B`);
-   `x2apic_enable` (`rdmsr/wrmsr 0x1B` bits 10/11, SVR `0x80F` = `(1<<8)|65`
-   reusing the existing spurious vector 65); a shared `load_idt()` so APs `lidt`
-   the static IDT; change `ap_entry` to `load_idt + x2apic_enable + sti` then
-   `hlt`; send the IPI from `smp_init` via `wrmsr 0x830 = (lapic_id<<32)|(1<<14)|240`.
-   **Risk to manage:** enabling the LAPIC on the BSP can change PIC interrupt
-   delivery (LINT0/ExtINT) and break the PIT timer that drives preemption —
-   gate the whole path on `cpu_count > 1` so the default `-smp 1` lanes are
-   untouched, and verify the `-smp 2` go-lane still preempts. Then build the
-   per-CPU run queue + per-CPU GDT/TSS on top.
-   **Attempted 2026-06-14 (all six pieces wired, gated `cpu_count>1`) and
-   reverted:** `os.iso -smp 4` hung right after `SMP: cpus=0x4` — before any AP
-   `SMP: aps online` check-in — so an AP faults during `load_idt`/`x2apic_enable`
-   (or the BSP wedges). The `-smp 1` suite was unaffected (gating works). Next
-   time: bring up ONE AP under `-smp 2` with serial debug markers inside
-   `ap_entry` (before/after `load_idt`, before/after `x2apic_enable`) to localize
-   the fault; suspect the AP needs its own GDT/`lgdt` (Limine may hand it a
-   transient GDT) and/or LINT0 set to ExtINT before `sti`. Keep it `cpu_count>1`
-   gated throughout.
+1. **I.3 per-CPU scheduler — IPI DONE, run queue remains.** The spinlock
+   (locking) **and** a working x2APIC IPI are implemented (`smp_lock_v1.md`):
+   the BSP broadcasts vector 240 to the APs, which acknowledge (`SMP: ipi ack`).
+   The four bugs the first attempt hit, now fixed: (a) the AP must `gdt_init`
+   (Limine hands it its own GDT) before loading the IDT; (b) `-cpu qemu64,+x2apic`
+   is required (plain qemu64 #GPs on the x2APIC enable); (c) IDT vector 240 must
+   be installed in **every** lane (the `-smp 4` test uses the base `os.iso`, not
+   `go_test`); (d) `smp_init` must run **after** `idt_init` in `kmain` so a
+   released AP loads a populated IDT. Gating on `cpu_count > 1` keeps `-smp 1`
+   lanes off the LAPIC; verified the `-smp 2` go-lane still preempts.
+   **Remaining:** use the IPI for TLB shootdown; build a per-CPU run queue +
+   per-CPU GDT/TSS and run the scheduler on the APs instead of parking them.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000** — needs `-device qemu-xhci` (and
    `-device e1000`) in a dedicated test profile, then an XHCI controller driver
    (command/event rings, port reset, device enumeration) and a HID boot-protocol

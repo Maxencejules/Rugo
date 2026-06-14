@@ -110,6 +110,9 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             128 => {
                 crate::syscall::syscall_dispatch(frame);
             }
+            240 => {
+                crate::smp::ipi_handler();
+            }
             _ => {}
         }
     }

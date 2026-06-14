@@ -7956,7 +7956,6 @@ pub extern "C" fn kmain() -> ! {
     }
     check_paging();
     mm::enable_nx();
-    smp::smp_init();
     mm::pmm_init();
     mm::heap_init();
     mm::heap_selftest();
@@ -7972,6 +7971,10 @@ pub extern "C" fn kmain() -> ! {
         gdt_init();
         idt_init();
     }
+
+    // SMP bring-up runs AFTER the IDT/GDT exist, so an AP released here can load
+    // the populated IDT and take the IPI vector (full-os guide Part I.3).
+    smp::smp_init();
 
     #[cfg(feature = "pf_test")]
     unsafe {

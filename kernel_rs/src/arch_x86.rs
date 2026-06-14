@@ -228,6 +228,7 @@ pub(crate) unsafe fn idt_init() {
         #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
         fn isr_stub_65();
         fn isr_stub_128();
+        fn isr_stub_240();
     }
 
     idt_set_gate(0, isr_stub_0 as *const () as u64);
@@ -254,6 +255,16 @@ pub(crate) unsafe fn idt_init() {
         reserved: 0,
     };
 
+    // SMP IPI vector (full-os guide Part I.3): an interrupt gate (DPL=0).
+    // Installed in every lane so APs can take the IPI on the base lane too.
+    idt_set_gate(240, isr_stub_240 as *const () as u64);
+
+    load_idt();
+}
+
+/// Load the shared IDT on the current CPU. The BSP calls this from idt_init;
+/// each AP calls it (after loading the kernel GDT) so it can take the IPI.
+pub(crate) unsafe fn load_idt() {
     let ptr = DtPtr {
         limit: (256 * core::mem::size_of::<IdtEntry>() - 1) as u16,
         base: IDT.as_ptr() as u64,
