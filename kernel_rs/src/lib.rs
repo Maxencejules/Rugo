@@ -4639,6 +4639,24 @@ cfg_r4! {
                 R4_THREADS_CREATED += 1;
                 *frame.add(14) = tid as u64;
             }
+            // op 3 = getuid (full-os guide Part IV.10 multi-user): the caller's
+            // user id.
+            3 => {
+                *frame.add(14) = R4_TASKS[R4_CURRENT].uid as u64;
+            }
+            // op 4 = setuid(a2): only root (uid 0) may change uid, enforcing the
+            // privilege model. A non-root attempt is denied and audited.
+            4 => {
+                if R4_TASKS[R4_CURRENT].uid != 0 {
+                    audit_event(b"setuid-deny", 51);
+                    *frame.add(14) = ERR;
+                } else if a2 > 0xFF {
+                    *frame.add(14) = ERR;
+                } else {
+                    R4_TASKS[R4_CURRENT].uid = a2 as u8;
+                    *frame.add(14) = 0;
+                }
+            }
             _ => {
                 *frame.add(14) = ERR;
             }

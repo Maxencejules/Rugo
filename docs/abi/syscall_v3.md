@@ -38,7 +38,9 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `51` = `sys_proc_ctl` (op 1 = fork — copy-on-write duplicate of the
   caller, returns child tid to the parent and 0 to the child; op 2 = clone
   — new thread sharing the caller's address space, `rsi` = entry
-  (`rdi` is the op selector = 2); contract in `docs/runtime/fork_v1.md`);
+  (`rdi` is the op selector = 2); op 3 = getuid → caller uid; op 4 =
+  setuid(`rsi`) — root-only, denied+audited otherwise; contract in
+  `docs/runtime/fork_v1.md`, `docs/runtime/userid_v1.md`);
   `52` = `sys_futex` (op 1 = wait(`rsi`=uaddr, `rdx`=val), op 2 = wake(uaddr,
   n); contract in `docs/runtime/futex_v1.md`);
   `53` = `sys_time` (op 1 = clock_gettime(`rsi`=clockid: 0 = MONOTONIC

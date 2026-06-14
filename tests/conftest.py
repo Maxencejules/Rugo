@@ -899,7 +899,7 @@ def qemu_serial_net_missing():
 
 
 APP_DISK_V1_TOOL = os.path.join(REPO_ROOT, "tools", "app_disk_v1.py")
-APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps", "wc", "hello", "nxprobe", "sigprobe", "fsperm", "asprobe", "forkprobe", "vmprobe", "timeprobe", "rngprobe", "sandboxprobe", "devprobe", "sysinfoprobe", "futexprobe", "lseekprobe", "sleepprobe", "gfxprobe", "waitprobe", "timerfdprobe", "dmesgprobe", "ptyprobe", "partprobe", "fatprobe", "page3probe", "beepprobe", "auditprobe", "fatlsprobe", "cryptprobe", "journalprobe"]
+APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps", "wc", "hello", "nxprobe", "sigprobe", "fsperm", "asprobe", "forkprobe", "vmprobe", "timeprobe", "rngprobe", "sandboxprobe", "devprobe", "sysinfoprobe", "futexprobe", "lseekprobe", "sleepprobe", "gfxprobe", "waitprobe", "timerfdprobe", "dmesgprobe", "ptyprobe", "partprobe", "fatprobe", "page3probe", "beepprobe", "auditprobe", "fatlsprobe", "cryptprobe", "journalprobe", "userprobe"]
 
 
 def _ensure_app_region(disk_path):
