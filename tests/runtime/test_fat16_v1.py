@@ -82,3 +82,25 @@ def test_fat16_file_read(qemu_go_c4_runtime, find_in_order):
         "RUGO: halt ok",
     ])
     assert "FATPROBE: FAIL" not in out
+
+
+def test_fat16_mount_namespace(qemu_go_c4_runtime, find_in_order):
+    """The FAT volume is reachable through the namespace at /mnt via plain open."""
+    boot, disk_path = qemu_go_c4_runtime
+
+    disk = bytearray(4 * 1024 * 1024)
+    vol = _fat16_volume()
+    disk[2048 * SEC:2048 * SEC + len(vol)] = vol
+    with open(disk_path, "wb") as f:
+        f.write(disk)
+
+    # fscat is a generic shell builtin: open(path)+read. /mnt routing makes the
+    # FAT file appear in the namespace, so no FAT-specific userspace is needed.
+    out = boot("fscat /mnt/HELLO.TXT\nshutdown\n").stdout
+
+    find_in_order(out, [
+        "fat16-file-content",
+        "FSH: cat ok",
+        "RUGO: halt ok",
+    ])
+    assert "FSH: err" not in out

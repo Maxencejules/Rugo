@@ -383,6 +383,79 @@ unsafe fn klog_read(ptr: u64, len: usize) -> u64 {
     n as u64
 }
 
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+fn ascii_upper(b: u8) -> u8 {
+    if b.is_ascii_lowercase() {
+        b - 32
+    } else {
+        b
+    }
+}
+
+/// Read a file by its 11-byte 8.3 directory name from the FAT16 volume at a
+/// fixed LBA into `out` (single cluster, v1). Returns the byte count, or None
+/// if the volume/BPB is bad or the file is absent (full-os guide Part II.5 FAT;
+/// shared by `sys_sysinfo` op 6 and the `/mnt` open path).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn fat16_read_named(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
+    const VOL_LBA: u64 = 2048;
+    if !storage::r4_storage_available() || !block_io_dispatch(false, VOL_LBA, 512, false) {
+        return None;
+    }
+    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
+    let spc = BLK_DATA_PAGE.0[13] as u64;
+    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
+    let nfats = BLK_DATA_PAGE.0[16] as u64;
+    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
+    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
+    if bps != 512 || spc == 0 || nfats == 0 {
+        return None;
+    }
+    let root_lba = VOL_LBA + reserved + nfats * spf;
+    let root_sectors = (root_entries * 32 + 511) / 512;
+    let data_lba = root_lba + root_sectors;
+    let mut first_cluster = 0u64;
+    let mut file_size = 0u64;
+    let mut s = 0u64;
+    'scan: while s < root_sectors {
+        if !block_io_dispatch(false, root_lba + s, 512, false) {
+            return None;
+        }
+        let mut e = 0usize;
+        while e < 16 {
+            let base = e * 32;
+            if BLK_DATA_PAGE.0[base] == 0 {
+                break 'scan;
+            }
+            if BLK_DATA_PAGE.0[base..base + 11] == *target {
+                first_cluster = u16::from_le_bytes([
+                    BLK_DATA_PAGE.0[base + 26],
+                    BLK_DATA_PAGE.0[base + 27],
+                ]) as u64;
+                file_size = u32::from_le_bytes([
+                    BLK_DATA_PAGE.0[base + 28],
+                    BLK_DATA_PAGE.0[base + 29],
+                    BLK_DATA_PAGE.0[base + 30],
+                    BLK_DATA_PAGE.0[base + 31],
+                ]) as u64;
+                break 'scan;
+            }
+            e += 1;
+        }
+        s += 1;
+    }
+    if first_cluster < 2 || file_size == 0 {
+        return None;
+    }
+    let cluster_lba = data_lba + (first_cluster - 2) * spc;
+    if !block_io_dispatch(false, cluster_lba, 512, false) {
+        return None;
+    }
+    let n = core::cmp::min(file_size as usize, out.len()).min(512);
+    out[..n].copy_from_slice(&BLK_DATA_PAGE.0[..n]);
+    Some(n)
+}
+
 fn serial_can_read() -> bool {
     unsafe { inb(COM1 + 5) & 0x01 != 0 }
 }
@@ -777,6 +850,63 @@ cfg_m3! {
                 return fd;
             }
         }
+        // /mnt/<NAME> mounts the FAT16 volume into the namespace (full-os guide
+        // Part II.5 mounts): read-only, root-directory 8.3 names. The file is
+        // cached on open; one open /mnt file at a time (v1).
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if bytes.len() >= 6 && &bytes[..5] == b"/mnt/" && bytes[bytes.len() - 1] == 0 {
+                let rel = &bytes[5..bytes.len() - 1];
+                // Convert "name.ext" -> a space-padded 8.3 directory name.
+                let mut name83 = [b' '; 11];
+                let mut dot = rel.len();
+                let mut k = 0;
+                while k < rel.len() {
+                    if rel[k] == b'.' {
+                        dot = k;
+                        break;
+                    }
+                    k += 1;
+                }
+                let base = &rel[..dot];
+                if base.is_empty() || base.len() > 8 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let mut i = 0;
+                while i < base.len() {
+                    name83[i] = ascii_upper(base[i]);
+                    i += 1;
+                }
+                if dot < rel.len() {
+                    let ext = &rel[dot + 1..];
+                    if ext.len() > 3 {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    let mut j = 0;
+                    while j < ext.len() {
+                        name83[8 + j] = ascii_upper(ext[j]);
+                        j += 1;
+                    }
+                }
+                let n = match fat16_read_named(&name83, &mut FAT_FILE) {
+                    Some(n) => n,
+                    None => return 0xFFFF_FFFF_FFFF_FFFF,
+                };
+                FAT_FILE_LEN = n;
+                let max = m10_rights_for_kind(M8FdKind::FatFile);
+                let effective = requested | M10_RIGHT_POLL;
+                if effective & !max != 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let fd = m8_alloc_fd(M8FdKind::FatFile);
+                if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                    return fd;
+                }
+                M8_FD_TABLE[fd as usize].rights = effective;
+                M8_FD_TABLE[fd as usize].offset = 0;
+                return fd;
+            }
+        }
         if m8_path_matches(bytes, b"/compat/hello.txt") {
             #[cfg(feature = "go_test")]
             if !r4_current_has_cap(R4_TASK_CAP_STORAGE) {
@@ -1161,6 +1291,21 @@ cfg_m3! {
                 }
                 n as u64
             }
+            // FAT16 file via /mnt (full-os guide Part II.5): serve from the
+            // FAT_FILE cache filled at open; the fd offset tracks position.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::FatFile => {
+                let off = M8_FD_TABLE[idx].offset;
+                if off >= FAT_FILE_LEN {
+                    return 0;
+                }
+                let n = (FAT_FILE_LEN - off).min(len as usize);
+                if copyout_user(buf, &FAT_FILE[off..off + n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset += n;
+                n as u64
+            }
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -1330,6 +1475,9 @@ cfg_m3! {
                 }
                 len
             }
+            // FAT16 /mnt files are read-only in v1.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::FatFile => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(not(feature = "go_test"))]
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
@@ -1716,6 +1864,15 @@ cfg_m3! {
                                 revents |= POLLOUT;
                             }
                         }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::FatFile => {
+                            if events & POLLIN != 0
+                                && rights & M10_RIGHT_READ != 0
+                                && M8_FD_TABLE[idx].offset < FAT_FILE_LEN
+                            {
+                                revents |= POLLIN;
+                            }
+                        }
                         #[cfg(not(feature = "go_test"))]
                         _ => revents |= POLLERR,
                     }
@@ -1957,6 +2114,10 @@ cfg_m3! {
         PtyMaster,
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         PtySlave,
+        // FAT16 file opened via /mnt (full-os guide Part II.5 mounts): contents
+        // are cached in FAT_FILE on open; the fd offset tracks read position.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        FatFile,
     }
 
     // In-memory tmpfs for /tmp (full-os guide Part II.5). Heap-free fixed
@@ -2131,6 +2292,13 @@ cfg_m3! {
     static mut PTYS: [PtyObj; PTY_MAX] = [PtyObj::EMPTY; PTY_MAX];
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut M8_FD_PTY: [u8; M8_FD_MAX] = [0; M8_FD_MAX];
+
+    // FAT16 /mnt file cache (full-os guide Part II.5 mounts): one open file at a
+    // time; filled on open, served by the FatFile read arm via the fd offset.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut FAT_FILE: [u8; 512] = [0; 512];
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut FAT_FILE_LEN: usize = 0;
 
     /// Drop one pty end on close; recycle the PtyObj when both ends are gone.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -2366,6 +2534,8 @@ cfg_m3! {
             M8FdKind::PtyMaster | M8FdKind::PtySlave => {
                 M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::FatFile => M10_RIGHT_READ | M10_RIGHT_POLL,
         }
     }
 
@@ -4790,70 +4960,17 @@ cfg_r4! {
                 count
             }
             // op 6 = FAT16 read (full-os guide Part II.5): read the file
-            // HELLO.TXT from a FAT volume at a fixed LBA (partition-aware mount
-            // is carry-forward). a2 = user buffer, a3 = capacity -> file bytes
-            // copied (single cluster, v1), or u64::MAX on error.
+            // HELLO.TXT from a FAT volume at a fixed LBA. a2 = user buffer,
+            // a3 = capacity -> file bytes copied (single cluster, v1), or
+            // u64::MAX on error.
             6 => {
-                const VOL_LBA: u64 = 2048;
-                if !storage::r4_storage_available()
-                    || !block_io_dispatch(false, VOL_LBA, 512, false)
-                {
-                    return 0xFFFF_FFFF_FFFF_FFFF;
-                }
-                let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
-                let spc = BLK_DATA_PAGE.0[13] as u64;
-                let reserved =
-                    u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
-                let nfats = BLK_DATA_PAGE.0[16] as u64;
-                let root_entries =
-                    u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
-                let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
-                if bps != 512 || spc == 0 || nfats == 0 {
-                    return 0xFFFF_FFFF_FFFF_FFFF;
-                }
-                let root_lba = VOL_LBA + reserved + nfats * spf;
-                let root_sectors = (root_entries * 32 + 511) / 512;
-                let data_lba = root_lba + root_sectors;
-                let target = b"HELLO   TXT";
-                let mut first_cluster = 0u64;
-                let mut file_size = 0u64;
-                let mut s = 0u64;
-                'scan: while s < root_sectors {
-                    if !block_io_dispatch(false, root_lba + s, 512, false) {
-                        return 0xFFFF_FFFF_FFFF_FFFF;
-                    }
-                    let mut e = 0usize;
-                    while e < 16 {
-                        let base = e * 32;
-                        if BLK_DATA_PAGE.0[base] == 0 {
-                            break 'scan; // end of directory
-                        }
-                        if BLK_DATA_PAGE.0[base..base + 11] == *target {
-                            first_cluster = u16::from_le_bytes([
-                                BLK_DATA_PAGE.0[base + 26],
-                                BLK_DATA_PAGE.0[base + 27],
-                            ]) as u64;
-                            file_size = u32::from_le_bytes([
-                                BLK_DATA_PAGE.0[base + 28],
-                                BLK_DATA_PAGE.0[base + 29],
-                                BLK_DATA_PAGE.0[base + 30],
-                                BLK_DATA_PAGE.0[base + 31],
-                            ]) as u64;
-                            break 'scan;
-                        }
-                        e += 1;
-                    }
-                    s += 1;
-                }
-                if first_cluster < 2 || file_size == 0 {
-                    return 0xFFFF_FFFF_FFFF_FFFF;
-                }
-                let cluster_lba = data_lba + (first_cluster - 2) * spc;
-                if !block_io_dispatch(false, cluster_lba, 512, false) {
-                    return 0xFFFF_FFFF_FFFF_FFFF;
-                }
-                let n = core::cmp::min(file_size, a3).min(512) as usize;
-                if copyout_user(a2, &BLK_DATA_PAGE.0[..n], n).is_err() {
+                let mut tmp = [0u8; 512];
+                let cap = core::cmp::min(a3 as usize, 512);
+                let n = match fat16_read_named(b"HELLO   TXT", &mut tmp[..cap]) {
+                    Some(n) => n,
+                    None => return 0xFFFF_FFFF_FFFF_FFFF,
+                };
+                if copyout_user(a2, &tmp[..n], n).is_err() {
                     return 0xFFFF_FFFF_FFFF_FFFF;
                 }
                 n as u64

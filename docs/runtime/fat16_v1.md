@@ -26,14 +26,24 @@ read of a non-native (industry-standard) on-disk filesystem.
 Returns the byte count, or `u64::MAX` on any error (no disk, bad BPB, file
 absent, empty file).
 
+### Namespace mount (`/mnt`)
+
+`open("/mnt/<NAME>")` mounts the FAT16 volume into the namespace: the path's
+`name.ext` is converted to a space-padded, upper-cased 8.3 directory name, the
+file is read via the same `fat16_read_named` helper into a cache, and a
+read-only `FatFile` fd is returned. Any program (e.g. the shell's `fscat`)
+reaches FAT files through the normal `open`/`read`/`close` path — no
+FAT-specific syscall needed. v1 caches one open `/mnt` file at a time.
+
 ## v1 boundary / carry-forward
 
 - **Read-only, one fixed file, single cluster.** No FAT chain walk (files must
   fit in one cluster), no write, no create/delete, no timestamps.
 - **Root directory only.** No subdirectory traversal, no long file names (LFN).
-- **Fixed volume LBA (2048).** No partition-aware mount yet — combining this with
-  the MBR parser ([`partitions_v1.md`](partitions_v1.md)) to locate the FAT
-  partition, and a general `open("/mnt/...")` path, are carry-forward.
+- **Fixed volume LBA (2048).** The `/mnt` namespace mount works, but the volume
+  LBA is fixed — using the MBR parser ([`partitions_v1.md`](partitions_v1.md)) to
+  locate the FAT partition dynamically is carry-forward. The `/mnt` cache holds
+  one open file at a time.
 - FAT12/FAT32 and exFAT are out of scope; the volume is assumed FAT16
   (≥ 4085 clusters), though the single-cluster read path does not depend on the
   FAT entry width.
