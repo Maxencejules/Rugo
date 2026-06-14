@@ -7510,6 +7510,188 @@ unsafe fn e1000_tx_selftest(bdf: PciBdf) {
     }
 }
 
+/// e1000 RX-ring driver self-test (full-os guide Part II.7). Sets up a receive
+/// descriptor ring on the DMA pool, transmits an ARP request for the slirp gateway
+/// (10.0.2.2) out the NIC, and confirms the wire REPLY is RECEIVED into the ring
+/// (descriptor Done bit + it is the expected ARP reply from 10.0.2.2) — the
+/// receive half of a real NIC driver, exercising a genuine inbound frame delivered
+/// by the network backend. Called from e1000_detect after the TX self-test.
+///
+/// (The legacy e1000 in QEMU does not implement PHY/MAC loopback, so a real wire
+/// round-trip — the always-present slirp ARP responder — is used instead.)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_rx_selftest(bdf: PciBdf) {
+    const NRXD: usize = 8; // RX descriptors (and one DMA page of buffer each)
+    let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
+    let base = (bar0 & 0xFFFF_FFF0) as u64;
+    // 16 KiB of BAR covers CTRL/STATUS@0, RCTL@0x100, TCTL@0x400, RX ring@0x2800
+    // and TX ring@0x3800.
+    let mmio = match mmio_map_region(base, 4) {
+        Some(p) => p,
+        None => {
+            serial_write(b"E1000: rx mmio fail\n");
+            return;
+        }
+    };
+    let reg = |off: u64| (mmio + off) as *mut u32;
+
+    // DMA regions: RX ring (1 page), RX buffers (NRXD contiguous pages), TX ring
+    // (1 page), TX buffer (1 page). Cascade-free on any allocation failure.
+    let rxring_phys = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            serial_write(b"E1000: rx dma fail\n");
+            return;
+        }
+    };
+    let rxbuf_phys = match dma::dma_alloc(NRXD) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(rxring_phys, 1);
+            serial_write(b"E1000: rx dma fail\n");
+            return;
+        }
+    };
+    let txring_phys = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(rxbuf_phys, NRXD);
+            dma::dma_free(rxring_phys, 1);
+            serial_write(b"E1000: rx dma fail\n");
+            return;
+        }
+    };
+    let txbuf_phys = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(txring_phys, 1);
+            dma::dma_free(rxbuf_phys, NRXD);
+            dma::dma_free(rxring_phys, 1);
+            serial_write(b"E1000: rx dma fail\n");
+            return;
+        }
+    };
+
+    // Build the RX descriptor ring: each 16-byte descriptor's buffer address, with
+    // the Done bit (status byte @ offset 12) cleared.
+    let rxring = mm::phys_to_virt(rxring_phys) as *mut u8;
+    core::ptr::write_bytes(rxring, 0, 4096);
+    for i in 0..NRXD {
+        let d = rxring.add(i * 16);
+        core::ptr::write_volatile(d as *mut u64, rxbuf_phys + (i as u64) * 4096);
+        *d.add(12) = 0;
+    }
+    // Link up (CTRL.SLU bit 6) + full duplex (CTRL.FD bit 0).
+    core::ptr::write_volatile(reg(0x0000), core::ptr::read_volatile(reg(0x0000)) | (1 << 6) | 1);
+    // RX ring base/length/head/tail (RDH=0; RDT=NRXD-1 hands all but one to HW).
+    core::ptr::write_volatile(reg(0x2800), rxring_phys as u32); // RDBAL
+    core::ptr::write_volatile(reg(0x2804), (rxring_phys >> 32) as u32); // RDBAH
+    core::ptr::write_volatile(reg(0x2808), (NRXD * 16) as u32); // RDLEN
+    core::ptr::write_volatile(reg(0x2810), 0); // RDH
+    core::ptr::write_volatile(reg(0x2818), (NRXD - 1) as u32); // RDT
+    // RCTL: EN(1) | UPE accept-all-unicast(3) | BAM accept-broadcast(15) | SECRC
+    // strip-CRC(26), BSIZE=2048(00). UPE lets the unicast ARP reply (to our MAC)
+    // through without programming the receive-address filter (RAL/RAH @ 0x5400 lie
+    // beyond the mapped 16 KiB BAR window).
+    core::ptr::write_volatile(reg(0x0100), (1 << 1) | (1 << 3) | (1 << 15) | (1 << 26));
+
+    // TX an ARP request: who-has 10.0.2.2 (the slirp gateway) tell 10.0.2.15.
+    let txring = mm::phys_to_virt(txring_phys) as *mut u8;
+    let txbuf = mm::phys_to_virt(txbuf_phys) as *mut u8;
+    core::ptr::write_bytes(txring, 0, 4096);
+    core::ptr::write_bytes(txbuf, 0, 64);
+    let mac = net::net_mac();
+    for i in 0..6 {
+        *txbuf.add(i) = 0xFF; // dst: broadcast
+        *txbuf.add(6 + i) = mac[i]; // src: our MAC
+    }
+    *txbuf.add(12) = 0x08;
+    *txbuf.add(13) = 0x06; // ethertype = ARP
+    *txbuf.add(14) = 0x00;
+    *txbuf.add(15) = 0x01; // htype = Ethernet
+    *txbuf.add(16) = 0x08;
+    *txbuf.add(17) = 0x00; // ptype = IPv4
+    *txbuf.add(18) = 0x06; // hlen
+    *txbuf.add(19) = 0x04; // plen
+    *txbuf.add(20) = 0x00;
+    *txbuf.add(21) = 0x01; // opcode = request
+    for i in 0..6 {
+        *txbuf.add(22 + i) = mac[i]; // sender MAC
+    }
+    *txbuf.add(28) = 10; // sender IP 10.0.2.15
+    *txbuf.add(29) = 0;
+    *txbuf.add(30) = 2;
+    *txbuf.add(31) = 15;
+    // target MAC (32..38) left zero (unknown)
+    *txbuf.add(38) = 10; // target IP 10.0.2.2 (slirp gateway)
+    *txbuf.add(39) = 0;
+    *txbuf.add(40) = 2;
+    *txbuf.add(41) = 2;
+    let frame_len: u16 = 60;
+    core::ptr::write_volatile(reg(0x3800), txring_phys as u32); // TDBAL
+    core::ptr::write_volatile(reg(0x3804), (txring_phys >> 32) as u32); // TDBAH
+    core::ptr::write_volatile(reg(0x3808), 16 * 16); // TDLEN
+    core::ptr::write_volatile(reg(0x3810), 0); // TDH
+    core::ptr::write_volatile(reg(0x3818), 0); // TDT
+    core::ptr::write_volatile(reg(0x0410), 0x0060_200A); // TIPG
+    core::ptr::write_volatile(reg(0x0400), (1 << 1) | (1 << 3) | (0x0F << 4) | (0x40 << 12)); // TCTL
+    core::ptr::write_volatile(txring as *mut u64, txbuf_phys); // buffer address
+    core::ptr::write_volatile((txring.add(8)) as *mut u16, frame_len); // length
+    *txring.add(11) = 0x01 | 0x02 | 0x08; // CMD: EOP | IFCS | RS
+    *txring.add(12) = 0; // status
+    core::ptr::write_volatile(reg(0x3818), 1); // TDT = 1 -> transmit the request
+
+    // Poll RX descriptor 0's Done bit (status byte bit 0). The backend delivers the
+    // ARP reply asynchronously, so periodically read the RDH register (an MMIO
+    // access — a VM exit) to give QEMU's network backend a chance to inject it.
+    let mut spins = 0u32;
+    let mut got = false;
+    let mut rxlen = 0u16;
+    while spins < 50_000_000 {
+        // Volatile: the Done bit is written by the device via DMA, so the load
+        // must not be hoisted out of the loop (matches the TX twin's poll).
+        if core::ptr::read_volatile(rxring.add(12)) & 0x01 != 0 {
+            got = true;
+            rxlen = core::ptr::read_volatile((rxring.add(8)) as *const u16);
+            break;
+        }
+        if spins & 0xFFF == 0 {
+            let _ = core::ptr::read_volatile(reg(0x2810)); // RDH: pump the backend
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    // Verify the received frame is an ARP reply from 10.0.2.2. The bytes were
+    // written by the device via DMA, so read them volatile.
+    let rxbuf0 = mm::phys_to_virt(rxbuf_phys) as *const u8;
+    let rb = |o: usize| core::ptr::read_volatile(rxbuf0.add(o));
+    let mut arp_ok = got;
+    if got {
+        if rb(12) != 0x08 || rb(13) != 0x06 {
+            arp_ok = false; // not ethertype ARP
+        }
+        if rb(20) != 0x00 || rb(21) != 0x02 {
+            arp_ok = false; // not opcode reply
+        }
+        if !(rb(28) == 10 && rb(29) == 0 && rb(30) == 2 && rb(31) == 2) {
+            arp_ok = false; // sender IP != 10.0.2.2
+        }
+    }
+    dma::dma_free(txbuf_phys, 1);
+    dma::dma_free(txring_phys, 1);
+    dma::dma_free(rxbuf_phys, NRXD);
+    dma::dma_free(rxring_phys, 1);
+    if got && arp_ok {
+        serial_write(b"E1000: rx ok len=0x");
+        serial_write_hex(rxlen as u64);
+        serial_write(b"\n");
+    } else if got {
+        serial_write(b"E1000: rx badframe\n");
+    } else {
+        serial_write(b"E1000: rx no-dd\n");
+    }
+}
+
 /// Read + report an xHCI controller's capability registers (xHCI spec 5.3).
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn xhci_report(bdf: PciBdf) {
@@ -7755,6 +7937,7 @@ unsafe fn e1000_detect() {
                 let bdf = PciBdf { bus: 0, dev, func };
                 e1000_report(bdf);
                 e1000_tx_selftest(bdf); // full-os Part II.7: e1000 TX-ring driver
+                e1000_rx_selftest(bdf); // full-os Part II.7: e1000 RX-ring driver (wire ARP round-trip)
                 return;
             }
             func += 1;

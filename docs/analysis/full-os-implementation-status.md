@@ -123,9 +123,12 @@ single safe boot-verified slice and several have hard prerequisites.
    Success event); port reset + device enumeration + a HID boot-protocol driver
    remain. The **e1000 TX ring driver** is done
    (`e1000_v1.md`: a descriptor ring on the DMA pool transmits a frame and the
-   device's Done bit confirms it); the e1000 **RX** ring + interrupt-driven
-   completion, and migrating the virtio/NVMe probes onto `dma_alloc` + routing all
-   config access through ECAM, remain.
+   device's Done bit confirms it); an **e1000 RX ring** (`e1000_v1.md`) now
+   receives a real wire frame too — the kernel ARPs the slirp gateway 10.0.2.2 and
+   the reply lands in the RX descriptor ring, verified as an ARP reply from
+   10.0.2.2. Interrupt-driven (MSI-X) completion, a continuously serviced RX ring,
+   making the e1000 the *active* NIC, and migrating the virtio/NVMe probes onto
+   `dma_alloc` + routing all config access through ECAM, remain.
 3. **III input + compositor/window-server + audio — live mouse (IRQ12), z-order compositor, HD-Audio detection done.**
    The mouse device is reset + identified, its 3-byte movement packets are decoded
    into signed dx/dy + buttons with cursor accumulation, and **live movement is

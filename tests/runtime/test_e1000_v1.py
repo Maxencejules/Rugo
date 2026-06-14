@@ -100,6 +100,10 @@ def test_e1000_detected(find_in_order):
         # The TX descriptor ring transmitted a frame and the device wrote back the
         # descriptor Done bit (the TX DMA path works end to end).
         "E1000: tx ok",
+        # The RX descriptor ring received a real inbound frame: the kernel sent an
+        # ARP request for the slirp gateway (10.0.2.2) out the NIC and the wire
+        # reply landed in the ring (descriptor Done bit + verified ARP reply).
+        "E1000: rx ok len=0x",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
@@ -110,5 +114,10 @@ def test_e1000_detected(find_in_order):
     assert "E1000: tx no-dd" not in out
     assert "E1000: tx dma fail" not in out
     assert "E1000: tx mmio fail" not in out
+    # The RX path must have received and validated the reply.
+    assert "E1000: rx no-dd" not in out
+    assert "E1000: rx badframe" not in out
+    assert "E1000: rx dma fail" not in out
+    assert "E1000: rx mmio fail" not in out
     # The EEPROM returned the pinned MAC.
     assert E1000_MAC_PACKED in out
