@@ -378,8 +378,13 @@ const DEMAND_STACK_GUARD: u64 = 0x4000;
 static mut DEMAND_MAPPED: u64 = 0;
 
 const PTE_P_W_U: u64 = 0x07;
+const PTE_P_U: u64 = 0x05; // present + user, read-only
 const PTE_W: u64 = 0x02;
 const PTE_NX: u64 = 1 << 63;
+// Software bit (available to the OS): marks a copy-on-write page so the
+// fault handler can tell a forked CoW page from a genuinely read-only
+// mmap. Without it, an mmap(PROT_READ) write would be silently promoted.
+const PTE_COW: u64 = 1 << 9;
 const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 
 // Copy-on-write refcounts (full-os guide Part I.2). Indexed by frame
@@ -721,10 +726,10 @@ pub unsafe fn address_space_fork(parent_pml4: u64) -> Option<u64> {
             while j < 512 {
                 let pte = *p_pt.add(j);
                 if pte & 1 != 0 {
-                    // Share the data frame read-only; both sides fault on
-                    // the first write. No new physical frame, so the demand
-                    // accounting is unchanged here.
-                    let ro = pte & !PTE_W;
+                    // Share the data frame read-only and mark it CoW; both
+                    // sides fault on the first write. No new physical frame,
+                    // so the demand accounting is unchanged here.
+                    let ro = (pte & !PTE_W) | PTE_COW;
                     *p_pt.add(j) = ro;
                     *c_pt.add(j) = ro;
                     cow_incr(pte & PHYS_MASK);
@@ -763,15 +768,16 @@ pub unsafe fn cow_break(va: u64) -> bool {
     let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
     let pt_idx = ((va >> 12) & 0x1FF) as usize;
     let pte = *pt.add(pt_idx);
-    // Only a present, non-writable user page is a CoW candidate.
-    if pte & 1 == 0 || pte & PTE_W != 0 {
+    // Only a present, CoW-marked page is a candidate. A genuinely
+    // read-only mmap (no PTE_COW) must fault through to containment.
+    if pte & 1 == 0 || pte & PTE_COW == 0 {
         return false;
     }
     let frame = pte & PHYS_MASK;
     let idx = (frame / FRAME_SIZE) as usize;
     if idx < MAX_FRAMES && COW_REFCOUNT[idx] == 0 {
-        // Sole owner: just restore write permission, no copy needed.
-        *pt.add(pt_idx) = pte | PTE_W;
+        // Sole owner: clear the CoW mark and restore write permission.
+        *pt.add(pt_idx) = (pte & !PTE_COW) | PTE_W;
         core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
         return true;
     }
@@ -788,8 +794,91 @@ pub unsafe fn cow_break(va: u64) -> bool {
     if idx < MAX_FRAMES && COW_REFCOUNT[idx] > 0 {
         COW_REFCOUNT[idx] -= 1;
     }
-    *pt.add(pt_idx) = fresh | (pte & !PHYS_MASK) | PTE_W;
+    *pt.add(pt_idx) = fresh | (pte & !PHYS_MASK & !PTE_COW) | PTE_W;
     DEMAND_MAPPED += 1;
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
+}
+
+// ---- mmap / brk / munmap backing (full-os guide Part I.4) ----
+
+/// Map one user page at `va` in the current address space with the given
+/// prot bits (1=R, 2=W, 4=X). Idempotent if already present. Returns false
+/// only on frame exhaustion.
+pub unsafe fn vm_map_current(va: u64, prot: u64) -> bool {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return false;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return false;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as usize;
+    let mut pde = *pd.add(pd_idx);
+    if pde & 1 == 0 {
+        let pt = match alloc_frame() {
+            Some(f) => f,
+            None => return false,
+        };
+        *pd.add(pd_idx) = pt | PTE_P_W_U;
+        pde = pt | PTE_P_W_U;
+    }
+    let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as usize;
+    if *pt.add(pt_idx) & 1 != 0 {
+        return true; // already mapped
+    }
+    let frame = match alloc_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+    let mut flags = PTE_P_U;
+    if prot & 2 != 0 {
+        flags |= PTE_W;
+    }
+    if prot & 4 == 0 {
+        flags |= PTE_NX;
+    }
+    *pt.add(pt_idx) = frame | flags;
+    DEMAND_MAPPED += 1;
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
+}
+
+/// Unmap one user page at `va` in the current address space, returning its
+/// frame (respecting CoW refcounts). Returns true if a page was unmapped.
+pub unsafe fn vm_unmap_current(va: u64) -> bool {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return false;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return false;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pde = *pd.add(((va >> 21) & 0x1FF) as usize);
+    if pde & 1 == 0 {
+        return false;
+    }
+    let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as usize;
+    let pte = *pt.add(pt_idx);
+    if pte & 1 == 0 {
+        return false;
+    }
+    *pt.add(pt_idx) = 0;
+    cow_release_leaf(pte & PHYS_MASK);
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
     true
 }

@@ -2645,6 +2645,9 @@ cfg_r4! {
         // (no CR3 reload); non-zero = a private address space whose
         // user-half is isolated and reclaimed on exit.
         pml4_phys: u64,
+        // Program break for sys_vm_ctl brk (full-os guide Part I.4).
+        // 0 = not yet initialized (lazily set to the brk base on first use).
+        heap_brk: u64,
     }
 
     impl R4Task {
@@ -2679,6 +2682,7 @@ cfg_r4! {
             sig_saved_frame: [0u64; 22],
             uid: 0,
             pml4_phys: 0,
+            heap_brk: 0,
         };
     }
 
@@ -2767,6 +2771,8 @@ cfg_r4! {
         } else {
             R4_TASKS[parent_tid].pml4_phys
         };
+        // Program break is per-task and reset on slot reuse.
+        R4_TASKS[tid].heap_brk = 0;
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -3471,6 +3477,122 @@ cfg_r4! {
         serial_write(b"\n");
         exec_log(name, b"ok");
         tid as u64
+    }
+
+    // mmap/brk region layout for sys_vm_ctl (within the per-task demand
+    // window, below the exec window so it never collides with loaded code
+    // or the demand stacks): brk grows in [0x0100_0000,0x0120_0000) and
+    // anonymous mmap lives in [0x0120_0000,0x0140_0000).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const VM_BRK_BASE: u64 = 0x0100_0000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const VM_BRK_MAX: u64 = 0x0120_0000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const VM_MMAP_BASE: u64 = 0x0120_0000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const VM_MMAP_END: u64 = 0x0140_0000;
+
+    /// sys_vm_ctl (ABI v3.2 id 50, op-multiplexed): op 1 = mmap(va, sz,
+    /// prot) -> va, op 2 = munmap(va, sz) -> 0, op 3 = brk(new) -> old brk
+    /// (new = 0 queries the current break). -1 on error.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_vm_ctl(op: u64, a2: u64, a3: u64, a4: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => {
+                // mmap(va, sz, prot)
+                let (va, sz, prot) = (a2, a3, a4);
+                if va & 0xFFF != 0 || sz == 0 || sz & 0xFFF != 0 {
+                    return ERR;
+                }
+                let end = match va.checked_add(sz) {
+                    Some(e) => e,
+                    None => return ERR,
+                };
+                if va < VM_MMAP_BASE || end > VM_MMAP_END {
+                    return ERR;
+                }
+                let mut off = 0u64;
+                while off < sz {
+                    if !mm::vm_map_current(va + off, prot) {
+                        // Roll back the pages mapped so far.
+                        let mut u = 0u64;
+                        while u < off {
+                            mm::vm_unmap_current(va + u);
+                            u += 0x1000;
+                        }
+                        return ERR;
+                    }
+                    off += 0x1000;
+                }
+                serial_write(b"MM: mmap va=0x");
+                serial_write_hex(va);
+                serial_write(b" sz=0x");
+                serial_write_hex(sz);
+                serial_write(b"\n");
+                va
+            }
+            2 => {
+                // munmap(va, sz)
+                let (va, sz) = (a2, a3);
+                if va & 0xFFF != 0 || sz == 0 || sz & 0xFFF != 0 {
+                    return ERR;
+                }
+                let end = match va.checked_add(sz) {
+                    Some(e) => e,
+                    None => return ERR,
+                };
+                if va < VM_MMAP_BASE || end > VM_MMAP_END {
+                    return ERR;
+                }
+                let mut off = 0u64;
+                while off < sz {
+                    mm::vm_unmap_current(va + off);
+                    off += 0x1000;
+                }
+                serial_write(b"MM: munmap va=0x");
+                serial_write_hex(va);
+                serial_write(b"\n");
+                0
+            }
+            3 => {
+                // brk(new) - 0 queries
+                if R4_TASKS[R4_CURRENT].heap_brk == 0 {
+                    R4_TASKS[R4_CURRENT].heap_brk = VM_BRK_BASE;
+                }
+                let cur = R4_TASKS[R4_CURRENT].heap_brk;
+                let new = a2;
+                if new == 0 {
+                    return cur;
+                }
+                if new & 0xFFF != 0 || new < VM_BRK_BASE || new > VM_BRK_MAX {
+                    return ERR;
+                }
+                if new > cur {
+                    let mut a = cur;
+                    while a < new {
+                        if !mm::vm_map_current(a, 0x3) {
+                            return ERR;
+                        }
+                        a += 0x1000;
+                    }
+                } else if new < cur {
+                    let mut a = new;
+                    while a < cur {
+                        mm::vm_unmap_current(a);
+                        a += 0x1000;
+                    }
+                }
+                R4_TASKS[R4_CURRENT].heap_brk = new;
+                serial_write(b"MM: brk 0x");
+                serial_write_hex(cur);
+                serial_write(b" -> 0x");
+                serial_write_hex(new);
+                serial_write(b"\n");
+                cur
+            }
+            _ => ERR,
+        }
     }
 
     /// sys_proc_ctl (ABI v3.2 id 51, op-multiplexed): op 1 = fork (a

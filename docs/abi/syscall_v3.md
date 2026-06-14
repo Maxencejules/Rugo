@@ -27,10 +27,13 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   op 3 = sigreturn; contract in `docs/runtime/signals_v1.md`);
   `49` = `sys_net_query` (op 1 = DHCP discover, op 2 = DNS A query,
   op 3 = poll; contract in `docs/runtime/netcfg_v1.md`);
+  `50` = `sys_vm_ctl` (op 1 = mmap(va, sz, prot) → va, op 2 = munmap(va,
+  sz) → 0, op 3 = brk(new) → old break; contract in
+  `docs/runtime/mmap_v1.md`);
   `51` = `sys_proc_ctl` (op 1 = fork — copy-on-write duplicate of the
   caller, returns child tid to the parent and 0 to the child; op 2 = clone
   — new thread sharing the caller's address space, `rdi` = entry; contract
-  in `docs/runtime/fork_v1.md`). `50` is reserved for `sys_vm_ctl`.
+  in `docs/runtime/fork_v1.md`).
 
 ## Invocation
 

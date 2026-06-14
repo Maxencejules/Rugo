@@ -202,6 +202,14 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 		// write to a shared global does not disturb the parent's copy.
 		return false, spawnRun(appNameForkprobe, "")
 	}
+	if len(cmd) > 6 && cmd[:6] == "probe " {
+		// Generic probe runner: spawn any app in the package store by
+		// name with the remaining argument string. Probes carry their own
+		// verdict markers; spawn+reap success is reported regardless.
+		name, pargs := splitFirstWord(cmd[6:])
+		spawnRun([]byte(name), pargs)
+		return false, true
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

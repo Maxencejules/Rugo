@@ -197,6 +197,11 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                 *frame.add(14) = sys_net_query(arg1, arg2, arg3);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            50 => {
+                let arg4 = *frame.add(5); // r10
+                *frame.add(14) = sys_vm_ctl(arg1, arg2, arg3, arg4);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             51 => {
                 sys_proc_ctl(frame, arg1, arg2, arg3);
             }
