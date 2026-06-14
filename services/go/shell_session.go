@@ -192,6 +192,11 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if cmd == "sigprobe" {
 		return false, spawnRun(appNameSigprobe, "")
 	}
+	if cmd == "asconc" {
+		// Per-process address-space proof: two probes run concurrently,
+		// each isolated in its own address space.
+		return false, asConc()
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

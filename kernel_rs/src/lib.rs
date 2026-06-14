@@ -2640,6 +2640,11 @@ cfg_r4! {
         // User id (gap item 10): 0 = root (boot services), spawned
         // external apps run as uid 100.
         uid: u8,
+        // Per-process address space (full-os keystone): the physical
+        // address of this task's PML4. 0 = run on the shared/boot table
+        // (no CR3 reload); non-zero = a private address space whose
+        // user-half is isolated and reclaimed on exit.
+        pml4_phys: u64,
     }
 
     impl R4Task {
@@ -2673,6 +2678,7 @@ cfg_r4! {
             sig_in_handler: false,
             sig_saved_frame: [0u64; 22],
             uid: 0,
+            pml4_phys: 0,
         };
     }
 
@@ -2752,6 +2758,15 @@ cfg_r4! {
         } else {
             R4_TASKS[parent_tid].uid
         };
+        // Per-process address space (full-os keystone): a thread inherits
+        // its spawner's table; a fresh root task starts on the shared
+        // table (0 here; the go-lane boot path stamps the shared PML4 and
+        // sys_spawn installs a private one after this returns).
+        R4_TASKS[tid].pml4_phys = if tid == parent_tid {
+            0
+        } else {
+            R4_TASKS[parent_tid].pml4_phys
+        };
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -2802,6 +2817,17 @@ cfg_r4! {
     }
 
     unsafe fn r4_switch_to(frame: *mut u64, tid: usize) {
+        // Per-process address space (full-os keystone): load the target
+        // task's PML4 before resuming it. The boot task carries the shared
+        // table's physical address, spawned apps carry private ones; a 0
+        // (other lanes) means "leave CR3 as-is". This flushes the TLB.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            let pml4 = R4_TASKS[tid].pml4_phys;
+            if pml4 != 0 {
+                core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack));
+            }
+        }
         for i in 0..22 { *frame.add(i) = R4_TASKS[tid].saved_frame[i]; }
         R4_TASKS[tid].state = R4State::Running;
         R4_TASKS[tid].dispatch_count += 1;
@@ -3045,10 +3071,23 @@ cfg_r4! {
         r4_cleanup_task_resources(cur);
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         {
-            // Release the single-occupancy exec app window on any exit
-            // path, including fault containment.
             if EXEC_APP_TID == cur as i32 {
                 EXEC_APP_TID = -1;
+            }
+            // Reclaim a private address space on any exit path (clean exit,
+            // signal kill, or fault containment). Step CR3 onto the shared
+            // table first so we are not standing on the page tree we free.
+            let cur_pml4 = R4_TASKS[cur].pml4_phys;
+            if cur_pml4 != 0 && cur_pml4 != SHARED_PML4_PHYS {
+                core::arch::asm!("mov cr3, {}", in(reg) SHARED_PML4_PHYS,
+                                 options(nostack));
+                mm::address_space_release(cur_pml4);
+                R4_TASKS[cur].pml4_phys = SHARED_PML4_PHYS;
+                serial_write(b"ASRELEASE: tid=0x");
+                serial_write_hex(cur as u64);
+                serial_write(b" as=0x");
+                serial_write_hex(cur_pml4);
+                serial_write(b"\n");
             }
         }
         R4_TASKS[cur].exit_status = exit_status;
@@ -3115,6 +3154,12 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut EXEC_APP_TID: i32 = -1;
 
+    // Physical address of the shared/boot PML4 (set in setup_go_user_pages).
+    // Per-process address spaces clone it for their kernel half, and the
+    // boot task / service threads run on it directly.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut SHARED_PML4_PHYS: u64 = 0;
+
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn exec_log(name: &[u8], what: &[u8]) {
         serial_write(b"EXEC: ");
@@ -3125,10 +3170,11 @@ cfg_r4! {
     }
 
     /// Validate and copy an ET_EXEC ELF64 whose segments live entirely in
-    /// the exec app window. Returns the entry point. The destination pages
-    /// are demand-paged; copyout_user pre-maps them.
+    /// the exec app window. Returns the entry point. Segments are mapped
+    /// and written into the child's private address space `pml4_phys`, so
+    /// the load targets the new process, not the spawner.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn exec_load_app(image: &[u8]) -> Option<u64> {
+    unsafe fn exec_load_app(pml4_phys: u64, image: &[u8]) -> Option<u64> {
         if image.len() < 64 {
             return None;
         }
@@ -3149,7 +3195,6 @@ cfg_r4! {
         if e_phentsize < 56 || e_phnum == 0 || e_phnum > 8 {
             return None;
         }
-        let zeros = [0u8; 512];
         let mut i = 0usize;
         while i < e_phnum {
             let ph = e_phoff + i * e_phentsize;
@@ -3172,18 +3217,21 @@ cfg_r4! {
                 {
                     return None;
                 }
-                if copyout_user(p_vaddr, &image[p_offset..p_offset + p_filesz], p_filesz)
-                    .is_err()
+                if !mm::as_copyout(pml4_phys, p_vaddr, &image[p_offset..p_offset + p_filesz])
                 {
                     return None;
                 }
-                let mut z = p_filesz;
-                while z < p_memsz {
-                    let chunk = core::cmp::min(zeros.len(), p_memsz - z);
-                    if copyout_user(p_vaddr + z as u64, &zeros[..chunk], chunk).is_err() {
-                        return None;
-                    }
-                    z += chunk;
+                // BSS: map (zeroed) the rest of the segment. Fresh frames
+                // arrive zeroed, and the file-backed tail page was copied
+                // into an already-zeroed frame, so no explicit memset.
+                if p_memsz > p_filesz
+                    && !mm::as_map_zeroed(
+                        pml4_phys,
+                        p_vaddr + p_filesz as u64,
+                        p_memsz - p_filesz,
+                    )
+                {
+                    return None;
                 }
             }
             i += 1;
@@ -3244,10 +3292,9 @@ cfg_r4! {
             return ERR;
         }
         let name = &name_buf[..n];
-        if EXEC_APP_TID >= 0 {
-            exec_log(name, b"busy");
-            return ERR;
-        }
+        // Per-process address spaces (full-os keystone): the exec window is
+        // no longer single-occupancy. Each spawn gets a private address
+        // space, so multiple apps can be resident and run concurrently.
         if !storage::r4_storage_available() {
             exec_log(name, b"nodisk");
             return ERR;
@@ -3342,14 +3389,6 @@ cfg_r4! {
             return ERR;
         }
 
-        let entry = match exec_load_app(elf) {
-            Some(e) => e,
-            None => {
-                exec_log(name, b"badelf");
-                return ERR;
-            }
-        };
-
         let parent = R4_CURRENT;
         let tid = match r4_find_spawn_slot() {
             Some(t) => t,
@@ -3358,19 +3397,42 @@ cfg_r4! {
                 return ERR;
             }
         };
-        // Deliver the argument string (NUL terminated) to the args page;
-        // copyout pre-maps it.
-        if copyout_user(EXEC_ARGS_VA, &args_buf[..args_n + 1], args_n + 1).is_err() {
+        // Build the child's private address space and load the ELF into it
+        // (not into the spawner's). The kernel half is cloned from the
+        // shared table so the kernel stays reachable under the child's CR3.
+        let child_pml4 = match mm::address_space_create(SHARED_PML4_PHYS) {
+            Some(p) => p,
+            None => {
+                exec_log(name, b"noas");
+                return ERR;
+            }
+        };
+        let entry = match exec_load_app(child_pml4, elf) {
+            Some(e) => e,
+            None => {
+                mm::address_space_release(child_pml4);
+                exec_log(name, b"badelf");
+                return ERR;
+            }
+        };
+        // Deliver the argument string (NUL terminated) to the child's args
+        // page in its own address space.
+        if !mm::as_copyout(child_pml4, EXEC_ARGS_VA, &args_buf[..args_n + 1]) {
+            mm::address_space_release(child_pml4);
             exec_log(name, b"badargs");
             return ERR;
         }
         if !spawn_stdio_ok(stdin_fd, M8FdKind::PipeR)
             || !spawn_stdio_ok(stdout_fd, M8FdKind::PipeW)
         {
+            mm::address_space_release(child_pml4);
             exec_log(name, b"badfd");
             return ERR;
         }
         r4_init_task(tid, entry, r4_stack_top_for_slot(tid), parent);
+        // Install the private address space (r4_init_task inherited the
+        // parent's, so this must come after it).
+        R4_TASKS[tid].pml4_phys = child_pml4;
         // External apps get read access to the file tree (storage) but no
         // network, spawn, or IPC surface.
         R4_TASKS[tid].can_spawn = false;
@@ -3402,6 +3464,11 @@ cfg_r4! {
         R4_TASKS[tid].state = R4State::Ready;
         R4_THREADS_CREATED += 1;
         EXEC_APP_TID = tid as i32;
+        serial_write(b"SPAWN: ");
+        serial_write(name);
+        serial_write(b" as_ok 0x");
+        serial_write_hex(child_pml4);
+        serial_write(b"\n");
         exec_log(name, b"ok");
         tid as u64
     }
@@ -4345,6 +4412,11 @@ cfg_r4! {
         }
 
         let new_pml4_phys = kv2p(new_pml4 as u64);
+        // Per-process address spaces clone this table's kernel half.
+        #[cfg(not(feature = "compat_real_test"))]
+        {
+            SHARED_PML4_PHYS = new_pml4_phys;
+        }
         core::arch::asm!("mov cr3, {}", in(reg) new_pml4_phys, options(nostack));
     }
 }
@@ -6560,6 +6632,9 @@ pub extern "C" fn kmain() -> ! {
         }
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
+        // The boot task and its service threads run on the shared table;
+        // spawned apps get private address spaces cloned from it.
+        R4_TASKS[0].pml4_phys = SHARED_PML4_PHYS;
         R4_TASKS[0].state = R4State::Running;
         R4_CURRENT = 0;
         sched::pic_init();

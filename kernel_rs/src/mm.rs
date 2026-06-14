@@ -479,3 +479,169 @@ pub fn try_demand_map(va: u64) -> bool {
         true
     }
 }
+
+// ---- per-process address spaces (full-os implementation keystone) ----
+//
+// A spawned task gets its own PML4. Its kernel-half entries are cloned
+// from the shared/boot table (so kernel text, the HHDM and the page-table
+// pool stay reachable under any CR3), while PML4[0] gets a fresh, private
+// PDPT/PD subtree covering the user region [0, 1 GiB). All user memory
+// (exec window, demand heap, demand stacks, args page) lives in that first
+// 1 GiB, so a single PD per address space suffices. CR3 is reloaded per
+// task in r4_switch_to (flushing the TLB); try_demand_map then resolves
+// faults against the faulting task's table automatically, since it reads
+// CR3. Releasing an address space walks only the private user subtree, so
+// the cloned kernel-half pages are never freed.
+
+/// Create a private address space cloned from `src_pml4_phys`. Returns the
+/// new PML4 physical address, or None if frames are exhausted.
+pub unsafe fn address_space_create(src_pml4_phys: u64) -> Option<u64> {
+    let pml4 = alloc_frame()?;
+    let pdpt = match alloc_frame() {
+        Some(p) => p,
+        None => {
+            free_frame(pml4);
+            return None;
+        }
+    };
+    let pd = match alloc_frame() {
+        Some(p) => p,
+        None => {
+            free_frame(pdpt);
+            free_frame(pml4);
+            return None;
+        }
+    };
+    // Clone every entry (kernel-half mappings + HHDM) from the source.
+    let src = phys_to_virt(src_pml4_phys & PHYS_MASK) as *const u64;
+    let dst = phys_to_virt(pml4) as *mut u64;
+    let mut i = 0usize;
+    while i < 512 {
+        *dst.add(i) = *src.add(i);
+        i += 1;
+    }
+    // Override the user half with a fresh, private subtree. The PD is left
+    // zeroed (alloc_frame zeroes); demand faults fill PD/PT entries.
+    *dst = pdpt | PTE_P_W_U;
+    *(phys_to_virt(pdpt) as *mut u64) = pd | PTE_P_W_U;
+    Some(pml4)
+}
+
+/// Resolve (allocating on demand) the user page covering `va` in
+/// `pml4_phys`; returns the backing frame's physical address. NX matches
+/// try_demand_map: cleared inside the exec window, set everywhere else.
+unsafe fn as_get_page(pml4_phys: u64, va: u64) -> Option<u64> {
+    let pml4 = phys_to_virt(pml4_phys & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return None;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return None;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as usize;
+    let mut pde = *pd.add(pd_idx);
+    if pde & 1 == 0 {
+        let pt = alloc_frame()?;
+        *pd.add(pd_idx) = pt | PTE_P_W_U;
+        pde = pt | PTE_P_W_U;
+    }
+    let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as usize;
+    let pte = *pt.add(pt_idx);
+    if pte & 1 != 0 {
+        return Some(pte & PHYS_MASK);
+    }
+    let frame = alloc_frame()?;
+    let nx = if va >= EXEC_WINDOW_BASE && va < EXEC_WINDOW_END {
+        0
+    } else {
+        PTE_NX
+    };
+    *pt.add(pt_idx) = frame | PTE_P_W_U | nx;
+    DEMAND_MAPPED += 1;
+    Some(frame)
+}
+
+/// Copy `data` into address space `pml4_phys` at user va `va`, mapping
+/// pages as needed. Loads ELF segments into a child before it runs.
+pub unsafe fn as_copyout(pml4_phys: u64, va: u64, data: &[u8]) -> bool {
+    let mut off = 0usize;
+    while off < data.len() {
+        let cur = va + off as u64;
+        let frame = match as_get_page(pml4_phys, cur) {
+            Some(f) => f,
+            None => return false,
+        };
+        let page_off = (cur & 0xFFF) as usize;
+        let n = core::cmp::min(0x1000 - page_off, data.len() - off);
+        core::ptr::copy_nonoverlapping(
+            data.as_ptr().add(off),
+            (phys_to_virt(frame) as *mut u8).add(page_off),
+            n,
+        );
+        off += n;
+    }
+    true
+}
+
+/// Ensure [va, va+len) is mapped in `pml4_phys`. Fresh frames arrive
+/// zeroed, so this is the BSS path.
+pub unsafe fn as_map_zeroed(pml4_phys: u64, va: u64, len: usize) -> bool {
+    let mut off = 0usize;
+    while off < len {
+        let cur = va + off as u64;
+        if as_get_page(pml4_phys, cur).is_none() {
+            return false;
+        }
+        let page_off = (cur & 0xFFF) as usize;
+        let n = core::cmp::min(0x1000 - page_off, len - off);
+        off += n;
+    }
+    true
+}
+
+/// Free a private address space: walk PML4[0] -> PDPT[0] -> PD -> PTs,
+/// returning every user frame and page-table frame to the PMM. Only the
+/// private user subtree is walked, so cloned kernel-half entries are left
+/// untouched. The demand-frame accounting is rolled back per leaf freed.
+pub unsafe fn address_space_release(pml4_phys: u64) {
+    let pml4 = phys_to_virt(pml4_phys & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4;
+    if pml4e & 1 != 0 {
+        let pdpt_phys = pml4e & PHYS_MASK;
+        let pdpt = phys_to_virt(pdpt_phys) as *mut u64;
+        let pdpte = *pdpt;
+        if pdpte & 1 != 0 {
+            let pd_phys = pdpte & PHYS_MASK;
+            let pd = phys_to_virt(pd_phys) as *mut u64;
+            let mut i = 0usize;
+            while i < 512 {
+                let pde = *pd.add(i);
+                if pde & 1 != 0 {
+                    let pt_phys = pde & PHYS_MASK;
+                    let pt = phys_to_virt(pt_phys) as *mut u64;
+                    let mut j = 0usize;
+                    while j < 512 {
+                        let pte = *pt.add(j);
+                        if pte & 1 != 0 {
+                            free_frame(pte & PHYS_MASK);
+                            if DEMAND_MAPPED > 0 {
+                                DEMAND_MAPPED -= 1;
+                            }
+                        }
+                        j += 1;
+                    }
+                    free_frame(pt_phys);
+                }
+                i += 1;
+            }
+            free_frame(pd_phys);
+        }
+        free_frame(pdpt_phys);
+    }
+    free_frame(pml4_phys & PHYS_MASK);
+}
