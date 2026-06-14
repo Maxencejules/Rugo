@@ -2648,6 +2648,10 @@ cfg_r4! {
         // Program break for sys_vm_ctl brk (full-os guide Part I.4).
         // 0 = not yet initialized (lazily set to the brk base on first use).
         heap_brk: u64,
+        // Syscall allowlist (full-os guide Part IV.10 sandbox). Bit N set =
+        // syscall N permitted. u64::MAX = unrestricted; narrowed monotonically
+        // by sys_sandbox. Syscalls 0 (debug_write) and 2 (exit) stay allowed.
+        sec_filter_mask: u64,
     }
 
     impl R4Task {
@@ -2683,6 +2687,7 @@ cfg_r4! {
             uid: 0,
             pml4_phys: 0,
             heap_brk: 0,
+            sec_filter_mask: u64::MAX,
         };
     }
 
@@ -2773,6 +2778,13 @@ cfg_r4! {
         };
         // Program break is per-task and reset on slot reuse.
         R4_TASKS[tid].heap_brk = 0;
+        // A new task starts unrestricted, or inherits a thread parent's
+        // narrowed allowlist (reset on slot reuse).
+        R4_TASKS[tid].sec_filter_mask = if tid == parent_tid {
+            u64::MAX
+        } else {
+            R4_TASKS[parent_tid].sec_filter_mask
+        };
         if tid == parent_tid {
             R4_TASKS[tid].isolation_domain = 0;
             R4_TASKS[tid].cap_flags = R4_TASK_CAP_MASK;
@@ -3787,6 +3799,23 @@ cfg_r4! {
             done += chunk;
         }
         len
+    }
+
+    /// sys_sandbox (ABI v3.2 id 59): restrict the calling task to the
+    /// syscalls whose bit is set in `allow_mask`. Monotonic — a mask wider
+    /// than the current one is rejected (-1). Syscalls 0 (debug_write) and
+    /// 2 (thread_exit) are always kept so a sandboxed task can still report
+    /// and exit. Returns 0 on success.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_sandbox(allow_mask: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let cur = R4_TASKS[R4_CURRENT].sec_filter_mask;
+        // Reject any attempt to re-grant a syscall not currently allowed.
+        if allow_mask & !cur != 0 {
+            return ERR;
+        }
+        R4_TASKS[R4_CURRENT].sec_filter_mask = (cur & allow_mask) | (1 << 0) | (1 << 2);
+        0
     }
 
     unsafe fn r4_find_spawn_slot() -> Option<usize> {

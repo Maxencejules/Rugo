@@ -44,6 +44,20 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             qemu_exit(arg1 as u8);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
         }
+        // Sandbox allowlist (full-os guide Part IV.10): a task that has
+        // narrowed its mask via sys_sandbox is denied any syscall whose bit
+        // is clear. Default mask is all-ones, so unsandboxed tasks are
+        // unaffected.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if nr < 64 && (R4_TASKS[R4_CURRENT].sec_filter_mask >> nr) & 1 == 0 {
+                serial_write(b"SANDBOX: deny nr=0x");
+                serial_write_hex(nr);
+                serial_write(b"\n");
+                *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
+                return;
+            }
+        }
         match nr {
             0 => {
                 *frame.add(14) = sys_debug_write(arg1, arg2);
@@ -212,6 +226,10 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             54 => {
                 *frame.add(14) = sys_getrandom(arg1, arg2);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            59 => {
+                *frame.add(14) = sys_sandbox(arg1);
             }
             _ => {
                 *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;

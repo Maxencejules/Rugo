@@ -38,7 +38,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   nanoseconds since boot, 1 = REALTIME seconds since the Unix epoch);
   contract in `docs/runtime/clock_v1.md`);
   `54` = `sys_getrandom` (`rdi`=buf, `rsi`=len → bytes written; contract in
-  `docs/runtime/rng_v1.md`).
+  `docs/runtime/rng_v1.md`);
+  `59` = `sys_sandbox` (`rdi`=allow_mask → restrict the caller to the
+  syscalls whose bit is set; monotonic; syscalls 0 and 2 always kept;
+  contract in `docs/runtime/sandbox_v1.md`).
 
 ## Invocation
 
