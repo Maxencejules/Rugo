@@ -30,6 +30,23 @@ const GUEST_IP: [u8; 4] = [10, 0, 2, 15];
 const TCP_RTO_TICKS: u32 = 50;
 const TCP_MAX_RETRIES: u32 = 5;
 const RT_DATA_MAX: usize = 512;
+// Adaptive-RTO bounds in PIT ticks (full-os guide Part II.6, RTT estimation).
+// RFC 6298 mandates a 1 s floor; this deterministic tick model keeps a modest
+// floor (40 ms) so the self-test can exercise small RTTs, and a 60 s ceiling.
+const TCP_RTO_MIN: u32 = 4;
+const TCP_RTO_MAX: u32 = 6000;
+
+// Free-running PIT-tick counter for RTT measurement (advanced once per
+// tcp_rt_tick). Only deltas (ack tick - send tick) are used, so its absolute
+// value and persistence across connections are irrelevant.
+static mut TCP_TICK: u64 = 0;
+
+// Congestion control (full-os guide Part II.6, RFC 5681): slow start + congestion
+// avoidance, driven by the same cumulative-ACK and RTO-timeout events as the
+// retransmit machinery. MSS-quantised, integer-only.
+const TCP_MSS: u32 = 512;
+const TCP_IW: u32 = TCP_MSS; // initial congestion window = 1 SMSS
+const TCP_INIT_SSTHRESH: u32 = 65535; // start large -> begin in slow start
 
 struct TcpConn {
     state: u8,
@@ -54,6 +71,23 @@ struct TcpConn {
     rt_retries: u32,
     rt_last_send_ok: bool, // did the most recent retransmit actually emit?
     pending_close: bool,   // a close() deferred because data was outstanding
+    // RTT estimation (full-os guide Part II.6, RFC 6298 + Karn's algorithm).
+    // srtt8 = 8*SRTT, rttvar4 = 4*RTTVAR (integer fixed-point, no FP); rto_ticks
+    // is the SRTT-derived base RTO that drives the retransmit timer. rt_send_tick
+    // is the TCP_TICK at which the outstanding segment was first sent, so an ACK
+    // can measure its RTT — but ONLY when the segment was never retransmitted
+    // (Karn: a retransmitted segment's RTT is ambiguous and must not be sampled).
+    srtt8: u32,
+    rttvar4: u32,
+    rto_ticks: u32,
+    rtt_valid: bool,
+    rt_send_tick: u64,
+    // Congestion control (full-os guide Part II.6): congestion window + slow-start
+    // threshold, both in bytes. cwnd < ssthresh => slow start (exponential);
+    // else congestion avoidance (additive). An RTO timeout collapses cwnd to one
+    // segment and halves ssthresh.
+    cwnd: u32,
+    ssthresh: u32,
 }
 
 static mut CONN: TcpConn = TcpConn {
@@ -78,7 +112,38 @@ static mut CONN: TcpConn = TcpConn {
     rt_retries: 0,
     rt_last_send_ok: false,
     pending_close: false,
+    srtt8: 0,
+    rttvar4: 0,
+    rto_ticks: TCP_RTO_TICKS,
+    rtt_valid: false,
+    rt_send_tick: 0,
+    cwnd: TCP_IW,
+    ssthresh: TCP_INIT_SSTHRESH,
 };
+
+/// Congestion control on a cumulative ACK of `acked` new data bytes (RFC 5681).
+/// In slow start (cwnd < ssthresh) cwnd grows by up to one SMSS per ACK
+/// (exponential per RTT); in congestion avoidance it grows by ~SMSS²/cwnd per ACK
+/// (additive, ~one SMSS per RTT).
+unsafe fn cc_on_ack(acked: u32) {
+    if acked == 0 {
+        return;
+    }
+    if CONN.cwnd < CONN.ssthresh {
+        CONN.cwnd = CONN.cwnd.saturating_add(acked.min(TCP_MSS));
+    } else {
+        let inc = ((TCP_MSS * TCP_MSS) / CONN.cwnd).max(1);
+        CONN.cwnd = CONN.cwnd.saturating_add(inc);
+    }
+}
+
+/// Congestion control on an RTO timeout (RFC 5681 §3.1): set ssthresh to half the
+/// window (floored at 2·SMSS) and collapse cwnd to one segment, restarting slow
+/// start.
+unsafe fn cc_on_timeout() {
+    CONN.ssthresh = (CONN.cwnd / 2).max(2 * TCP_MSS);
+    CONN.cwnd = TCP_MSS;
+}
 
 pub(crate) unsafe fn tcp_state() -> u8 {
     CONN.state
@@ -184,8 +249,35 @@ unsafe fn tcp_rt_arm(flags: u8, seq: u32, payload: &[u8]) {
     CONN.rt_seq = seq;
     CONN.rt_len = n;
     CONN.rt_data[..n].copy_from_slice(&payload[..n]);
-    CONN.rt_ticks_left = TCP_RTO_TICKS;
+    // Drive the timer from the SRTT-derived adaptive RTO (Part II.6), defaulting
+    // to TCP_RTO_TICKS until the first RTT sample. Record the send tick so a
+    // clean (never-retransmitted) ACK can measure this segment's RTT.
+    CONN.rt_ticks_left = CONN.rto_ticks;
     CONN.rt_retries = 0;
+    CONN.rt_send_tick = TCP_TICK;
+}
+
+/// Fold one RTT measurement `m` (in ticks) into SRTT/RTTVAR and recompute the
+/// base RTO (full-os guide Part II.6, RFC 6298 with integer fixed-point):
+/// srtt8 = 8*SRTT, rttvar4 = 4*RTTVAR, RTO = SRTT + max(1, 4*RTTVAR), clamped.
+unsafe fn tcp_rtt_update(m: u32) {
+    let m = m.max(1); // clock granularity floor (G = 1 tick)
+    if !CONN.rtt_valid {
+        // First measurement: SRTT = R, RTTVAR = R/2.
+        CONN.srtt8 = m << 3;
+        CONN.rttvar4 = m << 1; // 4 * (R/2) = 2*R
+        CONN.rtt_valid = true;
+    } else {
+        // err = R - SRTT (old); SRTT += err/8; RTTVAR += (|err| - RTTVAR)/4.
+        let srtt = (CONN.srtt8 >> 3) as i64;
+        let err = m as i64 - srtt;
+        CONN.srtt8 = (CONN.srtt8 as i64 + err) as u32; // (7/8)SRTT + (1/8)R
+        let abserr = err.unsigned_abs() as i64;
+        CONN.rttvar4 = (CONN.rttvar4 as i64 + abserr - (CONN.rttvar4 >> 2) as i64) as u32;
+    }
+    // RTO = SRTT + K*RTTVAR (K=4); rttvar4 already holds 4*RTTVAR.
+    let rto = (CONN.srtt8 >> 3) + CONN.rttvar4.max(1);
+    CONN.rto_ticks = rto.clamp(TCP_RTO_MIN, TCP_RTO_MAX);
 }
 
 /// Clear the retransmit timer once the peer's cumulative ACK covers the whole
@@ -203,6 +295,18 @@ unsafe fn tcp_rt_ack(ack: u32) {
     // stale ACK (ack <= rt_seq, i.e. distance >= 2^31) leaves the timer armed.
     let dist = ack.wrapping_sub(CONN.rt_seq);
     if dist >= span && dist < 0x8000_0000 {
+        // Karn's algorithm: only sample RTT from a segment that was sent exactly
+        // once (rt_retries == 0). A retransmitted segment's ACK is ambiguous
+        // (which transmission did it acknowledge?), so it must not update SRTT.
+        if CONN.rt_retries == 0 {
+            let m = (TCP_TICK.wrapping_sub(CONN.rt_send_tick)) as u32;
+            tcp_rtt_update(m);
+        }
+        // Congestion control: a cumulative ACK of new data grows the window.
+        // SYN/FIN-only segments (rt_len == 0) carry no data, so they do not.
+        if CONN.rt_len > 0 {
+            cc_on_ack(CONN.rt_len as u32);
+        }
         CONN.snd_una = CONN.rt_seq.wrapping_add(span);
         CONN.rt_active = false;
         CONN.rt_retries = 0;
@@ -214,6 +318,9 @@ unsafe fn tcp_rt_ack(ack: u32) {
 /// connection down after TCP_MAX_RETRIES. Called once per tick while a
 /// connection is active (full-os guide Part II.6, TCP reliability).
 pub(crate) unsafe fn tcp_rt_tick() {
+    // Advance the free-running RTT clock every tick (before the early return) so
+    // an ACK can measure elapsed ticks regardless of timer activity.
+    TCP_TICK = TCP_TICK.wrapping_add(1);
     if !CONN.rt_active || CONN.state == ST_CLOSED {
         return;
     }
@@ -230,14 +337,17 @@ pub(crate) unsafe fn tcp_rt_tick() {
         conn_reset();
         return;
     }
+    // RTO timeout: collapse the congestion window and restart slow start
+    // (RFC 5681 §3.1) before retransmitting.
+    cc_on_timeout();
     let len = CONN.rt_len;
     let mut buf = [0u8; RT_DATA_MAX];
     buf[..len].copy_from_slice(&CONN.rt_data[..len]);
     CONN.rt_last_send_ok = tcp_tx(CONN.rt_flags, CONN.rt_seq, CONN.rcv_nxt, &buf[..len]);
     CONN.rt_retries += 1;
-    // Exponential backoff, capped at 16x the base RTO.
+    // Exponential backoff from the adaptive base RTO, capped at 16x.
     let shift = CONN.rt_retries.min(4);
-    CONN.rt_ticks_left = TCP_RTO_TICKS << shift;
+    CONN.rt_ticks_left = CONN.rto_ticks << shift;
     serial_write(b"TCP: rexmit\n");
 }
 
@@ -525,6 +635,14 @@ unsafe fn conn_reset() {
     CONN.rt_ticks_left = 0;
     CONN.rt_last_send_ok = false;
     CONN.pending_close = false;
+    // A new connection starts with no RTT estimate (RTO back to the default).
+    CONN.srtt8 = 0;
+    CONN.rttvar4 = 0;
+    CONN.rto_ticks = TCP_RTO_TICKS;
+    CONN.rtt_valid = false;
+    CONN.rt_send_tick = 0;
+    CONN.cwnd = TCP_IW;
+    CONN.ssthresh = TCP_INIT_SSTHRESH;
 }
 
 /// Passive-open (listener) self-test (full-os guide Part II.6): bind a listener
@@ -734,5 +852,208 @@ pub(crate) unsafe fn tcp_rto_selftest() -> u64 {
 
     conn_reset();
     serial_write(b"TCP: rto ok\n");
+    1
+}
+
+/// RTT-estimation self-test (full-os guide Part II.6, RFC 6298 + Karn) on a
+/// synthetic established connection. Proves, deterministically: a clean
+/// (never-retransmitted) ACK measured at a known tick delta seeds SRTT/RTTVAR
+/// and the derived RTO with the exact fixed-point values; a second sample
+/// smooths them per the EWMA recurrences AND the new RTO drives the next
+/// segment's retransmit timer; and a RETRANSMITTED segment's ACK does NOT update
+/// the estimate (Karn). Returns 1 on success.
+pub(crate) unsafe fn tcp_rtt_selftest() -> u64 {
+    if CONN.state != ST_CLOSED {
+        return 0;
+    }
+    let peer_ip = [10, 0, 2, 99];
+    CONN.state = ST_ESTABLISHED;
+    CONN.peer_ip = peer_ip;
+    CONN.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x63];
+    CONN.have_mac = true;
+    CONN.local_port = 9090; // must match rto_feed_ack's dst_port
+    CONN.remote_port = 50001;
+    CONN.snd_nxt = 0x0000_6000;
+    CONN.snd_una = 0x0000_6000;
+    CONN.rcv_nxt = 0x0000_9000;
+    CONN.rx_len = 0;
+    CONN.peer_fin = false;
+    CONN.rt_active = false;
+    CONN.rt_retries = 0;
+    CONN.pending_close = false;
+    // Start from a clean estimate (a fresh connection).
+    CONN.srtt8 = 0;
+    CONN.rttvar4 = 0;
+    CONN.rto_ticks = TCP_RTO_TICKS;
+    CONN.rtt_valid = false;
+
+    let data = b"rtt-test"; // 8 bytes
+    let dlen = data.len() as u32;
+
+    // Sample 1: send, let 10 ticks pass (< RTO so no retransmit), then ACK.
+    // First measurement R=10 => SRTT=10 (srtt8=80), RTTVAR=5 (rttvar4=20),
+    // RTO = SRTT + 4*RTTVAR = 10 + 20 = 30.
+    let s1 = CONN.snd_nxt;
+    if tcp_send(data) != data.len() {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(10);
+    if CONN.rt_retries != 0 {
+        conn_reset();
+        return 0; // must not have retransmitted (Karn-valid sample)
+    }
+    rto_feed_ack(&peer_ip, s1.wrapping_add(dlen));
+    if CONN.rt_active
+        || !CONN.rtt_valid
+        || CONN.srtt8 != 80
+        || CONN.rttvar4 != 20
+        || CONN.rto_ticks != 30
+    {
+        conn_reset();
+        return 0;
+    }
+
+    // Sample 2: the next segment must be armed with the ADAPTIVE RTO (30),
+    // proving the estimate drives the timer. R=20 =>
+    //   err = 20 - 10 = 10; srtt8 = 80 + 10 = 90 (SRTT=11);
+    //   rttvar4 = 20 + 10 - (20>>2=5) = 25 (RTTVAR=6.25);
+    //   RTO = (90>>3=11) + 25 = 36.
+    let s2 = CONN.snd_nxt;
+    if tcp_send(data) != data.len() || CONN.rt_ticks_left != 30 {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(20);
+    if CONN.rt_retries != 0 {
+        conn_reset();
+        return 0;
+    }
+    rto_feed_ack(&peer_ip, s2.wrapping_add(dlen));
+    if CONN.srtt8 != 90 || CONN.rttvar4 != 25 || CONN.rto_ticks != 36 {
+        conn_reset();
+        return 0;
+    }
+
+    // Karn: a retransmitted segment's ACK must NOT update the estimate.
+    let (srtt_b, rttvar_b, rto_b) = (CONN.srtt8, CONN.rttvar4, CONN.rto_ticks);
+    let s3 = CONN.snd_nxt;
+    if tcp_send(data) != data.len() {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(CONN.rto_ticks + 1); // force exactly one retransmit
+    if CONN.rt_retries != 1 {
+        conn_reset();
+        return 0;
+    }
+    rto_feed_ack(&peer_ip, s3.wrapping_add(dlen));
+    if CONN.rt_active
+        || CONN.srtt8 != srtt_b
+        || CONN.rttvar4 != rttvar_b
+        || CONN.rto_ticks != rto_b
+    {
+        conn_reset();
+        return 0; // Karn violated: a retransmitted RTT polluted the estimate
+    }
+
+    conn_reset();
+    serial_write(b"TCP: rtt ok\n");
+    1
+}
+
+/// Congestion-control self-test (full-os guide Part II.6, RFC 5681) on a
+/// synthetic established connection. Proves, deterministically: in slow start a
+/// full-MSS ACK grows cwnd by one SMSS (exponential per RTT); once cwnd reaches
+/// ssthresh, congestion avoidance grows it by SMSS²/cwnd (additive); and an RTO
+/// timeout halves ssthresh (floored at 2·SMSS) and collapses cwnd to one segment.
+/// Returns 1 on success.
+pub(crate) unsafe fn tcp_cc_selftest() -> u64 {
+    if CONN.state != ST_CLOSED {
+        return 0;
+    }
+    let peer_ip = [10, 0, 2, 99];
+    CONN.state = ST_ESTABLISHED;
+    CONN.peer_ip = peer_ip;
+    CONN.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x63];
+    CONN.have_mac = true;
+    CONN.local_port = 9090; // must match rto_feed_ack's dst_port
+    CONN.remote_port = 50001;
+    CONN.snd_nxt = 0x0000_7000;
+    CONN.snd_una = 0x0000_7000;
+    CONN.rcv_nxt = 0x0000_9000;
+    CONN.rx_len = 0;
+    CONN.peer_fin = false;
+    CONN.rt_active = false;
+    CONN.rt_retries = 0;
+    CONN.pending_close = false;
+    CONN.srtt8 = 0;
+    CONN.rttvar4 = 0;
+    CONN.rto_ticks = TCP_RTO_TICKS;
+    CONN.rtt_valid = false;
+    CONN.cwnd = TCP_IW; // 512
+    CONN.ssthresh = TCP_INIT_SSTHRESH; // 65535 -> begin in slow start
+
+    let data = [0x41u8; TCP_MSS as usize]; // a full-MSS (512-byte) segment
+    let dlen = TCP_MSS;
+
+    // Drive one clean send+ACK (RTT < RTO so no retransmit), returning false on
+    // any send/timer anomaly. `pre` is asserted to be the cwnd before the ACK.
+    // 1) Slow start: each full-MSS ACK adds one SMSS.
+    let s1 = CONN.snd_nxt;
+    if tcp_send(&data) != TCP_MSS as usize {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(5);
+    rto_feed_ack(&peer_ip, s1.wrapping_add(dlen));
+    if CONN.rt_active || CONN.cwnd != 1024 {
+        conn_reset();
+        return 0; // 512 + 512
+    }
+    let s2 = CONN.snd_nxt;
+    if tcp_send(&data) != TCP_MSS as usize {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(5);
+    rto_feed_ack(&peer_ip, s2.wrapping_add(dlen));
+    if CONN.cwnd != 1536 {
+        conn_reset();
+        return 0; // 1024 + 512
+    }
+
+    // 2) Congestion avoidance: cwnd >= ssthresh -> add SMSS²/cwnd.
+    CONN.cwnd = 1024;
+    CONN.ssthresh = 1024;
+    let s3 = CONN.snd_nxt;
+    if tcp_send(&data) != TCP_MSS as usize {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(5);
+    rto_feed_ack(&peer_ip, s3.wrapping_add(dlen));
+    if CONN.cwnd != 1280 {
+        conn_reset();
+        return 0; // 1024 + (512*512/1024 = 256)
+    }
+
+    // 3) RTO timeout: ssthresh = max(cwnd/2, 2·SMSS); cwnd = 1 SMSS.
+    CONN.cwnd = 4096;
+    CONN.ssthresh = TCP_INIT_SSTHRESH;
+    let s4 = CONN.snd_nxt;
+    if tcp_send(&data) != TCP_MSS as usize {
+        conn_reset();
+        return 0;
+    }
+    rt_ticks(CONN.rto_ticks + 1); // force exactly one retransmit (a timeout)
+    if CONN.rt_retries != 1 || CONN.cwnd != TCP_MSS || CONN.ssthresh != 2048 {
+        conn_reset();
+        return 0; // 4096/2 = 2048 (> 2*512); cwnd collapses to 512
+    }
+    let _ = s4;
+
+    conn_reset();
+    serial_write(b"TCP: cc ok\n");
     1
 }

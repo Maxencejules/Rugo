@@ -98,25 +98,25 @@ single safe boot-verified slice and several have hard prerequisites.
    onto APs with per-CPU `current`; and make the scheduler/syscall/page-fault
    paths SMP-safe on every core (today the BSP's are interrupts-off single-CPU) so
    ordinary user tasks are scheduled across all CPUs, not just the boot self-test.
-2. **II.7 USB / XHCI + HID, DMA pool, e1000 — controller DETECTION done.** The OS
-   now discovers a USB xHCI host controller (`-device qemu-xhci`), maps its BAR
-   (the PCI MMIO hole is not in the HHDM, so `mmio_map_4k` walks CR3 and installs
-   an uncacheable leaf), and reads its capability registers
-   (`xhci_v1.md`: `XHCI: found ver=0x100 caplen=0x40 ports=8 slots=64`). What
-   remains: an XHCI controller **driver**
-   (command/event rings, port reset, device enumeration) and a HID boot-protocol
-   driver. DMA pool = a contiguous-frame allocator over the PMM (the bitmap
-   allocator is single-frame today).
-3. **III input + compositor/window-server + richer audio — mouse + z-order compositor done.**
-   The mouse device is reset + identified at boot (`mouse_v1.md`), and the
-   compositor composites multiple surfaces to the framebuffer in **z-order**
-   (`compositor_v1.md`: a red window drawn over a blue background, both verified
-   present via QMP screendump). What remains: enabling continuous mouse data
-   reporting + parsing movement/button packets needs QMP `input-send-event`
-   injection (the `_boot` fixture only feeds a fixed keyboard string); per-client
-   **shared-memory pixel surfaces** (vs v1 solid-color rects), damage regions,
-   alpha; a standing compositor **process** owning the FB; and an input event
-   queue routing clicks to the top window.
+2. **II.7 USB / XHCI + HID, DMA pool, e1000 — detection + DMA pool done.** The OS
+   discovers a USB xHCI host controller (`-device qemu-xhci`, `xhci_v1.md`) and an
+   Intel **e1000 NIC** (`-device e1000`, `e1000_v1.md`: maps BAR0, reads STATUS +
+   the MAC out of the EEPROM via EERD), maps device MMIO (`mmio_map_4k`), and has
+   a **DMA allocator** (`dma_v1.md`: a contiguous-frame pool carved from the PMM,
+   first-fit `dma_alloc`/`dma_free`, self-test `DMA: selftest ok`). What remains:
+   an XHCI controller **driver** (command/event rings, port reset, device
+   enumeration) + a HID boot-protocol driver; an e1000 TX/RX-ring driver (built on
+   the DMA pool); and migrating the virtio/NVMe probes onto `dma_alloc`.
+3. **III input + compositor/window-server + audio — mouse, z-order compositor, HD-Audio detection done.**
+   The mouse device is reset + identified at boot (`mouse_v1.md`), the compositor
+   composites multiple surfaces to the framebuffer in **z-order**
+   (`compositor_v1.md`, verified via QMP screendump), the PC speaker beeps
+   (`audio_v1.md`), and an Intel **HD Audio** controller is discovered + its
+   GCAP/version read (`hda_v1.md`, `-device intel-hda`). What remains: HDA
+   CORB/RIRB rings + codec enumeration + **PCM playback** (on the DMA pool);
+   continuous mouse movement/button packets (needs QMP `input-send-event`
+   injection); per-client **shared-memory pixel surfaces**, damage regions, alpha;
+   a standing compositor **process**; and an input event queue routing clicks.
 4. **V.11 dynamic loading — real ELF `.so` dynamic linker done.**
    `sys_dlctl` (id 60) is a genuine ELF64 dynamic linker (`dynlink_v1.md`):
    `dlopen` parses the embedded `.so`'s program headers, maps each `PT_LOAD`
@@ -145,22 +145,28 @@ single safe boot-verified slice and several have hard prerequisites.
    UEFI El-Torito entry into the ISO build so `os-go.iso` is itself hybrid (needs
    xorriso/mtools); Secure Boot; package fetch over the TCP client (have) + a repo
    server; and self-hosting.
-6. **II.6 TCP congestion control, IPv6 SLAAC, routing** — the client/listener,
-   v4/v6 echo, IPv6 **Neighbor Discovery responder** (`ndp_v1.md`), and **TCP
-   retransmission/RTO** (`tcp_rto_v1.md`: arm-on-send, ACK-clears, exponential
-   backoff, give-up after max retries) exist. What remains: RTT estimation
-   (SRTT/RTTVAR, Karn), fast retransmit + congestion control (slow start/cwnd)
-   and a real send window beyond one outstanding segment; the guest *sending* its
-   own NDP solicitations + a neighbor cache (NUD) + DAD on its own address; SLAAC
-   / Router Discovery for a global address; and routing.
+6. **II.6 TCP reliability — RTO + RTT estimation + congestion control done.** The
+   client/listener, v4/v6 echo, IPv6 **Neighbor Discovery responder**
+   (`ndp_v1.md`), **TCP retransmission/RTO** (`tcp_rto_v1.md`), **RTT estimation**
+   (`tcp_rtt_v1.md`: RFC 6298 SRTT/RTTVAR in integer fixed-point + Karn's
+   algorithm, driving an adaptive RTO), and **congestion control**
+   (`tcp_congestion_v1.md`: RFC 5681 slow start + congestion avoidance + timeout
+   collapse) exist. What remains: a real send window beyond one outstanding
+   segment (cwnd is computed but the single-segment send path does not yet clamp
+   to it), fast retransmit / fast recovery (3-dup-ACK); the guest *sending* its
+   own NDP solicitations + a neighbor cache (NUD) + DAD; SLAAC / Router Discovery
+   for a global address; and routing.
 
 ## ABI op map (current)
 - `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,
-  7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO (4–10 are self-tests).
+  7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO, 11 TCP-RTT, 12 TCP-congestion
+  (4–12 are self-tests).
 - `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
-  6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal, 11 FAT-write.
-- `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid.
-- SMP self-tests (boot markers, no syscall): spinlock lock-count, IPI ack,
-  per-CPU LAPIC timers, TLB shootdown, per-CPU GS, cross-CPU work dispatch.
+  6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal, 11 FAT-write,
+  12 FAT-chain-read.
+- `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid, 5 login.
+- Boot self-tests (markers, no syscall): SMP (spinlock, IPI, per-CPU timers, TLB
+  shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**), DMA pool,
+  block buffer cache; PCI detection (xHCI, e1000, HD-Audio).

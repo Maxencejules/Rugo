@@ -42,6 +42,10 @@ macro_rules! cfg_r4 {
 }
 
 mod arch_x86;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod cache;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod dma;
 pub(crate) mod fb;
 pub(crate) mod smp;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -454,6 +458,101 @@ unsafe fn fat16_read_named(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
     let n = core::cmp::min(file_size as usize, out.len()).min(512);
     out[..n].copy_from_slice(&BLK_DATA_PAGE.0[..n]);
     Some(n)
+}
+
+/// Read a file by its 8.3 name following the FAT16 cluster CHAIN (full-os guide
+/// Part II.5): unlike `fat16_read_named` (first cluster only), this walks the FAT
+/// from the directory's first cluster to the end-of-chain marker, so it reads
+/// files spanning multiple clusters. Returns min(file_size, out.len()) bytes, or
+/// None on a bad volume/absent file/corrupt chain.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn fat16_read_chain(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
+    const VOL_LBA: u64 = 2048;
+    if !storage::r4_storage_available() || !block_io_dispatch(false, VOL_LBA, 512, false) {
+        return None;
+    }
+    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
+    let spc = BLK_DATA_PAGE.0[13] as u64;
+    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
+    let nfats = BLK_DATA_PAGE.0[16] as u64;
+    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
+    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
+    if bps != 512 || spc == 0 || nfats == 0 {
+        return None;
+    }
+    let fat_lba = VOL_LBA + reserved;
+    let root_lba = fat_lba + nfats * spf;
+    let root_sectors = (root_entries * 32 + 511) / 512;
+    let data_lba = root_lba + root_sectors;
+
+    // Locate the directory entry: first cluster + file size.
+    let mut cluster = 0u64;
+    let mut file_size = 0u64;
+    let mut s = 0u64;
+    'scan: while s < root_sectors {
+        if !block_io_dispatch(false, root_lba + s, 512, false) {
+            return None;
+        }
+        let mut e = 0usize;
+        while e < 16 {
+            let base = e * 32;
+            if BLK_DATA_PAGE.0[base] == 0 {
+                break 'scan;
+            }
+            if BLK_DATA_PAGE.0[base..base + 11] == *target {
+                cluster =
+                    u16::from_le_bytes([BLK_DATA_PAGE.0[base + 26], BLK_DATA_PAGE.0[base + 27]])
+                        as u64;
+                file_size = u32::from_le_bytes([
+                    BLK_DATA_PAGE.0[base + 28],
+                    BLK_DATA_PAGE.0[base + 29],
+                    BLK_DATA_PAGE.0[base + 30],
+                    BLK_DATA_PAGE.0[base + 31],
+                ]) as u64;
+                break 'scan;
+            }
+            e += 1;
+        }
+        s += 1;
+    }
+    if cluster < 2 || file_size == 0 {
+        return None;
+    }
+
+    // Walk the chain: copy each cluster's sectors, then follow the FAT16 entry
+    // (2 bytes per cluster) to the next cluster until EOC (>= 0xFFF8). The guard
+    // bounds iterations so a corrupt self-referential chain cannot loop forever.
+    let want = core::cmp::min(file_size as usize, out.len());
+    let mut written = 0usize;
+    let mut guard = 0u64;
+    let max_clusters = out.len() as u64 / (spc * 512) + 4;
+    while cluster >= 2 && cluster < 0xFFF8 && written < want {
+        guard += 1;
+        if guard > max_clusters {
+            return None;
+        }
+        let cluster_lba = data_lba + (cluster - 2) * spc;
+        let mut sec = 0u64;
+        while sec < spc && written < want {
+            if !block_io_dispatch(false, cluster_lba + sec, 512, false) {
+                return None;
+            }
+            let n = core::cmp::min(512, want - written);
+            out[written..written + n].copy_from_slice(&BLK_DATA_PAGE.0[..n]);
+            written += n;
+            sec += 1;
+        }
+        // Read the FAT entry for `cluster` (this overwrites BLK_DATA_PAGE, but the
+        // cluster data was already copied into `out`).
+        let fat_byte = cluster * 2;
+        let fat_sec = fat_lba + fat_byte / 512;
+        let off = (fat_byte % 512) as usize;
+        if !block_io_dispatch(false, fat_sec, 512, false) {
+            return None;
+        }
+        cluster = u16::from_le_bytes([BLK_DATA_PAGE.0[off], BLK_DATA_PAGE.0[off + 1]]) as u64;
+    }
+    Some(written)
 }
 
 /// Write a single-cluster file to the FAT16 root directory (full-os guide Part
@@ -3853,6 +3952,8 @@ cfg_r4! {
             8 => netcfg::udp_echo_selftest(),
             9 => netcfg::ndp_selftest(),
             10 => tcp::tcp_rto_selftest(),
+            11 => tcp::tcp_rtt_selftest(),
+            12 => tcp::tcp_cc_selftest(),
             _ => ERR,
         }
     }
@@ -4740,7 +4841,7 @@ cfg_r4! {
     /// child tid to the parent and 0 to the child; clone returns the new
     /// tid. -1 on error.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_proc_ctl(frame: *mut u64, op: u64, a2: u64, _a3: u64) {
+    unsafe fn sys_proc_ctl(frame: *mut u64, op: u64, a2: u64, a3: u64) {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         match op {
             1 => sys_fork_v1(frame),
@@ -4784,10 +4885,85 @@ cfg_r4! {
                     *frame.add(14) = 0;
                 }
             }
+            // op 5 = login(name, pw) (full-os guide Part IV.10 multi-user): verify
+            // a credential against the password database and, on success, ASSUME
+            // that account's uid (authenticated privilege change — unlike op 4
+            // setuid, which is root-only). a2 = 8-byte username, a3 = ≤16-byte
+            // NUL-terminated password. Returns the uid, or -1 (denied + audited).
+            5 => {
+                let mut name = [0u8; 8];
+                let mut pw = [0u8; 16];
+                if copyin_user(&mut name, a2, 8).is_err()
+                    || copyin_user(&mut pw, a3, 16).is_err()
+                {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                let mut plen = 0usize;
+                while plen < 16 && pw[plen] != 0 {
+                    plen += 1;
+                }
+                match login_verify(&name, &pw[..plen]) {
+                    Some(uid) => {
+                        R4_TASKS[R4_CURRENT].uid = uid;
+                        audit_event(b"login-ok", 51);
+                        *frame.add(14) = uid as u64;
+                    }
+                    None => {
+                        audit_event(b"login-deny", 51);
+                        *frame.add(14) = ERR;
+                    }
+                }
+            }
             _ => {
                 *frame.add(14) = ERR;
             }
         }
+    }
+
+    /// djb2 string hash (used for the demo password database). NOT a secure
+    /// password hash — a real system needs a salted KDF (bcrypt/argon2); this
+    /// demonstrates the credential-verify flow, like the demo disk cipher.
+    const fn djb2(s: &[u8]) -> u64 {
+        let mut h: u64 = 5381;
+        let mut i = 0;
+        while i < s.len() {
+            h = (h << 5).wrapping_add(h).wrapping_add(s[i] as u64); // h*33 + c
+            i += 1;
+        }
+        h
+    }
+
+    /// One account in the demo password database (full-os guide Part IV.10).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    struct PasswdEntry {
+        name: [u8; 8],
+        uid: u8,
+        pw_hash: u64,
+    }
+
+    /// The password database: root (uid 0) and a regular user (uid 100). Hashes
+    /// are computed at compile time from the cleartext via `djb2`, so the table
+    /// is self-documenting and correct by construction.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static PASSWD: [PasswdEntry; 2] = [
+        PasswdEntry { name: *b"root\0\0\0\0", uid: 0, pw_hash: djb2(b"toor") },
+        PasswdEntry { name: *b"user\0\0\0\0", uid: 100, pw_hash: djb2(b"pass") },
+    ];
+
+    /// Verify a username/password against `PASSWD`; returns the account uid on a
+    /// match. Constant-membership scan; the hash is the demo `djb2`.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn login_verify(name: &[u8; 8], pw: &[u8]) -> Option<u8> {
+        let h = djb2(pw);
+        let mut i = 0usize;
+        while i < PASSWD.len() {
+            if PASSWD[i].name == *name && PASSWD[i].pw_hash == h {
+                return Some(PASSWD[i].uid);
+            }
+            i += 1;
+        }
+        None
     }
 
     /// sys_futex (ABI v3.2 id 52): op 1 = wait(uaddr, val) — block while the
@@ -5836,6 +6012,36 @@ cfg_r4! {
                     return 0;
                 }
                 serial_write(b"FATWR: write+read ok\n");
+                1
+            }
+            // op 12 = FAT16 multi-cluster (FAT-chain) read self-test: read
+            // BIG.TXT by walking the FAT chain and verify a deterministic
+            // pattern (byte i == i & 0xFF) across the cluster boundary, proving
+            // the chain was followed past the first cluster.
+            12 => {
+                let name: [u8; 11] = *b"BIG     TXT";
+                let mut out = [0u8; 1024];
+                let n = match fat16_read_chain(&name, &mut out) {
+                    Some(v) => v,
+                    None => {
+                        serial_write(b"FATBIG: chain read fail\n");
+                        return 0;
+                    }
+                };
+                // 600-byte file spanning cluster 2 -> cluster 3. buf[512] lives
+                // in the SECOND cluster, reachable only by following FAT[2]->3.
+                let ok = n == 600
+                    && out[0] == 0x00
+                    && out[511] == 0xFF
+                    && out[512] == 0x00
+                    && out[599] == 0x57;
+                if !ok {
+                    serial_write(b"FATBIG: chain read fail\n");
+                    return 0;
+                }
+                serial_write(b"FATBIG: chain read ok size=0x");
+                serial_write_hex(n as u64);
+                serial_write(b"\n");
                 1
             }
             _ => 0xFFFF_FFFF_FFFF_FFFF,
@@ -6947,6 +7153,7 @@ unsafe fn pci_enumerate_log() {
                     (0x1AF4, 0x1001) => b"virtio-blk-pci",
                     (0x1AF4, 0x1000) => b"virtio-net-pci",
                     (0x1B36, 0x0010) | (0x8086, 0x5845) => b"nvme",
+                    (0x8086, 0x100E) => b"e1000",
                     _ => b"",
                 };
                 if !name.is_empty() {
@@ -7114,6 +7321,179 @@ unsafe fn xhci_report(bdf: PciBdf) {
     serial_write_hex(max_ports as u64);
     serial_write(b" slots=0x");
     serial_write_hex(max_slots as u64);
+    serial_write(b"\n");
+}
+
+/// Detect an Intel e1000 NIC (full-os guide Part II.7, the named 2nd NIC): scan
+/// PCI bus 0 for vendor 0x8086 device 0x100E (the QEMU 82540EM `-device e1000`),
+/// map its BAR0, and read the device STATUS plus the MAC out of the EEPROM. This
+/// is the discovery + register/EEPROM-read foundation; the TX/RX descriptor rings
+/// and a full driver are carry-forward. Reports `E1000: none` when absent.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_detect() {
+    let mut dev = 0u8;
+    while dev < 32 {
+        let id0 = pci_read32(0, dev, 0, 0);
+        if (id0 & 0xFFFF) as u16 == 0xFFFF {
+            dev += 1;
+            continue;
+        }
+        let hdr = (pci_read32(0, dev, 0, 0x0C) >> 16) & 0xFF;
+        let funcs = if hdr & 0x80 != 0 { 8u8 } else { 1u8 };
+        let mut func = 0u8;
+        while func < funcs {
+            let id = pci_read32(0, dev, func, 0);
+            let vendor = (id & 0xFFFF) as u16;
+            let device = ((id >> 16) & 0xFFFF) as u16;
+            if vendor == 0x8086 && device == 0x100E {
+                e1000_report(PciBdf { bus: 0, dev, func });
+                return;
+            }
+            func += 1;
+        }
+        dev += 1;
+    }
+    serial_write(b"E1000: none\n");
+}
+
+/// Read one 16-bit EEPROM word `addr` through the e1000 EERD register (offset
+/// 0x14): write (addr<<8)|START, poll the DONE bit, return the data half. Returns
+/// None if DONE never asserts within the bounded poll.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_eeprom_read(mmio: u64, addr: u16) -> Option<u16> {
+    const EERD: u64 = 0x0014;
+    const START: u32 = 1 << 0;
+    const DONE: u32 = 1 << 4;
+    core::ptr::write_volatile((mmio + EERD) as *mut u32, ((addr as u32) << 8) | START);
+    let mut spins = 0u32;
+    while spins < 100_000 {
+        let v = core::ptr::read_volatile((mmio + EERD) as *const u32);
+        if v & DONE != 0 {
+            return Some((v >> 16) as u16);
+        }
+        spins += 1;
+    }
+    None
+}
+
+/// Read + report an e1000's STATUS register and EEPROM MAC (82540EM datasheet).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_report(bdf: PciBdf) {
+    // Enable memory space + bus master so the controller decodes its BAR.
+    let cmd = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x04);
+    pci_write32(bdf.bus, bdf.dev, bdf.func, 0x04, cmd | 0x0006);
+    let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
+    if bar0 & 1 != 0 {
+        serial_write(b"E1000: bar not mmio\n");
+        return;
+    }
+    let base = (bar0 & 0xFFFF_FFF0) as u64; // e1000 BAR0 is a 32-bit memory BAR
+    if base == 0 {
+        serial_write(b"E1000: bar unassigned\n");
+        return;
+    }
+    let mmio = match mmio_map_4k(base) {
+        Some(p) => p,
+        None => {
+            serial_write(b"E1000: mmio map fail\n");
+            return;
+        }
+    };
+    // STATUS (0x0008): a present, decoding device returns a sane value (not the
+    // all-ones an unmapped BAR yields). The MAC lives in EEPROM words 0..2.
+    let status = core::ptr::read_volatile((mmio + 0x0008) as *const u32);
+    let (w0, w1, w2) = match (
+        e1000_eeprom_read(mmio, 0),
+        e1000_eeprom_read(mmio, 1),
+        e1000_eeprom_read(mmio, 2),
+    ) {
+        (Some(a), Some(b), Some(c)) => (a, b, c),
+        _ => {
+            serial_write(b"E1000: eeprom timeout\n");
+            return;
+        }
+    };
+    // EEPROM word N holds MAC bytes [2N, 2N+1] little-endian; pack as a 48-bit
+    // value with mac[0] in the low byte.
+    let mac = (w0 as u64) | ((w1 as u64) << 16) | ((w2 as u64) << 32);
+    serial_write(b"E1000: found status=0x");
+    serial_write_hex(status as u64);
+    serial_write(b" mac=0x");
+    serial_write_hex(mac);
+    serial_write(b"\n");
+}
+
+/// Detect an Intel HD Audio controller (full-os guide Part III, audio): scan PCI
+/// bus 0 for a Multimedia / HD-Audio function (class 0x04, subclass 0x03), map
+/// its BAR0, and read the global capabilities (GCAP) + version registers. This is
+/// the discovery + capability-read foundation; CORB/RIRB rings, codec
+/// enumeration, and PCM streaming are carry-forward. Reports `HDA: none` when
+/// absent. Reachable with `-device intel-hda`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_detect() {
+    let mut dev = 0u8;
+    while dev < 32 {
+        let id0 = pci_read32(0, dev, 0, 0);
+        if (id0 & 0xFFFF) as u16 == 0xFFFF {
+            dev += 1;
+            continue;
+        }
+        let hdr = (pci_read32(0, dev, 0, 0x0C) >> 16) & 0xFF;
+        let funcs = if hdr & 0x80 != 0 { 8u8 } else { 1u8 };
+        let mut func = 0u8;
+        while func < funcs {
+            let id = pci_read32(0, dev, func, 0);
+            if (id & 0xFFFF) as u16 != 0xFFFF {
+                let class_reg = pci_read32(0, dev, func, 0x08);
+                let class = (class_reg >> 24) as u8;
+                let subclass = (class_reg >> 16) as u8;
+                if class == 0x04 && subclass == 0x03 {
+                    hda_report(PciBdf { bus: 0, dev, func });
+                    return;
+                }
+            }
+            func += 1;
+        }
+        dev += 1;
+    }
+    serial_write(b"HDA: none\n");
+}
+
+/// Read + report an Intel HD Audio controller's GCAP + version (HDA spec 3.3).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_report(bdf: PciBdf) {
+    let cmd = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x04);
+    pci_write32(bdf.bus, bdf.dev, bdf.func, 0x04, cmd | 0x0006); // mem + bus master
+    let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
+    if bar0 & 1 != 0 {
+        serial_write(b"HDA: bar not mmio\n");
+        return;
+    }
+    let mut base = (bar0 & 0xFFFF_FFF0) as u64;
+    if (bar0 >> 1) & 0x3 == 0x2 {
+        let high = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x14);
+        base |= (high as u64) << 32;
+    }
+    if base == 0 {
+        serial_write(b"HDA: bar unassigned\n");
+        return;
+    }
+    let mmio = match mmio_map_4k(base) {
+        Some(p) => p,
+        None => {
+            serial_write(b"HDA: mmio map fail\n");
+            return;
+        }
+    };
+    // Dword @0 packs GCAP (bits[15:0]), VMIN (bits[23:16]), VMAJ (bits[31:24]).
+    let d0 = core::ptr::read_volatile(mmio as *const u32);
+    let gcap = d0 & 0xFFFF;
+    let vmin = (d0 >> 16) & 0xFF;
+    let vmaj = (d0 >> 24) & 0xFF;
+    serial_write(b"HDA: found gcap=0x");
+    serial_write_hex(gcap as u64);
+    serial_write(b" ver=0x");
+    serial_write_hex(((vmaj << 8) | vmin) as u64);
     serial_write(b"\n");
 }
 
@@ -9387,8 +9767,12 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         let kstack = &stack_top as *const u8 as u64;
         tss_init(kstack);
+        dma::dma_init(); // full-os Part II.7: driver DMA pool
+        dma::dma_selftest();
         pci_enumerate_log();
         xhci_detect(); // full-os Part II.7: USB xHCI controller discovery
+        e1000_detect(); // full-os Part II.7: Intel e1000 NIC discovery
+        hda_detect(); // full-os Part III: Intel HD Audio controller discovery
         let _ = kbd::mouse_selftest(); // full-os Part III: PS/2 mouse bring-up
         net::r4_c4_runtime_init();
         // Net responder self-tests (full-os guide Part II.6): exercise the same
@@ -9400,7 +9784,10 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::ndp_selftest();
         let _ = tcp::tcp_listen_selftest();
         let _ = tcp::tcp_rto_selftest();
+        let _ = tcp::tcp_rtt_selftest();
+        let _ = tcp::tcp_cc_selftest();
         installer_selftest(); // full-os Part V.11: provision an install target disk
+        cache::cache_selftest(); // full-os Part II.5: block buffer cache
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;

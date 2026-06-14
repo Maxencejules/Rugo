@@ -57,10 +57,17 @@ confirm a byte-exact round-trip (`FATWR: write+read ok`).
 
 ## v1 boundary / carry-forward
 
-- **Read-only reads of one fixed file; writes are single-cluster, no overwrite.**
-  No FAT chain walk (files must fit in one cluster), no append, no create over an
-  existing name (a duplicate name is refused), no delete, no timestamps. The
-  free-cluster scan covers only the first FAT sector (clusters 2..255).
+- **Multi-cluster read via the FAT chain** (`fat16_read_chain`, `sys_sysinfo`
+  op 12, proof `test_fat16_chain_v1.py`): reads a file spanning more than one
+  cluster by walking the FAT from the directory's first cluster to the
+  end-of-chain marker (≥ 0xFFF8), copying each cluster's sectors in order, with an
+  iteration guard against a corrupt self-referential chain. The single-cluster
+  `fat16_read_named` (op 6, `/mnt`) is retained for the first-cluster fast path.
+- **Reads cover chained files; writes are single-cluster, no overwrite.**
+  Writes do not yet allocate a chain (a written file must fit in one cluster), no
+  append, no create over an existing name (a duplicate name is refused), no
+  delete, no timestamps. The free-cluster scan covers only the first FAT sector
+  (clusters 2..255).
 - **Non-journaling write.** The pre-commit checks remove the deterministic leaks
   (full directory, full FAT, duplicate name). A device-write failure *during* the
   multi-sector commit can still orphan a cluster or leave FAT copies divergent —
