@@ -26,6 +26,14 @@ read of a non-native (industry-standard) on-disk filesystem.
 Returns the byte count, or `u64::MAX` on any error (no disk, bad BPB, file
 absent, empty file).
 
+### Directory listing
+
+`sys_sysinfo` (id 61) **op 8** = FAT16 root directory list: walks the root
+directory and logs each live 8.3 entry as `FATLS: <name11> size=0x<hex>`
+(skipping free `0x00`, deleted `0xE5`, and long-name `attr 0x0F` entries),
+returning the entry count. Read-only enumeration; subdirectory recursion and an
+`opendir`/`readdir` fd API are carry-forward.
+
 ### Namespace mount (`/mnt`)
 
 `open("/mnt/<NAME>")` mounts the FAT16 volume into the namespace: the path's

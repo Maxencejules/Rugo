@@ -456,6 +456,61 @@ unsafe fn fat16_read_named(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
     Some(n)
 }
 
+/// List the FAT16 root directory (full-os guide Part II.5): log each live 8.3
+/// entry as `FATLS: <name11> size=0x<hex>` and return the count, or u64::MAX on
+/// a bad volume. Skips free (0x00), deleted (0xE5), and long-name (attr 0x0F)
+/// entries. Shares the BPB parse with `fat16_read_named`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn fat16_list() -> u64 {
+    const VOL_LBA: u64 = 2048;
+    if !storage::r4_storage_available() || !block_io_dispatch(false, VOL_LBA, 512, false) {
+        return 0xFFFF_FFFF_FFFF_FFFF;
+    }
+    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
+    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
+    let nfats = BLK_DATA_PAGE.0[16] as u64;
+    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
+    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
+    if bps != 512 || nfats == 0 {
+        return 0xFFFF_FFFF_FFFF_FFFF;
+    }
+    let root_lba = VOL_LBA + reserved + nfats * spf;
+    let root_sectors = (root_entries * 32 + 511) / 512;
+    let mut count = 0u64;
+    let mut s = 0u64;
+    'scan: while s < root_sectors {
+        if !block_io_dispatch(false, root_lba + s, 512, false) {
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
+        let mut e = 0usize;
+        while e < 16 {
+            let base = e * 32;
+            let first = BLK_DATA_PAGE.0[base];
+            if first == 0x00 {
+                break 'scan; // end of directory
+            }
+            // Skip deleted (0xE5) and long-file-name (attr 0x0F) entries.
+            if first != 0xE5 && BLK_DATA_PAGE.0[base + 11] != 0x0F {
+                let size = u32::from_le_bytes([
+                    BLK_DATA_PAGE.0[base + 28],
+                    BLK_DATA_PAGE.0[base + 29],
+                    BLK_DATA_PAGE.0[base + 30],
+                    BLK_DATA_PAGE.0[base + 31],
+                ]);
+                serial_write(b"FATLS: ");
+                serial_write(&BLK_DATA_PAGE.0[base..base + 11]);
+                serial_write(b" size=0x");
+                serial_write_hex(size as u64);
+                serial_write(b"\n");
+                count += 1;
+            }
+            e += 1;
+        }
+        s += 1;
+    }
+    count
+}
+
 fn serial_can_read() -> bool {
     unsafe { inb(COM1 + 5) & 0x01 != 0 }
 }
@@ -5122,6 +5177,9 @@ cfg_r4! {
             // a2 = user buffer, a3 = capacity -> bytes copied (u64::MAX on a
             // bad buffer). Public so any task can inspect the audit trail.
             7 => audit_read(a2, a3 as usize),
+            // op 8 = FAT16 root directory list (full-os guide Part II.5): logs
+            // each entry, returns the count.
+            8 => fat16_list(),
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }

@@ -59,7 +59,8 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   frames, op 3 = uptime ticks, op 4 = dmesg read(`rsi`=buf, `rdx`=cap) →
   bytes copied, op 5 = MBR partition parse → partition count (logs each
   entry), op 6 = FAT16 read HELLO.TXT(`rsi`=buf, `rdx`=cap) → file bytes,
-  op 7 = security audit-log read(`rsi`=buf, `rdx`=cap) → bytes copied;
+  op 7 = security audit-log read(`rsi`=buf, `rdx`=cap) → bytes copied,
+  op 8 = FAT16 root directory list → entry count (logs each);
   contract in `docs/runtime/sysinfo_v1.md`, `docs/runtime/dmesg_v1.md`,
   `docs/runtime/partitions_v1.md`, `docs/runtime/fat16_v1.md`,
   `docs/runtime/audit_v1.md`).

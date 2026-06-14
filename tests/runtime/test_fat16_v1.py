@@ -112,3 +112,24 @@ def test_fat16_mount_namespace(qemu_go_c4_runtime, find_in_order):
         "RUGO: halt ok",
     ])
     assert "FSH: err" not in out
+
+
+def test_fat16_directory_list(qemu_go_c4_runtime, find_in_order):
+    """sys_sysinfo op 8 enumerates the FAT16 root directory."""
+    boot, disk_path = qemu_go_c4_runtime
+
+    disk = bytearray(4 * 1024 * 1024)
+    vol = _fat16_volume()
+    disk[2048 * SEC:2048 * SEC + len(vol)] = vol
+    with open(disk_path, "wb") as f:
+        f.write(disk)
+
+    out = boot("probe fatlsprobe\nshutdown\n").stdout
+
+    find_in_order(out, [
+        # the one file in the crafted volume: HELLO.TXT, 18 bytes = 0x12.
+        "FATLS: HELLO   TXT size=0x0000000000000012",
+        "FATLSPROBE: ok",
+        "RUGO: halt ok",
+    ])
+    assert "FATLSPROBE: FAIL" not in out
