@@ -45,8 +45,12 @@ unchanged).
   (`r4_idle_loop`, interrupts enabled) and the PIT (`r4_wake_sleepers`)
   wakes the sleeper at its deadline — no spinning, no false deadlock. This
   idle/wake path is the shared wait-queue prerequisite. Proof:
-  `make test-nanosleep-v1`. `timerfd` (fd-backed timers) still deferred.
-- **No ACPI shutdown/reboot yet** (`sys_power`, id 58) — separate phase.
+  `make test-nanosleep-v1`.
+- **`timerfd` is implemented** (op 3 = timerfd_create(`rsi` = nanoseconds) →
+  fd). A one-shot `TimerFd` becomes readable at its deadline; a non-blocking
+  `read` returns the 8-byte expiration count (1) once fired and 0 before, and
+  `poll` reports `POLLIN` once expired. Proof: `make test-timerfd-v1`.
+  (Periodic/interval timers and blocking timerfd reads are carry-forward.)
 - **RTC assumptions:** 24-hour mode, century = 2000+. A dead CMOS battery or
   12-hour mode would skew REALTIME; MONOTONIC is unaffected.
 - `sys_time_now` (id 10) keeps its existing per-call counter semantics; this

@@ -988,6 +988,22 @@ cfg_m3! {
                 M8_FD_TABLE[idx].offset += n;
                 n as u64
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::TimerFd => {
+                // One-shot: 8-byte expiration count when fired, else 0.
+                if len < 8 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                if (R4_PREEMPT_TICKS as usize) < M8_FD_TABLE[idx].offset {
+                    return 0; // not yet expired
+                }
+                let one = 1u64.to_le_bytes();
+                if copyout_user(buf, &one, 8).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset = usize::MAX; // disarm (one-shot)
+                8
+            }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeR => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1107,9 +1123,10 @@ cfg_m3! {
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::DevNull => len, // discard
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-            M8FdKind::DevZero | M8FdKind::DevUrandom | M8FdKind::ProcSelfStat => {
-                0xFFFF_FFFF_FFFF_FFFF
-            }
+            M8FdKind::DevZero
+            | M8FdKind::DevUrandom
+            | M8FdKind::ProcSelfStat
+            | M8FdKind::TimerFd => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(feature = "go_test")]
             M8FdKind::PipeW => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1480,6 +1497,15 @@ cfg_m3! {
                                 revents |= POLLIN;
                             }
                         }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::TimerFd => {
+                            if events & POLLIN != 0
+                                && rights & M10_RIGHT_READ != 0
+                                && R4_PREEMPT_TICKS as usize >= M8_FD_TABLE[idx].offset
+                            {
+                                revents |= POLLIN;
+                            }
+                        }
                         #[cfg(not(feature = "go_test"))]
                         _ => revents |= POLLERR,
                     }
@@ -1708,6 +1734,9 @@ cfg_m3! {
         // /proc/self/stat (full-os guide Part II.5, pseudo-fs).
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         ProcSelfStat,
+        // timerfd (full-os guide Part IV.9): offset holds the expiry tick.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        TimerFd,
     }
 
     /// Write "0x" + 16 zero-padded hex digits of `val` into `out` (>=18
@@ -1993,6 +2022,8 @@ cfg_m3! {
             M8FdKind::DevNull => M10_RIGHT_WRITE | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::ProcSelfStat => M10_RIGHT_READ | M10_RIGHT_POLL,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::TimerFd => M10_RIGHT_READ | M10_RIGHT_POLL,
         }
     }
 
@@ -4187,6 +4218,20 @@ cfg_r4! {
                         r4_enter_idle_or_done(frame);
                     }
                 }
+            }
+            3 => {
+                // timerfd_create(a2 = nanoseconds): a one-shot timer fd that
+                // becomes readable at the deadline. Non-blocking read returns
+                // the expiration count (8 bytes) once fired, else 0.
+                let ticks = (a2 + 9_999_999) / 10_000_000;
+                let fd = m8_alloc_fd(M8FdKind::TimerFd);
+                if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                M8_FD_TABLE[fd as usize].rights = M10_RIGHT_READ | M10_RIGHT_POLL;
+                M8_FD_TABLE[fd as usize].offset = (R4_PREEMPT_TICKS + ticks) as usize;
+                *frame.add(14) = fd;
             }
             _ => {
                 *frame.add(14) = ERR;
