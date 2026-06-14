@@ -17,6 +17,11 @@ slice — the `/dev` character devices. Generated on the fly; no disk I/O.
 | `/dev/urandom` | RDONLY | CSPRNG bytes (`sys_getrandom` pool) | EPERM |
 | `/dev/null` | WRONLY | EOF (0) | accepted and discarded |
 
+`/tmp/<name>` is a small in-memory tmpfs (read+write, create-on-open): a
+fixed `TMPFS` store of up to 8 nodes × 512 bytes, indexed from the fd via
+`M8_FD_VFS_NODE`. Contents are lost on reboot. Public (no capability). Use
+the shell's `fswrite`/`fscat` builtins.
+
 `/proc/self/stat` (read-only) generates the caller's stat line on demand:
 `tid=0x<hex16> uid=0x<hex2> state=run\n` (hex in v1; `R4_CURRENT` is the
 reader). Read via `fscat /proc/self/stat`.

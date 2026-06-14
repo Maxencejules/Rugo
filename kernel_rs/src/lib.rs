@@ -648,6 +648,38 @@ cfg_m3! {
                 return fd;
             }
         }
+        // /tmp in-memory filesystem (full-os guide Part II.5): public, no cap.
+        // Placed before the generic rights parse: like /data, /tmp opens carry
+        // the create bit, which the fixed-path mode mask would otherwise reject.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if bytes.len() >= 6 && &bytes[..5] == b"/tmp/" && bytes[bytes.len() - 1] == 0 {
+                let rel = &bytes[5..bytes.len() - 1];
+                let create = flags & M10_OPEN_CREATE != 0;
+                let requested =
+                    match m10_open_requested_rights(flags & M10_OPEN_MODE_MASK) {
+                        Some(v) => v,
+                        None => return 0xFFFF_FFFF_FFFF_FFFF,
+                    };
+                let node = match tmpfs_open(rel, create) {
+                    Some(n) => n,
+                    None => return 0xFFFF_FFFF_FFFF_FFFF,
+                };
+                let max = m10_rights_for_kind(M8FdKind::TmpFile);
+                let effective = requested | M10_RIGHT_POLL;
+                if effective & !max != 0 {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let fd = m8_alloc_fd(M8FdKind::TmpFile);
+                if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                    return fd;
+                }
+                M8_FD_TABLE[fd as usize].rights = effective;
+                M8_FD_TABLE[fd as usize].offset = 0;
+                M8_FD_VFS_NODE[fd as usize] = node as u8;
+                return fd;
+            }
+        }
         let requested = match m10_open_requested_rights(flags) {
             Some(v) => v,
             None => return 0xFFFF_FFFF_FFFF_FFFF,
@@ -1004,6 +1036,23 @@ cfg_m3! {
                 M8_FD_TABLE[idx].offset = usize::MAX; // disarm (one-shot)
                 8
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::TmpFile => {
+                let ti = M8_FD_VFS_NODE[idx] as usize;
+                let off = M8_FD_TABLE[idx].offset;
+                if ti >= TMPFS_MAX || off >= TMPFS[ti].len {
+                    return 0;
+                }
+                let remaining = TMPFS[ti].len - off;
+                let n = core::cmp::min(len as usize, remaining);
+                let mut kbuf = [0u8; TMPFS_CAP];
+                kbuf[..n].copy_from_slice(&TMPFS[ti].data[off..off + n]);
+                if copyout_user(buf, &kbuf[..n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset += n;
+                n as u64
+            }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeR => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1127,6 +1176,25 @@ cfg_m3! {
             | M8FdKind::DevUrandom
             | M8FdKind::ProcSelfStat
             | M8FdKind::TimerFd => 0xFFFF_FFFF_FFFF_FFFF,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::TmpFile => {
+                let ti = M8_FD_VFS_NODE[idx] as usize;
+                let off = M8_FD_TABLE[idx].offset;
+                if ti >= TMPFS_MAX || off >= TMPFS_CAP {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                let n = core::cmp::min(len as usize, TMPFS_CAP - off);
+                let mut kbuf = [0u8; TMPFS_CAP];
+                if copyin_user(&mut kbuf[..n], buf, n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                TMPFS[ti].data[off..off + n].copy_from_slice(&kbuf[..n]);
+                if off + n > TMPFS[ti].len {
+                    TMPFS[ti].len = off + n;
+                }
+                M8_FD_TABLE[idx].offset += n;
+                n as u64
+            }
             #[cfg(feature = "go_test")]
             M8FdKind::PipeW => {
                 let p = M8_FD_PIPE[idx] as usize;
@@ -1506,6 +1574,15 @@ cfg_m3! {
                                 revents |= POLLIN;
                             }
                         }
+                        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                        M8FdKind::TmpFile => {
+                            if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 {
+                                revents |= POLLIN;
+                            }
+                            if events & POLLOUT != 0 && rights & M10_RIGHT_WRITE != 0 {
+                                revents |= POLLOUT;
+                            }
+                        }
                         #[cfg(not(feature = "go_test"))]
                         _ => revents |= POLLERR,
                     }
@@ -1737,6 +1814,72 @@ cfg_m3! {
         // timerfd (full-os guide Part IV.9): offset holds the expiry tick.
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         TimerFd,
+        // tmpfs file (full-os guide Part II.5): in-memory /tmp; the tmpfs
+        // node index is held in M8_FD_VFS_NODE[fd].
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        TmpFile,
+    }
+
+    // In-memory tmpfs for /tmp (full-os guide Part II.5). Heap-free fixed
+    // store; contents are lost on reboot.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const TMPFS_MAX: usize = 8;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const TMPFS_CAP: usize = 512;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct TmpNode {
+        used: bool,
+        name: [u8; 24],
+        name_len: usize,
+        len: usize,
+        data: [u8; TMPFS_CAP],
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    impl TmpNode {
+        const EMPTY: Self = Self {
+            used: false,
+            name: [0u8; 24],
+            name_len: 0,
+            len: 0,
+            data: [0u8; TMPFS_CAP],
+        };
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut TMPFS: [TmpNode; TMPFS_MAX] = [TmpNode::EMPTY; TMPFS_MAX];
+
+    /// Find an existing /tmp node by relative name, or allocate one if
+    /// `create`. Returns the node index.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn tmpfs_open(rel: &[u8], create: bool) -> Option<usize> {
+        if rel.is_empty() || rel.len() > 24 {
+            return None;
+        }
+        let mut i = 0;
+        while i < TMPFS_MAX {
+            if TMPFS[i].used
+                && TMPFS[i].name_len == rel.len()
+                && TMPFS[i].name[..rel.len()] == *rel
+            {
+                return Some(i);
+            }
+            i += 1;
+        }
+        if !create {
+            return None;
+        }
+        let mut i = 0;
+        while i < TMPFS_MAX {
+            if !TMPFS[i].used {
+                TMPFS[i] = TmpNode::EMPTY;
+                TMPFS[i].used = true;
+                TMPFS[i].name[..rel.len()].copy_from_slice(rel);
+                TMPFS[i].name_len = rel.len();
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
     }
 
     /// Write "0x" + 16 zero-padded hex digits of `val` into `out` (>=18
@@ -2024,6 +2167,8 @@ cfg_m3! {
             M8FdKind::ProcSelfStat => M10_RIGHT_READ | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::TimerFd => M10_RIGHT_READ | M10_RIGHT_POLL,
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::TmpFile => M10_RIGHT_READ | M10_RIGHT_WRITE | M10_RIGHT_POLL,
         }
     }
 
