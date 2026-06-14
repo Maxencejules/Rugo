@@ -66,6 +66,15 @@ single safe boot-verified slice and several have hard prerequisites.
    gate the whole path on `cpu_count > 1` so the default `-smp 1` lanes are
    untouched, and verify the `-smp 2` go-lane still preempts. Then build the
    per-CPU run queue + per-CPU GDT/TSS on top.
+   **Attempted 2026-06-14 (all six pieces wired, gated `cpu_count>1`) and
+   reverted:** `os.iso -smp 4` hung right after `SMP: cpus=0x4` — before any AP
+   `SMP: aps online` check-in — so an AP faults during `load_idt`/`x2apic_enable`
+   (or the BSP wedges). The `-smp 1` suite was unaffected (gating works). Next
+   time: bring up ONE AP under `-smp 2` with serial debug markers inside
+   `ap_entry` (before/after `load_idt`, before/after `x2apic_enable`) to localize
+   the fault; suspect the AP needs its own GDT/`lgdt` (Limine may hand it a
+   transient GDT) and/or LINT0 set to ExtINT before `sti`. Keep it `cpu_count>1`
+   gated throughout.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000** — needs `-device qemu-xhci` (and
    `-device e1000`) in a dedicated test profile, then an XHCI controller driver
    (command/event rings, port reset, device enumeration) and a HID boot-protocol
