@@ -176,5 +176,5 @@ single safe boot-verified slice and several have hard prerequisites.
 - Boot self-tests (markers, no syscall): SMP (spinlock, IPI, per-CPU timers, TLB
   shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**), DMA pool,
   block buffer cache, AES-128 (FIPS-197 KAT, backs disk crypto), **2 MiB huge
-  page**, **TTY line discipline**; PCI detection (xHCI, e1000, HD-Audio, **PCIe
-  ECAM**, **MSI-X enable**).
+  page**, **TTY line discipline**, **GPT parse**, **mount table**; PCI detection
+  (xHCI, e1000, HD-Audio, **PCIe ECAM**, **MSI-X enable**).

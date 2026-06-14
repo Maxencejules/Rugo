@@ -49,6 +49,8 @@ pub(crate) mod cache;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod dma;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod mount;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tty;
 pub(crate) mod fb;
 pub(crate) mod smp;
@@ -557,6 +559,76 @@ unsafe fn fat16_read_chain(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
         cluster = u16::from_le_bytes([BLK_DATA_PAGE.0[off], BLK_DATA_PAGE.0[off + 1]]) as u64;
     }
     Some(written)
+}
+
+/// GPT partition-table parse self-test (full-os guide Part II.5, partitions):
+/// read the GPT header at LBA 1, validate the "EFI PART" signature, then walk the
+/// partition-entry array and count the live entries (non-zero type GUID), logging
+/// each one's first/last LBA. Runs at boot; reports `GPT: none` when LBA 1 is not
+/// a GPT header (the common case). Complements the MBR parser (sysinfo op 5).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn gpt_parse_selftest() {
+    if !storage::r4_storage_available() || !block_io_dispatch(false, 1, 512, false) {
+        serial_write(b"GPT: none\n");
+        return;
+    }
+    if BLK_DATA_PAGE.0[0..8] != *b"EFI PART" {
+        serial_write(b"GPT: none\n");
+        return;
+    }
+    let entry_lba = u64::from_le_bytes(BLK_DATA_PAGE.0[72..80].try_into().unwrap());
+    let num_entries = u32::from_le_bytes(BLK_DATA_PAGE.0[80..84].try_into().unwrap()) as u64;
+    let entry_size = u32::from_le_bytes(BLK_DATA_PAGE.0[84..88].try_into().unwrap()) as u64;
+    // GPT entries are >= 128 bytes (UEFI spec); bounding entry_size to [128, 512]
+    // also guarantees every per-sector entry's fields (off + 48) stay within the
+    // 512-byte BLK_DATA_PAGE, so a malformed header cannot drive a slice-OOB
+    // panic at boot.
+    if entry_size < 128 || entry_size > 512 || entry_lba == 0 {
+        serial_write(b"GPT: bad header\n");
+        return;
+    }
+    let per_sector = 512 / entry_size;
+    // v1 bound: inspect the first 16 entries (typically 4 sectors). A larger
+    // table is valid; this self-test just confirms the parse, not full coverage.
+    let max_entries = core::cmp::min(num_entries, 16);
+    let mut count = 0u64;
+    let mut e = 0u64;
+    'walk: while e < max_entries {
+        let sector = entry_lba + e / per_sector;
+        if !block_io_dispatch(false, sector, 512, false) {
+            break 'walk;
+        }
+        let mut j = 0u64;
+        while j < per_sector && e < max_entries {
+            let off = (j * entry_size) as usize;
+            let mut used = false;
+            let mut k = 0usize;
+            while k < 16 {
+                if BLK_DATA_PAGE.0[off + k] != 0 {
+                    used = true;
+                    break;
+                }
+                k += 1;
+            }
+            if used {
+                let first =
+                    u64::from_le_bytes(BLK_DATA_PAGE.0[off + 32..off + 40].try_into().unwrap());
+                let last =
+                    u64::from_le_bytes(BLK_DATA_PAGE.0[off + 40..off + 48].try_into().unwrap());
+                serial_write(b"GPT: part first=0x");
+                serial_write_hex(first);
+                serial_write(b" last=0x");
+                serial_write_hex(last);
+                serial_write(b"\n");
+                count += 1;
+            }
+            j += 1;
+            e += 1;
+        }
+    }
+    serial_write(b"GPT: parsed n=0x");
+    serial_write_hex(count);
+    serial_write(b"\n");
 }
 
 /// Write a single-cluster file to the FAT16 root directory (full-os guide Part
@@ -9922,6 +9994,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
+        gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
+        let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;

@@ -1025,6 +1025,12 @@ test-tty-v1: image-go
 test-msix-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_msix_v1.py -v --junitxml=$(OUT)/pytest-msix-v1.xml
 
+test-gpt-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_gpt_v1.py -v --junitxml=$(OUT)/pytest-gpt-v1.xml
+
+test-mount-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mount_v1.py -v --junitxml=$(OUT)/pytest-mount-v1.xml
+
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
 
