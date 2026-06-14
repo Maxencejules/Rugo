@@ -1046,6 +1046,9 @@ test-mouse-packet-v1: image-go
 test-udp6-echo-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_udp6_echo_v1.py -v --junitxml=$(OUT)/pytest-udp6-echo-v1.xml
 
+test-swap-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_swap_v1.py -v --junitxml=$(OUT)/pytest-swap-v1.xml
+
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
 

@@ -1120,3 +1120,186 @@ pub fn huge_page_selftest() {
         }
     }
 }
+
+// ---- swap / page eviction (full-os guide Part I.4) ----
+//
+// Evict a present user page to a disk swap area, freeing its physical frame and
+// leaving a "swapped" marker in the PTE (present=0); a later access page-faults
+// and `try_swap_in` allocates a fresh frame, reads the page back, and remaps it.
+// A small fixed swap area (16 slots × 4 KiB) on a scratch disk region. Go lane
+// only (it needs the block device). v1: a fixed-size swap file, no eviction
+// policy / LRU clock; choosing victims is the carry-forward.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const SWAP_BASE_LBA: u64 = 1700; // free scratch region (cache uses 1610..)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const SWAP_SLOTS: usize = 16;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const PTE_SWAPPED: u64 = 1 << 10; // software bit: a swapped-out (present=0) page
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut SWAP_USED: [bool; SWAP_SLOTS] = [false; SWAP_SLOTS];
+
+/// Walk the current address space to the leaf PTE pointer for `va`, whether or
+/// not the leaf is present (so it serves both eviction and swap-in). Returns None
+/// if an upper level is absent.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn leaf_pte_ptr(va: u64) -> Option<*mut u64> {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return None;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return None;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pde = *pd.add(((va >> 21) & 0x1FF) as usize);
+    if pde & 1 == 0 || pde & PTE_PS != 0 {
+        return None; // absent, or a 2 MiB huge page (not swappable here)
+    }
+    let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+    Some(pt.add(((va >> 12) & 0x1FF) as usize))
+}
+
+/// Evict the present user page at `va` (current address space) to a free swap
+/// slot: write its frame to disk, mark the PTE swapped (present=0 + slot index),
+/// and free the frame. Returns false if `va` is not a present page or no swap
+/// slot / disk is available.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn swap_out_current(va: u64) -> bool {
+    let pte_ptr = match leaf_pte_ptr(va) {
+        Some(p) => p,
+        None => return false,
+    };
+    let pte = *pte_ptr;
+    if pte & 1 == 0 {
+        return false; // not present -> nothing to evict
+    }
+    let frame = pte & PHYS_MASK;
+    let mut slot = SWAP_SLOTS;
+    let mut i = 0;
+    while i < SWAP_SLOTS {
+        if !SWAP_USED[i] {
+            slot = i;
+            break;
+        }
+        i += 1;
+    }
+    if slot == SWAP_SLOTS {
+        return false; // swap full
+    }
+    if !crate::blk_write_page(SWAP_BASE_LBA + (slot as u64) * 8, frame) {
+        return false;
+    }
+    SWAP_USED[slot] = true;
+    // Leave a swapped marker: present=0, PTE_SWAPPED set, slot index in bits 12+.
+    *pte_ptr = ((slot as u64) << 12) | PTE_SWAPPED;
+    free_frame(frame);
+    if DEMAND_MAPPED > 0 {
+        DEMAND_MAPPED -= 1;
+    }
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
+}
+
+/// Page-fault path: if `va` maps a swapped-out page, allocate a fresh frame, read
+/// the page back from its swap slot, remap it, and free the slot. Returns true if
+/// it was a swapped page that has been restored (the faulting access must retry).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn try_swap_in(va: u64) -> bool {
+    let pte_ptr = match leaf_pte_ptr(va) {
+        Some(p) => p,
+        None => return false,
+    };
+    let pte = *pte_ptr;
+    if pte & 1 != 0 || pte & PTE_SWAPPED == 0 {
+        return false; // present, or not a swapped entry
+    }
+    let slot = ((pte >> 12) & (SWAP_SLOTS as u64 - 1)) as usize;
+    let frame = match alloc_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+    if !crate::blk_read_page(SWAP_BASE_LBA + (slot as u64) * 8, frame) {
+        free_frame(frame);
+        return false;
+    }
+    SWAP_USED[slot] = false;
+    let nx = if va >= EXEC_WINDOW_BASE && va < EXEC_WINDOW_END {
+        0
+    } else {
+        PTE_NX
+    };
+    *pte_ptr = frame | PTE_P_W_U | nx;
+    DEMAND_MAPPED += 1;
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
+}
+
+/// Swap self-test (full-os guide Part I.4): map a user page in a fresh address
+/// space, write a pattern, evict it to disk (frame freed, PTE marked swapped),
+/// then swap it back in and confirm the page reads back byte-exact through its VA
+/// — proving the page survived the round-trip frame -> disk -> fresh frame. Emits
+/// `SWAP: roundtrip ok` / `fail` / `skip` (no disk).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub fn swap_selftest() {
+    unsafe {
+        if !crate::storage::r4_storage_available() {
+            serial_write(b"SWAP: skip\n");
+            return;
+        }
+        let kcr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+        let ucr3 = match address_space_create(kcr3) {
+            Some(p) => p,
+            None => {
+                serial_write(b"SWAP: fail\n");
+                return;
+            }
+        };
+        const VA: u64 = 0x0013_0000; // a user data VA (writable, NX)
+        let frame = match as_get_page(ucr3, VA) {
+            Some(f) => f,
+            None => {
+                address_space_release(ucr3);
+                serial_write(b"SWAP: fail\n");
+                return;
+            }
+        };
+        // Write a pattern into the backing frame via the HHDM.
+        let fp = phys_to_virt(frame) as *mut u8;
+        let mut i = 0usize;
+        while i < 4096 {
+            *fp.add(i) = (i & 0xFF) as u8;
+            i += 1;
+        }
+        // Run swap on the test address space.
+        core::arch::asm!("mov cr3, {}", in(reg) ucr3, options(nostack));
+        let evicted = swap_out_current(VA);
+        let pte_swapped = leaf_pte_ptr(VA).map(|p| *p & 1 == 0 && *p & PTE_SWAPPED != 0);
+        let restored = if evicted { try_swap_in(VA) } else { false };
+        // Read back through the VA (now present); ring 0 may read a user page.
+        let mut ok = evicted && pte_swapped == Some(true) && restored;
+        if ok {
+            let vp = VA as *const u8;
+            let mut j = 0usize;
+            while j < 4096 {
+                if *vp.add(j) != (j & 0xFF) as u8 {
+                    ok = false;
+                    break;
+                }
+                j += 1;
+            }
+        }
+        core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack));
+        address_space_release(ucr3);
+        if ok {
+            serial_write(b"SWAP: roundtrip ok\n");
+        } else {
+            serial_write(b"SWAP: fail\n");
+        }
+    }
+}

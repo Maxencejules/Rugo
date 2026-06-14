@@ -51,6 +51,17 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
                 if cs & 3 == 3 {
                     let demand_cr2: u64;
                     core::arch::asm!("mov {}, cr2", out(reg) demand_cr2, options(nomem, nostack));
+                    // Swap-in (full-os guide Part I.4) runs FIRST: a swapped-out
+                    // page has present=0, which try_demand_map would otherwise
+                    // misread as a fresh demand hole and clobber (losing the
+                    // page + leaking its swap slot). A non-swapped fault returns
+                    // here with no side effect, then demand-map handles it.
+                    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                    {
+                        if crate::mm::try_swap_in(demand_cr2) {
+                            return;
+                        }
+                    }
                     if crate::mm::try_demand_map(demand_cr2) {
                         return;
                     }

@@ -7932,6 +7932,46 @@ unsafe fn block_io_dispatch(write: bool, sector: u64, len: usize, fua: bool) -> 
     }
 }
 
+/// Write one 4 KiB page (8 sectors) from the physical frame `src_phys` to the
+/// block device starting at `lba` (full-os guide Part I.4 swap). Copies through
+/// the shared BLK_DATA_PAGE one sector at a time (the block path is 512 B).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn blk_write_page(lba: u64, src_phys: u64) -> bool {
+    let src = mm::phys_to_virt(src_phys) as *const u8;
+    let mut s = 0u64;
+    while s < 8 {
+        core::ptr::copy_nonoverlapping(
+            src.add((s * 512) as usize),
+            BLK_DATA_PAGE.0.as_mut_ptr(),
+            512,
+        );
+        if !block_io_dispatch(true, lba + s, 512, false) {
+            return false;
+        }
+        s += 1;
+    }
+    true
+}
+
+/// Read one 4 KiB page (8 sectors) from `lba` into the physical frame `dst_phys`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn blk_read_page(lba: u64, dst_phys: u64) -> bool {
+    let dst = mm::phys_to_virt(dst_phys) as *mut u8;
+    let mut s = 0u64;
+    while s < 8 {
+        if !block_io_dispatch(false, lba + s, 512, false) {
+            return false;
+        }
+        core::ptr::copy_nonoverlapping(
+            BLK_DATA_PAGE.0.as_ptr(),
+            dst.add((s * 512) as usize),
+            512,
+        );
+        s += 1;
+    }
+    true
+}
+
 #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
 unsafe fn block_flush_dispatch() -> bool {
     match ACTIVE_BLOCK_DRIVER {
@@ -10000,6 +10040,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::udp6_echo_selftest();
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
+        mm::swap_selftest(); // full-os Part I.4: swap / page eviction
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline

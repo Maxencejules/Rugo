@@ -185,6 +185,6 @@ single safe boot-verified slice and several have hard prerequisites.
   shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**, **per-CPU
   run queues**), DMA pool,
   block buffer cache, AES-128 (FIPS-197 KAT, backs disk crypto), **SHA-256
-  (FIPS 180-4 KAT) + measured-boot PCR**, **2 MiB huge page**, **TTY line
-  discipline**, **GPT parse**, **mount table**; PCI detection (xHCI, e1000,
-  HD-Audio, **PCIe ECAM**, **MSI-X enable**).
+  (FIPS 180-4 KAT) + measured-boot PCR**, **2 MiB huge page**, **swap / page
+  eviction round-trip**, **TTY line discipline**, **GPT parse**, **mount table**;
+  PCI detection (xHCI, e1000, HD-Audio, **PCIe ECAM**, **MSI-X enable**).
