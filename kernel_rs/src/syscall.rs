@@ -209,6 +209,10 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             53 => {
                 *frame.add(14) = sys_time(arg1, arg2);
             }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            54 => {
+                *frame.add(14) = sys_getrandom(arg1, arg2);
+            }
             _ => {
                 *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
             }

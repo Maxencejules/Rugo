@@ -36,7 +36,9 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   in `docs/runtime/fork_v1.md`);
   `53` = `sys_time` (op 1 = clock_gettime(`rsi`=clockid: 0 = MONOTONIC
   nanoseconds since boot, 1 = REALTIME seconds since the Unix epoch);
-  contract in `docs/runtime/clock_v1.md`).
+  contract in `docs/runtime/clock_v1.md`);
+  `54` = `sys_getrandom` (`rdi`=buf, `rsi`=len → bytes written; contract in
+  `docs/runtime/rng_v1.md`).
 
 ## Invocation
 

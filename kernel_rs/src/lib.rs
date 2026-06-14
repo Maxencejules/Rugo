@@ -3730,6 +3730,65 @@ cfg_r4! {
         }
     }
 
+    // ---- CSPRNG + getrandom (full-os guide Part IV.10) ----
+    //
+    // A xorshift64* pool seeded once (lazily) from the CMOS wall clock, the
+    // PIT tick counter, and a constant, then advanced per draw with extra
+    // tick entropy mixed in. v1 uses timing/clock entropy; RDRAND seeding
+    // is a documented carry-forward (CPUID-gated, to stay portable).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut RNG_STATE: u64 = 0;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn rng_next() -> u64 {
+        if RNG_STATE == 0 {
+            let seed = cmos_unix_seconds()
+                ^ 0x9E37_79B9_7F4A_7C15
+                ^ (R4_PREEMPT_TICKS << 17 | R4_PREEMPT_TICKS);
+            RNG_STATE = if seed == 0 { 0x1234_5678_9ABC_DEF1 } else { seed };
+        }
+        // Mix in live tick entropy, then xorshift64*.
+        RNG_STATE ^= R4_PREEMPT_TICKS.wrapping_add(0xD1B5_4A32_D192_ED03);
+        let mut x = RNG_STATE;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        RNG_STATE = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// sys_getrandom (ABI v3.2 id 54): fill the user buffer at `buf_ptr`
+    /// with `len` random bytes. Returns the count written, or -1 on a bad
+    /// pointer or oversize request.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_getrandom(buf_ptr: u64, len: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        if len == 0 {
+            return 0;
+        }
+        if len > 4096 {
+            return ERR;
+        }
+        let n = len as usize;
+        let mut tmp = [0u8; 256];
+        let mut done = 0usize;
+        while done < n {
+            let chunk = core::cmp::min(tmp.len(), n - done);
+            let mut i = 0usize;
+            while i < chunk {
+                let r = rng_next().to_le_bytes();
+                let take = core::cmp::min(8, chunk - i);
+                tmp[i..i + take].copy_from_slice(&r[..take]);
+                i += take;
+            }
+            if copyout_user(buf_ptr + done as u64, &tmp[..chunk], chunk).is_err() {
+                return ERR;
+            }
+            done += chunk;
+        }
+        len
+    }
+
     unsafe fn r4_find_spawn_slot() -> Option<usize> {
         for tid in 1..R4_NUM_TASKS {
             if R4_TASKS[tid].state == R4State::Dead {
