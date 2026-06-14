@@ -245,7 +245,7 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             61 => {
-                *frame.add(14) = sys_sysinfo(arg1);
+                *frame.add(14) = sys_sysinfo(arg1, arg2, arg3);
             }
             _ => {
                 *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
