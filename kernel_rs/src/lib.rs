@@ -5130,6 +5130,93 @@ cfg_r4! {
         }
     }
 
+    // Dynamic loading (full-os guide Part V.11): a dlopen/dlsym-style module
+    // loader. The dynamic linker for real ELF .so files is blocked on the PE->ELF
+    // toolchain (mingw refptr/auto-import breaks C binaries past 2 pages); this v1
+    // sidesteps that with a position-independent module the kernel ships embedded.
+    // A module is [u32 n_exports][exports: {name[12], u32 offset}][PIC code]; v1
+    // ships one module ("dlmod") exporting "addone" (rax = rdi + 1). The loader
+    // maps it into a fresh executable user region and resolves symbols from the
+    // loaded image's export table.
+    // Above the exec-app window [0x0140_0000,0x0180_0000) and the brk/mmap
+    // regions below it: the [0x0180_0000,0x0200_0000) gap is owned by no other
+    // user mapping, so the loaded module can never alias the caller's own ELF
+    // segments/heap/mmap.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const DLOPEN_BASE: u64 = 0x0190_0000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static DL_MODULE: [u8; 25] = [
+        0x01, 0x00, 0x00, 0x00, // n_exports = 1
+        b'a', b'd', b'd', b'o', b'n', b'e', 0, 0, 0, 0, 0, 0, // name[12] = "addone"
+        0x14, 0x00, 0x00, 0x00, // offset = 20 (start of the code)
+        0x48, 0x8D, 0x47, 0x01, 0xC3, // lea rax,[rdi+1] ; ret  (PIC)
+    ];
+
+    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> module base VA (loads
+    /// the named embedded module into an executable user region), op 2 =
+    /// dlsym(name) -> resolved function VA from the loaded module's export table.
+    /// -1 on unknown module/symbol or a mapping failure.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_dlctl(op: u64, a2: u64, _a3: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => {
+                // dlopen: only "dlmod" is shipped in v1.
+                let mut name = [0u8; 8];
+                if copyin_user(&mut name, a2, 8).is_err() {
+                    return ERR;
+                }
+                if &name[..6] != b"dlmod\0" {
+                    return ERR;
+                }
+                // Map RW, copy the module image in, then re-protect read+execute
+                // (W^X: never writable and executable at once). Idempotent: a
+                // repeat dlopen finds the page already mapped (R-X from the prior
+                // load), so force it back to RW before the re-copy rather than
+                // failing the copyout.
+                if !crate::mm::vm_map_current(DLOPEN_BASE, 2) {
+                    return ERR;
+                }
+                if !crate::mm::vm_protect_current(DLOPEN_BASE, 2) {
+                    return ERR;
+                }
+                if copyout_user(DLOPEN_BASE, &DL_MODULE, DL_MODULE.len()).is_err() {
+                    return ERR;
+                }
+                if !crate::mm::vm_protect_current(DLOPEN_BASE, 4) {
+                    return ERR;
+                }
+                DLOPEN_BASE
+            }
+            2 => {
+                // dlsym: resolve from the LOADED module's export table.
+                let mut sym = [0u8; 12];
+                if copyin_user(&mut sym, a2, 12).is_err() {
+                    return ERR;
+                }
+                let mut hdr = [0u8; 4];
+                if copyin_user(&mut hdr, DLOPEN_BASE, 4).is_err() {
+                    return ERR;
+                }
+                let n = u32::from_le_bytes(hdr) as usize;
+                let mut e = 0usize;
+                while e < n && e < 16 {
+                    let mut ent = [0u8; 16];
+                    if copyin_user(&mut ent, DLOPEN_BASE + 4 + (e * 16) as u64, 16).is_err() {
+                        return ERR;
+                    }
+                    if ent[..12] == sym[..] {
+                        let off = u32::from_le_bytes([ent[12], ent[13], ent[14], ent[15]]) as u64;
+                        return DLOPEN_BASE + off;
+                    }
+                    e += 1;
+                }
+                ERR
+            }
+            _ => ERR,
+        }
+    }
+
     // Security audit log (full-os guide Part IV.10): a small ring, distinct
     // from dmesg, holding structured security events (capability/sandbox
     // denials and privileged operations) that userspace can query via

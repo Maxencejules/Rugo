@@ -103,12 +103,17 @@ single safe boot-verified slice and several have hard prerequisites.
    **shared-memory pixel surfaces** (vs v1 solid-color rects), damage regions,
    alpha; a standing compositor **process** owning the FB; and an input event
    queue routing clicks to the top window.
-4. **V.11 dynamic linker / .so** — **blocked** on the PE→ELF toolchain: mingw’s
-   refptr/auto-import + the homemade `tools/pe_to_elf_v1.py` break C binaries that
-   cross 2 pages (proved via `page3probe`: the kernel handles 3-page apps; the
-   toolchain does not). Fix `pe_to_elf` (or switch the C apps to a real ELF
-   linker) first, then add `sys_dlctl` (map-segment/resolve) + ELF dynamic
-   relocation.
+4. **V.11 dynamic loading — dlopen/dlsym mechanism done; real ELF .so still blocked.**
+   `sys_dlctl` (id 60) implements `dlopen`/`dlsym` (`dynlink_v1.md`): it loads a
+   position-independent module the kernel ships embedded into a fresh executable
+   user region (map RW → copy → mprotect R-X), resolves a symbol from the loaded
+   image's export table, and `dlprobe` calls it (`DLPROBE: dlsym ok`). The
+   loading + resolution + execute mechanism works. What remains is a real ELF
+   **.so** linker (dynamic relocations, GOT/PLT), which is still **blocked** on
+   the PE→ELF toolchain: mingw's refptr/auto-import + `tools/pe_to_elf_v1.py`
+   break C binaries past 2 pages (proved via `page3probe`). Fix `pe_to_elf` (or
+   switch the C apps to a real ELF linker) to produce `.so` files, then extend
+   `sys_dlctl` with ELF parsing + relocation.
 5. **V.11 installer + UEFI + package fetch + self-hosting — disk provisioning + UEFI boot done.**
    The installer finds a target disk, writes a boot record, and verifies the
    write/read round-trip (`installer_v1.md`, confirmed host-side). The kernel also
@@ -131,8 +136,11 @@ single safe boot-verified slice and several have hard prerequisites.
 
 ## ABI op map (current)
 - `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,
-  7 ICMPv6, 8 UDP-echo (4–8 are self-tests).
-- `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep.
+  7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO (4–10 are self-tests).
+- `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose.
+- `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
   6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal.
 - `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid.
+- SMP self-tests (boot markers, no syscall): spinlock lock-count, IPI ack,
+  per-CPU LAPIC timers, TLB shootdown, per-CPU GS, cross-CPU work dispatch.
