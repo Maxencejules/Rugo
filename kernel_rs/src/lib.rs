@@ -1143,6 +1143,20 @@ cfg_m3! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_fs_ctl_v1(op: u64, path_ptr: u64, arg: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        if op == 6 {
+            // lseek(fd, offset): SEEK_SET (full-os guide Part V.11 rlibc).
+            // path_ptr carries the fd, arg the absolute offset. Owner-gated,
+            // no storage cap (a generic fd operation). Returns the new offset.
+            let fd = path_ptr as usize;
+            if fd < 3 || fd >= M8_FD_MAX || M8_FD_TABLE[fd].kind == M8FdKind::Free {
+                return ERR;
+            }
+            if !r4_fd_owner_ok(fd) {
+                return ERR;
+            }
+            M8_FD_TABLE[fd].offset = arg as usize;
+            return arg;
+        }
         if !r4_current_has_cap(R4_TASK_CAP_STORAGE) || !vfs::vfs_ready() {
             return ERR;
         }
