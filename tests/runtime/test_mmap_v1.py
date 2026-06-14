@@ -43,3 +43,21 @@ def test_mmap_prot_read_only_enforced(qemu_go_c4_runtime, find_in_order):
     # The write must NOT have succeeded.
     assert "VMPROBE: ro WROTE" not in out
     assert "GOINIT: err" not in out
+
+
+def test_mprotect_downgrade_enforced(qemu_go_c4_runtime, find_in_order):
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot("probe vmprobe mp\nshutdown\n").stdout
+
+    # A RW page is mmapped and written, then mprotect drops it to read-only;
+    # the next write faults and is contained.
+    find_in_order(out, [
+        "MM: mprotect va=0x0000000001230000",
+        "VMPROBE: mp protected",
+        "USERPF: addr=0x0000000001230000",
+        "GOINIT: result shutdown-clean",
+        "RUGO: halt ok",
+    ])
+    assert "VMPROBE: mp WROTE" not in out
+    assert "GOINIT: err" not in out

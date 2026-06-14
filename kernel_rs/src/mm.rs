@@ -882,3 +882,42 @@ pub unsafe fn vm_unmap_current(va: u64) -> bool {
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
     true
 }
+
+/// Change the protection of one mapped user page at `va` in the current
+/// address space (prot 1=R, 2=W, 4=X), preserving its frame. Clears any
+/// CoW mark. Returns true if the page was present.
+pub unsafe fn vm_protect_current(va: u64, prot: u64) -> bool {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return false;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return false;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pde = *pd.add(((va >> 21) & 0x1FF) as usize);
+    if pde & 1 == 0 {
+        return false;
+    }
+    let pt = phys_to_virt(pde & PHYS_MASK) as *mut u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as usize;
+    let pte = *pt.add(pt_idx);
+    if pte & 1 == 0 {
+        return false;
+    }
+    let mut flags = PTE_P_U;
+    if prot & 2 != 0 {
+        flags |= PTE_W;
+    }
+    if prot & 4 == 0 {
+        flags |= PTE_NX;
+    }
+    *pt.add(pt_idx) = (pte & PHYS_MASK) | flags;
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
+}

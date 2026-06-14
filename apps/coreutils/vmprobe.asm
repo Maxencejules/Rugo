@@ -22,10 +22,20 @@ _start:
     jne  .normal
     mov  al, [rdi]
     cmp  al, 'r'
-    jne  .normal
+    je   .maybe_ro
+    cmp  al, 'm'
+    je   .maybe_mp
+    jmp  .normal
+.maybe_ro:
     mov  al, [rdi + 1]
     cmp  al, 'o'
     je   .romode
+    jmp  .normal
+.maybe_mp:
+    mov  al, [rdi + 1]
+    cmp  al, 'p'
+    je   .mpmode
+    jmp  .normal
 
 .normal:
     ; brk(0) -> base
@@ -106,6 +116,40 @@ _start:
     mov  eax, 2
     int  0x80
 
+.mpmode:
+    ; mmap a RW page, use it, then mprotect it read-only
+    mov  edi, 1
+    mov  rsi, 0x1230000
+    mov  edx, 0x1000
+    mov  r10d, 3
+    mov  eax, 50
+    int  0x80
+    mov  rbx, 0x1230000
+    cmp  rax, rbx
+    jne  .fail
+    mov  byte [rbx], 0x11       ; write while RW: fine
+    ; mprotect(va, 0x1000, PROT_READ)
+    mov  edi, 4
+    mov  rsi, 0x1230000
+    mov  edx, 0x1000
+    mov  r10d, 1
+    mov  eax, 50
+    int  0x80
+    cmp  rax, 0
+    jne  .fail
+    lea  rdi, [rel mpmsg]
+    mov  esi, mpmsg_len
+    xor  eax, eax
+    int  0x80
+    mov  al, [rbx]             ; read still allowed
+    mov  byte [rbx], 0x22      ; write must now fault -> killed
+    lea  rdi, [rel mpwrote]
+    mov  esi, mpwrote_len
+    xor  eax, eax
+    int  0x80
+    mov  eax, 2
+    int  0x80
+
 section .data
 okmsg:       db "VMPROBE: ok", 10
 okmsg_len    equ $ - okmsg
@@ -115,3 +159,7 @@ romsg:       db "VMPROBE: ro mapped", 10
 romsg_len    equ $ - romsg
 rowrotemsg:  db "VMPROBE: ro WROTE", 10
 rowrotemsg_len equ $ - rowrotemsg
+mpmsg:       db "VMPROBE: mp protected", 10
+mpmsg_len    equ $ - mpmsg
+mpwrote:     db "VMPROBE: mp WROTE", 10
+mpwrote_len  equ $ - mpwrote

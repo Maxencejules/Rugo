@@ -3567,6 +3567,31 @@ cfg_r4! {
                 serial_write(b"\n");
                 0
             }
+            4 => {
+                // mprotect(va, sz, prot)
+                let (va, sz, prot) = (a2, a3, a4);
+                if va & 0xFFF != 0 || sz == 0 || sz & 0xFFF != 0 {
+                    return ERR;
+                }
+                let end = match va.checked_add(sz) {
+                    Some(e) => e,
+                    None => return ERR,
+                };
+                if va < VM_MMAP_BASE || end > VM_MMAP_END {
+                    return ERR;
+                }
+                let mut off = 0u64;
+                while off < sz {
+                    if !mm::vm_protect_current(va + off, prot) {
+                        return ERR;
+                    }
+                    off += 0x1000;
+                }
+                serial_write(b"MM: mprotect va=0x");
+                serial_write_hex(va);
+                serial_write(b"\n");
+                0
+            }
             3 => {
                 // brk(new) - 0 queries
                 if R4_TASKS[R4_CURRENT].heap_brk == 0 {

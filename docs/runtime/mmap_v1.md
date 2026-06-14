@@ -21,6 +21,7 @@ superseded by a single multiplexed id):
 | 1 | mmap | `rsi`=va, `rdx`=sz, `r10`=prot | va, or -1 |
 | 2 | munmap | `rsi`=va, `rdx`=sz | 0, or -1 |
 | 3 | brk | `rsi`=new (0 = query) | old break, or -1 |
+| 4 | mprotect | `rsi`=va, `rdx`=sz, `r10`=prot | 0, or -1 |
 
 prot bits: 1 = READ, 2 = WRITE, 4 = EXEC. A mapping is always present+user;
 WRITE adds the writable bit, and the page is NX unless EXEC is set.
@@ -43,6 +44,9 @@ and is capped at `0x0120_0000`.
 - **mmap** maps each page via `vm_map_current` (idempotent if already
   present); on partial failure it rolls back the pages it mapped and
   returns -1. Frames come from the PMM and are zeroed.
+- **mprotect** changes a mapped range's permissions in place
+  (`vm_protect_current`), preserving the frame and clearing any CoW mark; a
+  later write to a downgraded read-only page faults to containment.
 - **munmap** clears each PTE and releases the frame through
   `cow_release_leaf`, so a page shared via fork is only freed by its last
   owner. `DEMAND_MAPPED` (the physical demand-frame count) is decremented
@@ -70,7 +74,7 @@ read-only mmap has no such bit, so it faults through to containment
 ## v1 boundary / carry-forward
 
 - No VMA list, file-backed mappings, `MAP_FIXED` negotiation, huge pages,
-  `mprotect`, or swap — all carry-forward.
+  or swap — all carry-forward. (`mprotect` is implemented, op 4.)
 - `DEMAND_MAX_FRAMES` quota stays global (per-task quota deferred).
 - mmap region is a fixed 2 MiB window; a real allocator placing mappings
   anywhere in the user half is future work.
