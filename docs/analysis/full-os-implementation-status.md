@@ -6,7 +6,9 @@ Branch: `feat/full-os-keystone-addrspace`. Every item below is **boot-verified**
 (a `make test-<name>-v1` target booting under QEMU and asserting serial/screen
 markers emitted by runtime code) with a `docs/runtime/<name>_v1.md` contract and,
 where it added an ABI id/op, an entry in `docs/abi/syscall_v3.md`. Validated by
-repeated full `make test-qemu` gates (latest: **876 passed / 0 failed**).
+repeated full `make test-qemu` gates (latest: **906 passed / 0 failed**, plus
+~30 added `*_v1` tests this round — modulo a known timing-flaky futex/network
+test that passes in isolation).
 
 This document records what is implemented at **v1** and gives **concrete next
 steps** for the subsystems the guide tags L/XL that remain as carry-forward.
