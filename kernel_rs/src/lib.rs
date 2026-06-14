@@ -3629,6 +3629,7 @@ cfg_r4! {
     unsafe fn sys_net_query(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_NETWORK == 0 {
+            audit_event(b"cap-deny", 49); // full-os guide Part IV.10 audit trail
             return ERR;
         }
         match op {
@@ -4960,6 +4961,78 @@ cfg_r4! {
         }
     }
 
+    // Security audit log (full-os guide Part IV.10): a small ring, distinct
+    // from dmesg, holding structured security events (capability/sandbox
+    // denials and privileged operations) that userspace can query via
+    // sys_sysinfo op 7. Records WHO (tid) tried WHAT (syscall nr) and was denied.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const AUDIT_CAP: usize = 1024;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut AUDIT: [u8; AUDIT_CAP] = [0; AUDIT_CAP];
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut AUDIT_HEAD: usize = 0;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut AUDIT_LEN: usize = 0;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn audit_byte(b: u8) {
+        AUDIT[AUDIT_HEAD] = b;
+        AUDIT_HEAD = (AUDIT_HEAD + 1) % AUDIT_CAP;
+        if AUDIT_LEN < AUDIT_CAP {
+            AUDIT_LEN += 1;
+        }
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn audit_write(s: &[u8]) {
+        for &b in s {
+            audit_byte(b);
+        }
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn audit_hex(v: u64) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut shift: i32 = 60;
+        while shift >= 0 {
+            audit_byte(HEX[((v >> shift) & 0xF) as usize]);
+            shift -= 4;
+        }
+    }
+
+    /// Record a denied/privileged security event: tag + syscall nr + caller tid.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn audit_event(tag: &[u8], nr: u64) {
+        audit_write(b"AUDIT: ");
+        audit_write(tag);
+        audit_write(b" nr=0x");
+        audit_hex(nr);
+        audit_write(b" tid=0x");
+        audit_hex(R4_CURRENT as u64);
+        audit_write(b"\n");
+    }
+
+    /// Copy the most recent `len` bytes of the audit ring (oldest->newest) to
+    /// the user buffer; returns the count or u64::MAX on a bad buffer.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn audit_read(ptr: u64, len: usize) -> u64 {
+        let n = core::cmp::min(len, AUDIT_LEN);
+        if n == 0 {
+            return 0;
+        }
+        let start = (AUDIT_HEAD + AUDIT_CAP - n) % AUDIT_CAP;
+        let first = core::cmp::min(n, AUDIT_CAP - start);
+        if copyout_user(ptr, &AUDIT[start..start + first], first).is_err() {
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
+        if n > first
+            && copyout_user(ptr + first as u64, &AUDIT[0..n - first], n - first).is_err()
+        {
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
+        n as u64
+    }
+
     /// sys_sysinfo (ABI v3.2 id 61): lightweight /proc-style metrics.
     /// op 1 = live task count, op 2 = free physical frames, op 3 = uptime
     /// in PIT ticks (100 Hz). -1 on bad op.
@@ -5045,6 +5118,10 @@ cfg_r4! {
                 }
                 n as u64
             }
+            // op 7 = security audit-log read (full-os guide Part IV.10):
+            // a2 = user buffer, a3 = capacity -> bytes copied (u64::MAX on a
+            // bad buffer). Public so any task can inspect the audit trail.
+            7 => audit_read(a2, a3 as usize),
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }
