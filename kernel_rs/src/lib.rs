@@ -4222,6 +4222,29 @@ cfg_r4! {
         0
     }
 
+    /// sys_ioctl (ABI v3.2 id 56, generic device control): op 1 = framebuffer
+    /// blit. a2 packs the rectangle as x<<48 | y<<32 | w<<16 | h (each u16);
+    /// a3 is the 32-bpp XRGB color. Returns 0 on success, -1 if no
+    /// framebuffer / off-screen / unknown op.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_ioctl(op: u64, a2: u64, a3: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => {
+                let x = (a2 >> 48) & 0xFFFF;
+                let y = (a2 >> 32) & 0xFFFF;
+                let w = (a2 >> 16) & 0xFFFF;
+                let h = a2 & 0xFFFF;
+                if fb::fb_blit_rect(x, y, w, h, a3 as u32) {
+                    0
+                } else {
+                    ERR
+                }
+            }
+            _ => ERR,
+        }
+    }
+
     /// sys_sysinfo (ABI v3.2 id 61): lightweight /proc-style metrics.
     /// op 1 = live task count, op 2 = free physical frames, op 3 = uptime
     /// in PIT ticks (100 Hz). -1 on bad op.

@@ -86,6 +86,30 @@ pub fn fb_size() -> (u64, u64) {
     unsafe { (FB.width, FB.height) }
 }
 
+/// Fill a rectangle in the framebuffer with a 32-bpp XRGB color, clamped to
+/// the screen bounds (full-os guide Part III graphics). Returns false if no
+/// framebuffer is present or the origin is off-screen.
+pub fn fb_blit_rect(x: u64, y: u64, w: u64, h: u64, color: u32) -> bool {
+    unsafe {
+        if !FB.ready || x >= FB.width || y >= FB.height {
+            return false;
+        }
+        let x_end = core::cmp::min(x + w, FB.width);
+        let y_end = core::cmp::min(y + h, FB.height);
+        let mut yy = y;
+        while yy < y_end {
+            let line = (FB.addr + yy * FB.pitch) as *mut u32;
+            let mut xx = x;
+            while xx < x_end {
+                *line.add(xx as usize) = color;
+                xx += 1;
+            }
+            yy += 1;
+        }
+        true
+    }
+}
+
 /// Adopt the Limine framebuffer if one was provided (32 bpp only).
 pub fn fb_init() {
     unsafe {
