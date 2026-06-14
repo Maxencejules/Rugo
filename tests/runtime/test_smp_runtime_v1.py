@@ -103,6 +103,8 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "SMP: tlb shootdown ok",
         # Per-CPU storage: each AP recorded its index through its own GS base.
         "SMP: percpu ok",
+        # Cross-CPU work dispatch: an AP claimed + ran a dispatched computation.
+        "SMP: ap work ok",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out
@@ -129,6 +131,8 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: tlb shootdown ok",
         # Per-CPU storage: the AP recorded its index through its own GS base.
         "SMP: percpu ok",
+        # Cross-CPU work dispatch: the AP claimed + ran a dispatched computation.
+        "SMP: ap work ok",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

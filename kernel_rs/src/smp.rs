@@ -131,6 +131,77 @@ unsafe fn percpu_init(slot: usize) {
     core::arch::asm!("mov qword ptr gs:[0], {v}", v = in(reg) slot as u64, options(nostack));
 }
 
+// Cross-CPU work dispatch (full-os guide Part I.3): the BSP hands a kernel work
+// item to the application processors; exactly one AP CLAIMS it (atomic CAS),
+// runs it on its own core, and reports the result. This is the execution
+// primitive a per-CPU scheduler builds on — the APs run real dispatched work
+// instead of only parking. v1 ships one work kind (a checkable computation) and
+// a single in-flight item (the boot self-test); a real run queue is the capstone.
+static WORK_GEN: AtomicU64 = AtomicU64::new(0); // 0 = no work; nonzero = a generation
+static WORK_CLAIM: AtomicU64 = AtomicU64::new(0); // the gen an AP CASes to 0 to claim
+static WORK_KIND: AtomicU64 = AtomicU64::new(0);
+static WORK_ARG: AtomicU64 = AtomicU64::new(0);
+static WORK_RESULT: AtomicU64 = AtomicU64::new(0);
+static WORK_DONE: AtomicU64 = AtomicU64::new(0); // set to the gen when finished
+
+/// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
+/// iteratively (a real workload the dispatcher can independently check).
+unsafe fn run_work(kind: u64, arg: u64) -> u64 {
+    match kind {
+        1 => {
+            let mut sum = 0u64;
+            let mut i = 1u64;
+            while i <= arg {
+                sum = sum.wrapping_add(i);
+                i += 1;
+            }
+            sum
+        }
+        _ => 0,
+    }
+}
+
+/// Poll the work mailbox on an AP: if an item is pending, claim it atomically
+/// (so exactly one AP runs it), execute it, and publish the result. Called from
+/// the AP park loop after each wake.
+unsafe fn ap_poll_work() {
+    let gen = WORK_GEN.load(Ordering::Acquire);
+    if gen != 0
+        && WORK_CLAIM
+            .compare_exchange(gen, 0, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    {
+        let r = run_work(WORK_KIND.load(Ordering::Acquire), WORK_ARG.load(Ordering::Acquire));
+        WORK_RESULT.store(r, Ordering::Release);
+        WORK_DONE.store(gen, Ordering::Release);
+    }
+}
+
+/// Dispatch a work item from the BSP and wait (bounded) for an AP to finish it.
+/// Returns the result, or None if no AP is online or the wait timed out. The AP
+/// wakes on its periodic LAPIC timer, polls the mailbox, claims, and runs.
+unsafe fn smp_dispatch_work(kind: u64, arg: u64) -> Option<u64> {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    let gen = WORK_GEN.load(Ordering::Acquire).wrapping_add(1).max(1);
+    WORK_KIND.store(kind, Ordering::Release);
+    WORK_ARG.store(arg, Ordering::Release);
+    WORK_DONE.store(0, Ordering::Release);
+    WORK_CLAIM.store(gen, Ordering::Release);
+    WORK_GEN.store(gen, Ordering::Release); // publish LAST so the item is consistent
+    let mut spins = 0u64;
+    while WORK_DONE.load(Ordering::Acquire) != gen && spins < 200_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    if WORK_DONE.load(Ordering::Acquire) == gen {
+        Some(WORK_RESULT.load(Ordering::Acquire))
+    } else {
+        None
+    }
+}
+
 /// LAPIC-timer service routine (from trap_handler vector 241): tick + EOI.
 pub(crate) unsafe fn lapic_timer_handler() {
     AP_TICKS.fetch_add(1, Ordering::SeqCst);
@@ -283,6 +354,10 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
         }
         APS_ONLINE.fetch_add(1, Ordering::SeqCst);
         loop {
+            // Run any work the BSP dispatched (no-op when none pending), then
+            // sleep until the next interrupt (the periodic LAPIC timer wakes us
+            // to poll again). This is the AP doing real kernel work, not parking.
+            ap_poll_work();
             core::arch::asm!("sti; hlt", options(nomem, nostack));
         }
     }
@@ -427,6 +502,20 @@ pub fn smp_init() {
                 }
             } else {
                 serial_write(b"SMP: percpu timeout FAIL\n");
+            }
+            // Cross-CPU work dispatch: hand a real computation (sum 1..=1000) to
+            // an AP, which claims it and runs it ON ITS OWN CORE, then reports the
+            // result. Proof the APs execute dispatched kernel work — the per-CPU
+            // execution primitive a scheduler runs tasks on.
+            let work_ok = match smp_dispatch_work(1, 1000) {
+                Some(r) => r == 500_500,
+                None => false,
+            };
+            serial_write(b"SMP: ap work ");
+            if work_ok {
+                serial_write(b"ok\n");
+            } else {
+                serial_write(b"FAIL\n");
             }
         }
     }

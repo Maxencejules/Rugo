@@ -74,10 +74,16 @@ single safe boot-verified slice and several have hard prerequisites.
    points `IA32_GS_BASE` at its own `PerCpu` slot, records its index through GS,
    and its LAPIC-timer ISR bumps a per-CPU counter through GS — lock-free per-CPU
    addressing (the BSP's GS base is left untouched so the go lane's userspace is
-   undisturbed). **Remaining:** wire `tlb_shootdown` into the `munmap`/`mprotect`/
-   CoW paths; put a real `current`/run-queue in the per-CPU slots; add per-CPU
-   GDT/TSS so an AP can take a ring3→ring0 trap on its own kernel stack and run
-   user tasks instead of parking.
+   undisturbed). **Cross-CPU work dispatch** is also in place (`ap_work_v1.md`):
+   the BSP hands a kernel work item to the APs, exactly one AP claims it (atomic
+   CAS) and runs it on its own core, reporting the result (`SMP: ap work ok`).
+   The APs now run real dispatched kernel work, not just park. **Remaining (the
+   capstone, a dedicated core effort):** wire `tlb_shootdown` into the `munmap`/
+   `mprotect`/CoW paths; turn the single-item work mailbox into a per-CPU run
+   queue holding `current`/tasks; add per-CPU GDT/TSS so an AP takes a ring3->ring0
+   trap on its own kernel stack; and make the scheduler/syscall/page-fault paths
+   SMP-safe (today they assume one CPU with interrupts-off syscalls) so the
+   scheduler can run USER tasks on the APs.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000 — controller DETECTION done.** The OS
    now discovers a USB xHCI host controller (`-device qemu-xhci`), maps its BAR
    (the PCI MMIO hole is not in the HHDM, so `mmio_map_4k` walks CR3 and installs
