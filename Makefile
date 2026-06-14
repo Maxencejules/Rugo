@@ -1016,6 +1016,15 @@ test-ecam-v1: image-go
 test-nud-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_nud_v1.py -v --junitxml=$(OUT)/pytest-nud-v1.xml
 
+test-hugepage-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_hugepage_v1.py -v --junitxml=$(OUT)/pytest-hugepage-v1.xml
+
+test-tty-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tty_v1.py -v --junitxml=$(OUT)/pytest-tty-v1.xml
+
+test-msix-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_msix_v1.py -v --junitxml=$(OUT)/pytest-msix-v1.xml
+
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
 

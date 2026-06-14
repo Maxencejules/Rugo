@@ -48,6 +48,8 @@ pub(crate) mod aes;
 pub(crate) mod cache;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod dma;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) mod tty;
 pub(crate) mod fb;
 pub(crate) mod smp;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -7544,6 +7546,84 @@ unsafe fn ecam_selftest() -> u64 {
     }
 }
 
+/// Walk a PCI function's capability list for capability id `cap_id`; returns the
+/// config-space offset of the capability, or None. Capability structures are
+/// dword-aligned (low 2 bits of each pointer are zero).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pci_find_cap(b: u8, d: u8, f: u8, cap_id: u8) -> Option<u8> {
+    let status = (pci_read32(b, d, f, 0x04) >> 16) as u16;
+    if status & (1 << 4) == 0 {
+        return None; // capabilities list not present
+    }
+    let mut ptr = (pci_read32(b, d, f, 0x34) & 0xFC) as u8;
+    let mut guard = 0;
+    while ptr != 0 && guard < 48 {
+        let dw = pci_read32(b, d, f, ptr);
+        let id = (dw & 0xFF) as u8;
+        let next = ((dw >> 8) & 0xFC) as u8;
+        if id == cap_id {
+            return Some(ptr);
+        }
+        ptr = next;
+        guard += 1;
+    }
+    None
+}
+
+/// MSI-X self-test (full-os guide Part II.7, interrupt model): find the first PCI
+/// function exposing an MSI-X capability (id 0x11), read its table size from the
+/// Message Control register, set the MSI-X Enable bit, and read it back to
+/// confirm — then restore the original control so the existing driver is
+/// undisturbed. Reports `MSIX: none` if no device has MSI-X.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn msix_selftest() -> u64 {
+    let mut dev = 0u8;
+    while dev < 32 {
+        let id0 = pci_read32(0, dev, 0, 0);
+        if (id0 & 0xFFFF) as u16 == 0xFFFF {
+            dev += 1;
+            continue;
+        }
+        let hdr = (pci_read32(0, dev, 0, 0x0C) >> 16) & 0xFF;
+        let funcs = if hdr & 0x80 != 0 { 8u8 } else { 1u8 };
+        let mut func = 0u8;
+        while func < funcs {
+            let id = pci_read32(0, dev, func, 0);
+            if (id & 0xFFFF) as u16 != 0xFFFF {
+                if let Some(cap) = pci_find_cap(0, dev, func, 0x11) {
+                    // Message Control is the high 16 bits of the dword at `cap`.
+                    let dw = pci_read32(0, dev, func, cap);
+                    let msgctl = (dw >> 16) as u16;
+                    let table_size = (msgctl & 0x7FF) + 1;
+                    let device = ((id >> 16) & 0xFFFF) as u16;
+                    // Set the MSI-X Enable bit (15) and confirm it sticks.
+                    let enabled_dw = (dw & 0x0000_FFFF) | (((msgctl | 0x8000) as u32) << 16);
+                    pci_write32(0, dev, func, cap, enabled_dw);
+                    let rb = (pci_read32(0, dev, func, cap) >> 16) as u16;
+                    let enabled = rb & 0x8000 != 0;
+                    // Restore the original control (leave the driver's state alone).
+                    pci_write32(0, dev, func, cap, dw);
+                    serial_write(b"MSIX: dev=0x");
+                    serial_write_hex(device as u64);
+                    serial_write(b" vectors=0x");
+                    serial_write_hex(table_size as u64);
+                    if enabled {
+                        serial_write(b" enable ok\n");
+                        return 1;
+                    } else {
+                        serial_write(b" enable fail\n");
+                        return 0;
+                    }
+                }
+            }
+            func += 1;
+        }
+        dev += 1;
+    }
+    serial_write(b"MSIX: none\n");
+    0
+}
+
 /// Claim a PCI function once so one function does not get initialized by
 /// multiple in-kernel drivers.
 #[cfg(any(feature = "blk_test", feature = "blk_invariants_test", feature = "fs_test", feature = "net_test", feature = "go_test"))]
@@ -9821,6 +9901,7 @@ pub extern "C" fn kmain() -> ! {
         e1000_detect(); // full-os Part II.7: Intel e1000 NIC discovery
         hda_detect(); // full-os Part III: Intel HD Audio controller discovery
         let _ = ecam_selftest(); // full-os Part II.7: PCIe ECAM config access
+        let _ = msix_selftest(); // full-os Part II.7: MSI-X capability + enable
         let _ = kbd::mouse_selftest(); // full-os Part III: PS/2 mouse bring-up
         net::r4_c4_runtime_init();
         // Net responder self-tests (full-os guide Part II.6): exercise the same
@@ -9839,6 +9920,8 @@ pub extern "C" fn kmain() -> ! {
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
+        mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
+        let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;

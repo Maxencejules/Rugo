@@ -934,3 +934,189 @@ pub unsafe fn vm_protect_current(va: u64, prot: u64) -> bool {
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
     true
 }
+
+// ---- huge pages (full-os guide Part I.4) ----
+
+const PTE_PS: u64 = 1 << 7; // page-size bit: a PD entry maps a 2 MiB page
+
+/// Allocate `count` physically-contiguous frames whose START frame is a multiple
+/// of `align` frames (so the physical base is `align`·4 KiB-aligned). A 2 MiB
+/// huge page needs `count = align = 512`. Returns the physical base, or None.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub fn alloc_frames_contig_aligned(count: usize, align: usize) -> Option<u64> {
+    unsafe {
+        if !PMM.ready || count == 0 || align == 0 {
+            return None;
+        }
+        let align = align as u64;
+        let mut start = align; // skip frame 0; first aligned candidate
+        while start + count as u64 <= MAX_FRAMES as u64 {
+            let mut ok = true;
+            let mut f = start;
+            while f < start + count as u64 {
+                if PMM.bitmap[(f / 64) as usize] & (1u64 << (f % 64)) == 0 {
+                    ok = false;
+                    break;
+                }
+                f += 1;
+            }
+            if ok {
+                let mut f2 = start;
+                while f2 < start + count as u64 {
+                    PMM.bitmap[(f2 / 64) as usize] &= !(1u64 << (f2 % 64));
+                    PMM.free_frames -= 1;
+                    f2 += 1;
+                }
+                let phys = start * FRAME_SIZE;
+                core::ptr::write_bytes(
+                    phys_to_virt(phys) as *mut u8,
+                    0,
+                    count * FRAME_SIZE as usize,
+                );
+                return Some(phys);
+            }
+            start += align;
+        }
+        None
+    }
+}
+
+/// Map a 2 MiB huge page at 2 MiB-aligned `va` in the current address space
+/// (full-os guide Part I.4): walk/allocate PML4 → PDPT (4 KiB tables), then
+/// install a single PD entry with the page-size bit, so one TLB entry covers
+/// 2 MiB instead of 512 4 KiB entries. `prot` bit1 = W, bit2 = X (else NX). A
+/// kernel page (no user bit). Returns false on misalignment or frame exhaustion.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub fn free_frames_contig(phys: u64, count: usize) {
+    let mut i = 0usize;
+    while i < count {
+        free_frame(phys + (i as u64) * FRAME_SIZE);
+        i += 1;
+    }
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn vm_map_huge_current(va: u64, prot: u64) -> bool {
+    if va & 0x1F_FFFF != 0 {
+        return false;
+    }
+    let phys2m = match alloc_frames_contig_aligned(512, 512) {
+        Some(p) => p,
+        None => return false,
+    };
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let mut table = cr3 & PHYS_MASK;
+    // All-or-nothing (like mmio_map_4k): defer linking newly-allocated tables
+    // until the whole walk succeeds. On any alloc failure, free the huge region
+    // AND every pending table frame and leave the live page tree untouched (a
+    // freshly-allocated table is reachable via the HHDM before it is linked, so
+    // the walk can still descend into it).
+    let mut pending: [(u64, usize, u64); 2] = [(0, 0, 0); 2];
+    let mut npending = 0usize;
+    for &shift in &[39u32, 30] {
+        let t = phys_to_virt(table) as *mut u64;
+        let i = ((va >> shift) & 0x1FF) as usize;
+        let e = *t.add(i);
+        if e & 1 == 0 {
+            let new = match alloc_frame() {
+                Some(f) => f,
+                None => {
+                    free_frames_contig(phys2m, 512);
+                    let mut k = 0;
+                    while k < npending {
+                        free_frame(pending[k].2);
+                        k += 1;
+                    }
+                    return false;
+                }
+            };
+            pending[npending] = (table, i, new);
+            npending += 1;
+            table = new;
+        } else {
+            table = e & PHYS_MASK;
+        }
+    }
+    let mut k = 0;
+    while k < npending {
+        let (parent, i, new) = pending[k];
+        *(phys_to_virt(parent) as *mut u64).add(i) = new | PTE_P_W_U;
+        k += 1;
+    }
+    let pd = phys_to_virt(table) as *mut u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as usize;
+    let mut flags = 1u64 | PTE_PS; // present, 2 MiB page, kernel (no user bit)
+    if prot & 2 != 0 {
+        flags |= PTE_W;
+    }
+    if prot & 4 == 0 {
+        flags |= PTE_NX;
+    }
+    *pd.add(pd_idx) = phys2m | flags;
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
+    true
+}
+
+/// Read the PD entry covering `va` in the current address space (so the self-test
+/// can confirm the page-size bit). Returns the raw entry, or None if not present.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pd_entry_current(va: u64) -> Option<u64> {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & PHYS_MASK) as *mut u64;
+    let pml4e = *pml4.add(((va >> 39) & 0x1FF) as usize);
+    if pml4e & 1 == 0 {
+        return None;
+    }
+    let pdpt = phys_to_virt(pml4e & PHYS_MASK) as *mut u64;
+    let pdpte = *pdpt.add(((va >> 30) & 0x1FF) as usize);
+    if pdpte & 1 == 0 {
+        return None;
+    }
+    let pd = phys_to_virt(pdpte & PHYS_MASK) as *mut u64;
+    let pde = *pd.add(((va >> 21) & 0x1FF) as usize);
+    if pde & 1 == 0 {
+        return None;
+    }
+    Some(pde)
+}
+
+/// Boot self-test (full-os guide Part I.4): map a 2 MiB huge page, confirm the PD
+/// entry carries the page-size bit, and read/write through it at offset 0 and the
+/// last 8 bytes of the 2 MiB (proving the single mapping spans the whole region).
+/// Emits `HUGEPAGE: 2M ok` / `2M fail`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub fn huge_page_selftest() {
+    unsafe {
+        // A 2 MiB-aligned VA in the same otherwise-unused high kernel PML4 slot
+        // as the device-MMIO window (1 GiB in, a distinct PDPT/PD subtree).
+        const HV: u64 = 0xFFFF_FF00_4000_0000;
+        if !vm_map_huge_current(HV, 2) {
+            serial_write(b"HUGEPAGE: 2M fail\n");
+            return;
+        }
+        let pde = match pd_entry_current(HV) {
+            Some(e) => e,
+            None => {
+                serial_write(b"HUGEPAGE: 2M fail\n");
+                return;
+            }
+        };
+        if pde & PTE_PS == 0 {
+            serial_write(b"HUGEPAGE: 2M fail\n"); // present but not a 2 MiB page
+            return;
+        }
+        let lo = HV as *mut u64;
+        let hi = (HV + 0x20_0000 - 8) as *mut u64; // last 8 bytes of the 2 MiB
+        core::ptr::write_volatile(lo, 0xCAFE_BABE_1234_5678);
+        core::ptr::write_volatile(hi, 0x0BAD_F00D_DEAD_BEEF);
+        if core::ptr::read_volatile(lo) == 0xCAFE_BABE_1234_5678
+            && core::ptr::read_volatile(hi) == 0x0BAD_F00D_DEAD_BEEF
+        {
+            serial_write(b"HUGEPAGE: 2M ok\n");
+        } else {
+            serial_write(b"HUGEPAGE: 2M fail\n");
+        }
+    }
+}
