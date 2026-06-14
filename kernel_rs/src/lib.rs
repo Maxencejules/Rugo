@@ -4928,6 +4928,33 @@ cfg_r4! {
                 M8_FD_PTY[sfd as usize] = p as u8;
                 (sfd << 32) | mfd
             }
+            // op 3 = PC speaker beep (full-os guide Part III audio): program
+            // PIT channel 2 to a2 Hz (square wave) and gate the speaker on.
+            // Returns the read-back gate bits (3 = enabled), or ERR.
+            3 => {
+                let freq = a2;
+                if freq < 20 || freq > 20_000 {
+                    return ERR;
+                }
+                let divisor = (1_193_182u64 / freq) as u16;
+                arch_x86::outb(0x43, 0xB6); // ch2, lobyte/hibyte, mode 3
+                arch_x86::outb(0x42, (divisor & 0xFF) as u8);
+                arch_x86::outb(0x42, (divisor >> 8) as u8);
+                let prev = arch_x86::inb(0x61);
+                arch_x86::outb(0x61, prev | 0x03); // gate (bit0) + data (bit1)
+                let gate = arch_x86::inb(0x61) & 0x03;
+                serial_write(b"BEEP: freq=0x");
+                serial_write_hex(freq);
+                serial_write(b" div=0x");
+                serial_write_hex(divisor as u64);
+                serial_write(b" gate=0x");
+                serial_write_hex(gate as u64);
+                serial_write(b"\n");
+                // v1: no timer-driven duration yet, so silence it again right
+                // away; the read-back above already proved the speaker enabled.
+                arch_x86::outb(0x61, prev & !0x03);
+                gate as u64
+            }
             _ => ERR,
         }
     }
