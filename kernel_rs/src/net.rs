@@ -187,6 +187,167 @@ pub(crate) unsafe fn wire_send(frame: &[u8]) -> bool {
     virtio_net_send(frame)
 }
 
+// ---- Package fetch over TCP (full-os guide Part V.11, package manager). The
+// network-download core of a package manager: connect out to a repo host, receive
+// a framed package, and content-verify it (magic + checksum). Driven by the same
+// start/poll pattern DHCP uses — pkg_fetch_start sends the SYN, the PIT-tick RX
+// pump (net_rx_pump + tcp_rt_tick) advances the connection and accumulates the
+// reply, and pkg_fetch_poll drains the wire receive buffer + verifies once the
+// whole package has arrived. Package wire format: "RUGOPKG1" (8) | le32 payload
+// length | payload | le32 checksum (sum of payload bytes, wrapping).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const PKG_MAX: usize = 1024;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_BUF: [u8; PKG_MAX] = [0; PKG_MAX];
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_LEN: usize = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_FETCHING: bool = false;
+// A package fetch is "armed" by a request record on disk (read at boot); the
+// PIT-tick driver then starts + drives it. (Only the package-fetch test writes
+// that record, so ordinary boots never attempt a fetch.)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_ARMED: bool = false;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_STARTED: bool = false;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_REQ_PORT: u16 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_TICKS: u32 = 0; // ticks since the fetch started (give-up bound)
+
+/// Arm a package fetch for `port` (called at boot when the request record is
+/// present). The PIT-tick driver (pkg_fetch_tick) then starts + completes it.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_fetch_arm(port: u16) {
+    PKG_REQ_PORT = port;
+    PKG_ARMED = true;
+    PKG_STARTED = false;
+}
+
+/// Whether a package fetch is armed/in-flight (keeps the PIT pump running for it).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_fetch_armed() -> bool {
+    PKG_ARMED
+}
+
+/// PIT-tick driver for an armed package fetch (called from the timer handler after
+/// the RX pump). Once the NIC is up it starts the fetch, then drains + verifies
+/// each tick until the package arrives (pkg_fetch_poll prints the marker).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_fetch_tick() {
+    if !PKG_ARMED {
+        return;
+    }
+    if !PKG_STARTED {
+        if !R4_NET_NIC_READY {
+            return;
+        }
+        PKG_STARTED = true;
+        PKG_TICKS = 0;
+        if pkg_fetch_start(PKG_REQ_PORT) != 0 {
+            PKG_ARMED = false; // could not start; do not retry
+            serial_write(b"PKG: fetch start FAIL\n");
+        }
+        return;
+    }
+    if PKG_FETCHING {
+        // Patience: the gateway ARP reply + the package can take many ticks to be
+        // processed (net_rx_pump drains a bounded number of frames per tick behind
+        // the boot's other traffic). The wire TCP's own RTO retransmits the SYN,
+        // so no connection retry is needed here; just give up after a long bound.
+        PKG_TICKS = PKG_TICKS.wrapping_add(1);
+        if PKG_TICKS > 2000 {
+            PKG_FETCHING = false;
+            PKG_ARMED = false;
+            crate::tcp::tcp_close();
+            serial_write(b"PKG: fetch timeout FAIL\n");
+            return;
+        }
+        let _ = pkg_fetch_poll();
+        if !PKG_FETCHING {
+            PKG_ARMED = false; // completed (success or failure); stop driving
+        }
+    }
+}
+
+/// Begin a package fetch: connect to the slirp gateway (10.0.2.2) on `port`
+/// (slirp forwards guest->10.0.2.2:port to the host repo server). Returns 0 on a
+/// started fetch, or u64::MAX. The PIT-tick pump then drives the handshake.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pkg_fetch_start(port: u16) -> u64 {
+    const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    if port == 0 {
+        return ERR;
+    }
+    if crate::tcp::tcp_state() != crate::tcp::ST_CLOSED {
+        crate::tcp::tcp_close();
+    }
+    PKG_LEN = 0;
+    PKG_FETCHING = false;
+    if !crate::tcp::tcp_connect([10, 0, 2, 2], port) {
+        return ERR;
+    }
+    PKG_FETCHING = true;
+    0
+}
+
+/// Poll a package fetch: drain newly received bytes, and once the whole framed
+/// package has arrived, verify its magic + checksum. Returns u64::MAX while
+/// pending, the payload length on success, or 0 on failure (the kernel also
+/// prints a one-shot marker on completion).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pkg_fetch_poll() -> u64 {
+    const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    if !PKG_FETCHING {
+        return 0;
+    }
+    if PKG_LEN < PKG_MAX {
+        let n = crate::tcp::tcp_recv(&mut PKG_BUF[PKG_LEN..]);
+        PKG_LEN += n;
+    }
+    if PKG_LEN >= 12 && &PKG_BUF[0..8] == b"RUGOPKG1" {
+        let plen = u32::from_le_bytes([PKG_BUF[8], PKG_BUF[9], PKG_BUF[10], PKG_BUF[11]]) as usize;
+        let total = 12usize.wrapping_add(plen).wrapping_add(4);
+        if total > PKG_MAX {
+            PKG_FETCHING = false;
+            crate::tcp::tcp_close();
+            serial_write(b"PKG: fetch too-big FAIL\n");
+            return 0;
+        }
+        if PKG_LEN >= total {
+            let mut sum = 0u32;
+            let mut i = 0usize;
+            while i < plen {
+                sum = sum.wrapping_add(PKG_BUF[12 + i] as u32);
+                i += 1;
+            }
+            let want = u32::from_le_bytes([
+                PKG_BUF[12 + plen],
+                PKG_BUF[13 + plen],
+                PKG_BUF[14 + plen],
+                PKG_BUF[15 + plen],
+            ]);
+            PKG_FETCHING = false;
+            crate::tcp::tcp_close();
+            if sum == want {
+                serial_write(b"PKG: fetched len=0x");
+                serial_write_hex(plen as u64);
+                serial_write(b" ok\n");
+                return plen as u64;
+            }
+            serial_write(b"PKG: fetch checksum FAIL\n");
+            return 0;
+        }
+    }
+    // The connection ended (RST / RTO give-up) before the package fully arrived.
+    if crate::tcp::tcp_state() == crate::tcp::ST_CLOSED {
+        PKG_FETCHING = false;
+        serial_write(b"PKG: fetch closed-early FAIL\n");
+        return 0;
+    }
+    ERR // pending
+}
+
 /// PIT-tick RX pump for the default lane: answer ARP for the guest IP,
 /// hand ARP replies and IPv4/TCP packets to the TCP machine, drop the
 /// rest. Runs in interrupt context (single core, IF=0 in kernel).

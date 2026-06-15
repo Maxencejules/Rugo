@@ -163,17 +163,23 @@ single safe boot-verified slice and several have hard prerequisites.
    symbolic relocations (`GLOB_DAT`/`JUMP_SLOT` → GOT/PLT, lazy binding),
    `DT_NEEDED` dependency chains, multiple loaded objects + `dlclose`, on-disk
    `.so` loading, and an allocator-chosen load base (v1 uses one fixed slot).
-5. **V.11 installer + UEFI + package fetch + self-hosting — disk provisioning + UEFI boot done.**
+5. **V.11 installer + UEFI + package fetch + self-hosting — disk provisioning +
+   UEFI boot + package fetch done.**
    The installer finds a target disk, writes a boot record, and verifies the
    write/read round-trip (`installer_v1.md`, confirmed host-side). The kernel also
    **boots under UEFI** (`uefi_boot_v1.md`: OVMF/edk2 → Limine `BOOTX64.EFI` →
    `RUGO: boot ok` → clean shutdown, identical to the BIOS lane — the bring-up is
-   firmware-agnostic via Limine requests). What remains: a full bootable install
-   (partition table, copy the kernel + a SimpleFS/app-region image onto a target
-   partition, install the bootloader so the target boots standalone); folding a
-   UEFI El-Torito entry into the ISO build so `os-go.iso` is itself hybrid (needs
-   xorriso/mtools); Secure Boot; package fetch over the TCP client (have) + a repo
-   server; and self-hosting.
+   firmware-agnostic via Limine requests). **Package fetch over TCP is done**
+   (`pkgfetch_v1.md`): armed by an on-disk request record, the kernel connects the
+   wire TCP client out to the repo host (slirp gateway), downloads a framed
+   multi-segment package, and content-verifies it (magic + checksum) —
+   `PKG: fetched len=0x… ok`, driven by the PIT-tick handler with a give-up bound.
+   What remains: a full bootable install (partition table, copy the kernel + a
+   SimpleFS/app-region image onto a target partition, install the bootloader so the
+   target boots standalone); folding a UEFI El-Torito entry into the ISO build so
+   `os-go.iso` is itself hybrid (needs xorriso/mtools); Secure Boot; a package
+   request/selection protocol + repo index + signature verification + unpack/install
+   on top of the fetch; and self-hosting.
 6. **II.6 TCP reliability — RTO + RTT estimation + congestion control done.** The
    client/listener, v4/v6 echo, IPv6 **Neighbor Discovery responder**
    (`ndp_v1.md`), **TCP retransmission/RTO** (`tcp_rto_v1.md`), **RTT estimation**

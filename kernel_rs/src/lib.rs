@@ -4265,13 +4265,15 @@ cfg_r4! {
         R4_PREEMPT_TICKS += 1;
         sched::pic_send_eoi(0);
         #[cfg(not(feature = "compat_real_test"))]
-        if tcp::tcp_active() || netcfg::query_active() {
+        if tcp::tcp_active() || netcfg::query_active() || net::pkg_fetch_armed() {
             // Drive the wire TCP machine / DHCP-DNS query from the tick
             // while one is in flight.
             net::net_rx_pump();
             // Retransmit timer: pump RX first (so an inbound ACK clears the
             // timer), then tick the RTO countdown for any unacked segment.
             tcp::tcp_rt_tick();
+            // Package manager: start (once the NIC is up) + drive an armed fetch.
+            net::pkg_fetch_tick();
         }
         // Wake nanosleep tasks whose deadline has passed (wait-queue infra).
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -10758,6 +10760,23 @@ pub extern "C" fn kmain() -> ! {
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         let _ = sha256::sha256_selftest(); // full-os Part IV.10: SHA-256 + measured boot
+        // Package manager (full-os Part V.11): if a fetch-request record is present
+        // on disk (sector 16 = "PKGREQ" + le16 port), arm a package fetch; the
+        // PIT-tick driver runs it once the network is up. Only the package-fetch
+        // test writes this record, so ordinary boots never attempt a fetch.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            const PKG_REQ_LBA: u64 = 16;
+            if block_io_dispatch(false, PKG_REQ_LBA, 512, false)
+                && BLK_DATA_PAGE.0[0..6] == *b"PKGREQ"
+            {
+                let port = u16::from_le_bytes([BLK_DATA_PAGE.0[6], BLK_DATA_PAGE.0[7]]);
+                if port != 0 {
+                    net::pkg_fetch_arm(port);
+                    serial_write(b"PKG: fetch armed\n");
+                }
+            }
+        }
         m8_reset_fd_table();
         #[cfg(feature = "go_desktop_test")]
         let go_user_bin = GO_DESKTOP_BIN;
