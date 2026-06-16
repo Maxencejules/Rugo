@@ -10760,6 +10760,8 @@ pub extern "C" fn kmain() -> ! {
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         let _ = sha256::sha256_selftest(); // full-os Part IV.10: SHA-256 + measured boot
+        let _ = sha256::secure_boot_selftest(); // full-os Part IV.10: secure boot (golden PCR verify)
+        let _ = net::pkg_install_selftest(); // full-os Part V.11: package sig-verify + install
         // Package manager (full-os Part V.11): if a fetch-request record is present
         // on disk (sector 16 = "PKGREQ" + le16 port), arm a package fetch; the
         // PIT-tick driver runs it once the network is up. Only the package-fetch

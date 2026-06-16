@@ -179,3 +179,63 @@ pub fn sha256_selftest() -> u64 {
         0
     }
 }
+
+/// HMAC-SHA256 (RFC 2104) over `msg` (bounded to 256 bytes) with `key`. The
+/// package manager uses it as a symmetric package signature: a holder of the key
+/// signs the payload, and the installer rejects any payload whose recomputed MAC
+/// does not match. (Asymmetric signatures are carry-forward.)
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        k[..32].copy_from_slice(&sha256(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0u8; 64 + 256];
+    let mut opad = [0u8; 64 + 32];
+    let n = msg.len().min(256);
+    let mut i = 0;
+    while i < 64 {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5C;
+        i += 1;
+    }
+    ipad[64..64 + n].copy_from_slice(&msg[..n]);
+    let inner = sha256(&ipad[..64 + n]);
+    opad[64..96].copy_from_slice(&inner);
+    sha256(&opad)
+}
+
+/// Secure boot (full-os guide Part IV.10): measure a boot component into a PCR and
+/// verify it against a GOLDEN digest baked into the kernel, refusing on mismatch.
+/// Demonstrates the chain-of-trust gate: a trusted component measures to the
+/// golden value (boot proceeds), and a one-byte tamper changes the measurement so
+/// the verify rejects it (boot would refuse). Returns 1 on success.
+pub fn secure_boot_selftest() -> u64 {
+    // A fixed, trusted boot component (a boot manifest). Its golden measurement
+    // (PCR = SHA-256(0^32 || component)) is computed offline and baked in.
+    const COMPONENT: [u8; 29] = *b"RUGO secure-boot manifest v1\n";
+    const GOLDEN: [u8; 32] = [
+        0x26, 0xD9, 0x60, 0xBE, 0x62, 0x49, 0x95, 0x70, 0x05, 0xD7, 0x3C, 0x31, 0x48, 0x79, 0xC1,
+        0x05, 0x7A, 0xFB, 0x0C, 0x29, 0x7D, 0x1F, 0x11, 0x3C, 0x3E, 0x68, 0x5C, 0xBB, 0x1D, 0x12,
+        0x8E, 0xE2,
+    ];
+    // Measure the trusted component and verify it against the golden value.
+    let mut pcr = [0u8; 32];
+    pcr_extend(&mut pcr, &COMPONENT);
+    let trusted_ok = pcr == GOLDEN;
+    // Tamper one byte: the measurement must change, so the verify must REJECT it
+    // (a chain-of-trust gate refuses to run a modified component).
+    let mut bad = COMPONENT;
+    bad[0] ^= 0x01;
+    let mut pcr_bad = [0u8; 32];
+    pcr_extend(&mut pcr_bad, &bad);
+    let tamper_rejected = pcr_bad != GOLDEN;
+    if trusted_ok && tamper_rejected {
+        serial_write(b"SECURE_BOOT: golden ok\n");
+        1
+    } else {
+        serial_write(b"SECURE_BOOT: FAIL\n");
+        0
+    }
+}
