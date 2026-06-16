@@ -162,6 +162,11 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # BSP, having dispatched ASYNCHRONOUSLY, supplied it). This can only close if
         # both CPUs run at the same instant -> two tasks on two CPUs at once.
         "SMP: ap+bsp concurrent rv=0x00000000000000AC ok",
+        # Live scheduler: an AP AUTONOMOUSLY pulled all 3 READY R4 tasks from the run
+        # set (claiming each under the run-queue lock) and ran them in ring 3 -- no
+        # per-task dispatch from the BSP. Each ran exactly once (its own yield_count
+        # bumped via per-CPU current). APs draining the ready set themselves.
+        "SMP: live sched ran=0x0000000000000003 ok",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

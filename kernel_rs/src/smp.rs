@@ -667,9 +667,23 @@ extern "C" fn ap_user_done() -> ! {
     unsafe {
         WORK_RESULT.store(AP_USER_RESULT.load(Ordering::Acquire), Ordering::Release);
         WORK_DONE.store(AP_USER_GEN.load(Ordering::Acquire), Ordering::Release);
+        // Live-scheduler mode: the task that just finished was pulled from the run
+        // set, so retire its slot (under the run-queue lock) and count it -- this is
+        // how the AP signals the BSP that an autonomously-scheduled task completed.
+        // AP_USER_CURRENT is the tid ap_user_trap read back from this CPU's gs:[16].
+        if SMP_LIVE_MODE.load(Ordering::Acquire) != 0 {
+            let done_tid = AP_USER_CURRENT.load(Ordering::Acquire) as usize;
+            r4_rq_lock();
+            if done_tid < crate::R4_MAX_TASKS {
+                crate::R4_TASKS[done_tid].state = crate::R4State::Dead;
+            }
+            r4_rq_unlock();
+            SMP_LIVE_RAN.fetch_add(1, Ordering::AcqRel);
+        }
         loop {
             ap_poll_work();
             ap_poll_rq();
+            ap_pull_r4_task(); // live mode: claim + run the next ready task
             core::arch::asm!("sti; hlt", options(nomem, nostack));
         }
     }
@@ -861,6 +875,190 @@ static mut SMP_REQUEST: LimineSmpRequest = LimineSmpRequest {
 
 static APS_ONLINE: AtomicU64 = AtomicU64::new(0);
 
+// ---- Autonomous SMP scheduling (full-os guide Part I.3): an application processor
+// pulls READY R4 tasks from the shared run set itself -- claiming each under a lock
+// so no two CPUs run the same task -- and runs them in ring 3 on its own core, with
+// no per-task dispatch from the BSP. This is the live-scheduler step beyond the
+// BSP-dispatched capstone. Gated behind SMP_LIVE_MODE so the normal scheduler and
+// the other SMP self-tests (which run with it off) are untouched.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static R4_RQ_LOCK: AtomicU32 = AtomicU32::new(0); // guards run-set claim/retire
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static SMP_LIVE_MODE: AtomicU64 = AtomicU64::new(0); // 1 = APs may pull
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static SMP_LIVE_RAN: AtomicU64 = AtomicU64::new(0); // tasks completed on APs
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static SMP_LIVE_BASE: AtomicU64 = AtomicU64::new(0); // first run-set slot
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static SMP_LIVE_COUNT: AtomicU64 = AtomicU64::new(0); // run-set slot count
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn r4_rq_lock() {
+    while R4_RQ_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn r4_rq_unlock() {
+    R4_RQ_LOCK.store(0, Ordering::Release);
+}
+
+// Ring-3 payload for an autonomously-scheduled task: bump its own yield_count via
+// per-CPU current (sys_sysinfo op 16), then report (int 0x81) so the AP retires it
+// and pulls the next. arg is 0, so the int-0x81 RDI is 1 (unused here).
+//   48 89 FB              mov rbx, rdi
+//   B8 3D 00 00 00        mov eax, 61      ; sys_sysinfo
+//   BF 10 00 00 00        mov edi, 16      ; op 16 = bump my yield_count
+//   31 F6 / 31 D2         xor esi/edx
+//   CD 80                 int 0x80
+//   48 89 DF              mov rdi, rbx
+//   48 01 FF / 48 83 C7 01                 ; rdi = 2*arg+1
+//   31 F6                 xor esi, esi
+//   CD 81 / EB FE
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_PULL_CODE: [u8; 35] = [
+    0x48, 0x89, 0xFB, 0xB8, 0x3D, 0x00, 0x00, 0x00, 0xBF, 0x10, 0x00, 0x00, 0x00, 0x31, 0xF6,
+    0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0x31,
+    0xF6, 0xCD, 0x81, 0xEB, 0xFE,
+];
+
+/// Called from the AP park loop: when live-scheduler mode is on, claim one READY R4
+/// task from the run set [SMP_LIVE_BASE, +COUNT) under R4_RQ_LOCK (atomic claim, so
+/// the BSP/another CPU can't take the same one), set it as this CPU's per-CPU
+/// current, and run it in ring 3. DIVERGES (never returns) if it claimed one -- it
+/// enters ring 3 and resumes in ap_user_done, which retires the task and re-enters
+/// the park loop to pull the next. Returns normally when off or nothing is ready.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ap_pull_r4_task() {
+    if SMP_LIVE_MODE.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let slot: u64;
+    core::arch::asm!("mov {}, gs:[0]", out(reg) slot, options(nostack));
+    if slot == 0 || slot >= crate::arch_x86::MAX_TSS as u64 {
+        return; // needs a per-CPU TSS for the ring-3 transition
+    }
+    let base = SMP_LIVE_BASE.load(Ordering::Acquire) as usize;
+    let count = SMP_LIVE_COUNT.load(Ordering::Acquire) as usize;
+    r4_rq_lock();
+    let mut claimed = usize::MAX;
+    let mut i = base;
+    while i < base + count {
+        if crate::R4_TASKS[i].state == crate::R4State::Ready {
+            crate::R4_TASKS[i].state = crate::R4State::Running; // claim
+            claimed = i;
+            break;
+        }
+        i += 1;
+    }
+    r4_rq_unlock();
+    if claimed == usize::MAX {
+        return; // run set drained
+    }
+    // Set up the claimed task's context for this AP and run it (autonomous dispatch:
+    // the AP chose the task, the BSP did not). gen 0 -> no mailbox join.
+    let tid = claimed;
+    AP_USER_CR3.store(crate::R4_TASKS[tid].pml4_phys, Ordering::Release);
+    AP_USER_ENTRY.store(crate::R4_TASKS[tid].saved_frame[17], Ordering::Release);
+    AP_USER_SP.store(crate::R4_TASKS[tid].saved_frame[20], Ordering::Release);
+    AP_USER_TASKID.store(tid as u64, Ordering::Release);
+    ap_run_user_task(0, 0);
+}
+
+/// BSP side: build a small run set of REAL R4 tasks (Ready, reserved slots, each its
+/// own address space) and let an AP pull + run them autonomously, then verify each
+/// ran exactly once. This is the live multi-CPU scheduler: APs draining the ready
+/// set themselves under the run-queue lock, not the BSP hand-dispatching each task.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn smp_live_sched_selftest() -> bool {
+    const K: usize = 3;
+    let base: usize = crate::R4_MAX_TASKS - 1 - K; // below the migrate slot (MAX-1)
+    const CODE_VA: u64 = 0x0140_0000;
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let mut ases = [0u64; K];
+    let mut made = 0usize;
+    let mut j = 0usize;
+    while j < K {
+        let tid = base + j;
+        let ucr3 = match crate::mm::address_space_create(kcr3) {
+            Some(p) => p,
+            None => break,
+        };
+        if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_PULL_CODE)
+            || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+        {
+            crate::mm::address_space_release(ucr3);
+            break;
+        }
+        crate::r4_init_task(tid, CODE_VA, STACK_TOP, 0);
+        crate::R4_TASKS[tid].pml4_phys = ucr3;
+        crate::R4_TASKS[tid].yield_count = 0;
+        crate::R4_TASKS[tid].state = crate::R4State::Ready; // READY: an AP will claim it
+        ases[j] = ucr3;
+        made += 1;
+        j += 1;
+    }
+    SMP_LIVE_RAN.store(0, Ordering::Release);
+    SMP_LIVE_BASE.store(base as u64, Ordering::Release);
+    SMP_LIVE_COUNT.store(made as u64, Ordering::Release);
+    SMP_LIVE_MODE.store(1, Ordering::Release); // APs may now pull
+    let mut spins = 0u64;
+    while SMP_LIVE_RAN.load(Ordering::Acquire) < made as u64 && spins < 300_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    SMP_LIVE_MODE.store(0, Ordering::Release); // stop pulling
+    let ran = SMP_LIVE_RAN.load(Ordering::Acquire);
+    // Teardown is gated on `ran == made` -- the live-test analogue of the sibling
+    // tests' `result.is_some()` (see ap_r4_migrate_selftest:1358 / ap_r4_concurrent
+    // _selftest:1436, and the UAF rationale at ap_user_selftest:724). Each retiring
+    // task reaches ap_user_done only AFTER ap_user_trap restored the kernel CR3 on
+    // that AP, and `ran` is the count of those completions read with Acquire, so
+    // ran == made happens-after every AP left every task ucr3 -- it is provably off
+    // all of them and idle. ONLY THEN may we free the page tables (else a claiming
+    // AP still translating through ucr3 would run on freed, possibly-reused frames:
+    // a cross-CPU UAF / PMM double-allocation) and write the slots. On a timeout
+    // (ran < made: degraded boot / slow QEMU / an AP still in ring 3) we intentionally
+    // LEAK the address spaces rather than free live page tables, exactly as the
+    // siblings do. This boot self-test runs once; the timeout path is unreachable in
+    // practice (the AP drains the run set within a few LAPIC-timer periods).
+    let mut all_once = true;
+    if ran == made as u64 {
+        let mut z = 0usize;
+        while z < made {
+            let tid = base + z;
+            // Retire under the run-queue lock: the same lock ap_user_done takes to
+            // write R4_TASKS[done_tid].state, so these slot accesses never race a
+            // late AP retirement (no unlocked data race on the shared task table).
+            r4_rq_lock();
+            if crate::R4_TASKS[tid].yield_count != 1 {
+                all_once = false;
+            }
+            crate::R4_TASKS[tid].state = crate::R4State::Dead;
+            r4_rq_unlock();
+            crate::mm::address_space_release(ases[z]);
+            z += 1;
+        }
+    } else {
+        all_once = false; // could not verify: APs did not all quiesce
+    }
+    let ok = ran == made as u64 && made == K && all_once;
+    serial_write(b"SMP: live sched ran=0x");
+    serial_write_hex(ran);
+    if ok {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+    ok
+}
+
 /// AP entry: Limine hands each AP its own stack and the kernel's page
 /// tables. Check in and park - no prints (serial is not multi-CPU
 /// safe), no shared kernel state beyond the atomic.
@@ -901,11 +1099,18 @@ extern "C" fn ap_entry(_info: *const LimineSmpInfo) -> ! {
         APS_ONLINE.fetch_add(1, Ordering::SeqCst);
         loop {
             // Run any work the BSP dispatched (no-op when none pending) + drain
-            // this CPU's own run queue, then sleep until the next interrupt (the
+            // this CPU's own run queue + (in live-scheduler mode) autonomously claim
+            // and run a ready R4 task, then sleep until the next interrupt (the
             // periodic LAPIC timer wakes us to poll again). This is the AP doing
             // real kernel work, not parking.
             ap_poll_work();
             ap_poll_rq();
+            // The live-scheduler pull only exists in the go_test lane; ap_entry
+            // itself is built for every lane (incl. the base os.iso), so gate it.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            {
+                ap_pull_r4_task();
+            }
             core::arch::asm!("sti; hlt", options(nomem, nostack));
         }
     }
@@ -1110,6 +1315,9 @@ pub fn smp_init() {
                 let _ = ap_r4_migrate_selftest();
                 // Prove two tasks run on two CPUs AT ONCE (BSP + a ring-3 AP task).
                 let _ = ap_r4_concurrent_selftest();
+                // Live SMP scheduler: an AP autonomously pulls READY R4 tasks from
+                // the run set (claiming each under the run-queue lock) and runs them.
+                let _ = smp_live_sched_selftest();
             }
         }
     }

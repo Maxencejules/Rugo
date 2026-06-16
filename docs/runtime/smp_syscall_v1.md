@@ -97,6 +97,24 @@ the AP's bounded wait would time out. The task returns `0xAC`; marker
 `SMP: ap+bsp concurrent rv=0xAC ok`. This is the literal "multiple tasks running on
 multiple CPUs": a real ring-3 task on an AP and the BSP executing at the same time.
 
+## Autonomous scheduling — an AP drains the ready set itself
+
+`smp_live_sched_selftest` is the live-scheduler step: the BSP builds a small **run
+set** of real `R4_TASKS` tasks (`Ready`, in reserved slots, each its own address
+space) and flips `SMP_LIVE_MODE` on; it does **not** hand any specific task to the
+AP. The AP, in its park loop, calls `ap_pull_r4_task`: under **`R4_RQ_LOCK`** it
+scans the run set for a `Ready` slot, atomically claims it (`Ready → Running`, so no
+two CPUs take the same task), records it as its per-CPU `current`, and runs it in
+ring 3 — then on completion `ap_user_done` retires the slot (`→ Dead`) under the
+same lock and counts it, and the AP loops back to pull the next, draining the set.
+Each task bumps its own `yield_count` once via per-CPU current; the BSP confirms all
+ran exactly once. Marker `SMP: live sched ran=0x3 ok`. This is an AP **autonomously
+pulling ready tasks from the run queue under a lock and running them** — the per-CPU
+run-queue scheduler, not BSP hand-dispatch. Teardown frees the task address spaces
+only once `ran == made` (every AP provably off every task CR3), leaking on the
+bounded-spin timeout rather than risking a cross-CPU use-after-free (the same
+discipline the sibling self-tests use).
+
 ## v1 boundary / carry-forward
 
 - `getuid` (a real read syscall), `sys_sysinfo` op 14 (read) and op 16 (a write that
@@ -114,6 +132,11 @@ multiple CPUs": a real ring-3 task on an AP and the BSP executing at the same ti
 - Routing the remaining read sites through `r4_current_smp`, plus a lock on `R4_TASKS`
   mutations for the write sites so APs can run the full syscall set concurrently, is
   the remaining core rewrite, done incrementally (each batch reviewed + gated).
+- The autonomous run set is a dedicated boot self-test (reserved high slots, gated by
+  `SMP_LIVE_MODE`), not yet the live general task table: the BSP's normal scheduler and
+  the rest of the suite run with the mode off and are untouched. Wiring APs to pull
+  from the *general* `R4_TASKS` rotation needs the full `R4_CURRENT`-surface reroute +
+  a lock on the live spawn/exit paths first.
 - The migrated R4 task is dispatched and run once as a boot self-test; the BSP still
   owns the live scheduler and the APs do not yet pull ready tasks from their run
   queues into ring 3 autonomously.
