@@ -6458,6 +6458,11 @@ cfg_r4! {
             // migrated to an AP reads its own real tid here -- the per-CPU R4_CURRENT
             // mechanism exercised through a real syscall (see the ap_r4_migrate test).
             14 => r4_current_smp() as u64,
+            // op 15 = SMP concurrency rendezvous (full-os guide Part I.3): a ring-3
+            // task running on an AP signals arrival and waits for the BSP's ack,
+            // returning 0xAC once both CPUs have met -- proof two tasks ran on two
+            // CPUs at once. A no-op (0) on the BSP; see ap_r4_concurrent_selftest.
+            15 => smp::smp_rendezvous_ap(),
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }

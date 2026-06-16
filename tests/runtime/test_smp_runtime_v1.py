@@ -156,6 +156,11 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # real tid from per-CPU state while running on the AP (sctid=0x1F) -- the
         # per-CPU R4_CURRENT mechanism working through the real syscall path.
         "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F sctid=0x000000000000001F ok",
+        # Concurrency: a ring-3 task on the AP and the BSP completed a rendezvous
+        # (the AP signalled arrival + waited in-kernel for the BSP's ack while the
+        # BSP, having dispatched ASYNCHRONOUSLY, supplied it). This can only close if
+        # both CPUs run at the same instant -> two tasks on two CPUs at once.
+        "SMP: ap+bsp concurrent rv=0x00000000000000AC ok",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

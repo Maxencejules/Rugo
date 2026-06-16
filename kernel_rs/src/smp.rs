@@ -237,6 +237,41 @@ unsafe fn smp_dispatch_work(kind: u64, arg: u64) -> Option<u64> {
     }
 }
 
+/// Dispatch a work item WITHOUT waiting (the split of `smp_dispatch_work`): publish
+/// the item and return its generation so the BSP can run concurrently and join later
+/// with `smp_join`. Returns 0 if no AP is online (nothing will run it).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn smp_dispatch_async(kind: u64, arg: u64) -> u64 {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return 0;
+    }
+    let gen = WORK_GEN.load(Ordering::Acquire).wrapping_add(1).max(1);
+    WORK_KIND.store(kind, Ordering::Release);
+    WORK_ARG.store(arg, Ordering::Release);
+    WORK_DONE.store(0, Ordering::Release);
+    WORK_CLAIM.store(gen, Ordering::Release);
+    WORK_GEN.store(gen, Ordering::Release); // publish LAST so the item is consistent
+    gen
+}
+
+/// Wait (bounded) for a previously `smp_dispatch_async`'d item to finish.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn smp_join(gen: u64) -> Option<u64> {
+    if gen == 0 {
+        return None;
+    }
+    let mut spins = 0u64;
+    while WORK_DONE.load(Ordering::Acquire) != gen && spins < 200_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    if WORK_DONE.load(Ordering::Acquire) == gen {
+        Some(WORK_RESULT.load(Ordering::Acquire))
+    } else {
+        None
+    }
+}
+
 // ---- Per-CPU run queues (full-os guide Part I.3, SMP scheduler). The single
 // work mailbox above dispatches ONE item to whichever AP grabs it; a real SMP
 // scheduler instead gives EACH CPU its own run queue that it drains
@@ -483,6 +518,55 @@ static AP_R4_CODE: [u8; 36] = [
     0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48, 0x83,
     0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
 ];
+
+// Rendezvous state for the concurrent-execution proof: a ring-3 task running on an
+// AP and the BSP must both be live at the same instant to complete it (0 = idle,
+// 1 = AP arrived, 2 = BSP acknowledged). If the two were NOT concurrent the AP's
+// in-kernel wait would time out, so a clean rendezvous is proof of simultaneity.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static SMP_RV: AtomicU64 = AtomicU64::new(0);
+
+// Ring-3 payload for the concurrency proof: a single syscall (sys_sysinfo op 15 ->
+// smp_rendezvous_ap) that, on the AP, signals arrival and spins for the BSP's ack,
+// returning 0xAC on success; the task then reports that code. Same shape as
+// AP_R4_CODE but op 15:
+//   48 89 FB              mov rbx, rdi
+//   B8 3D 00 00 00        mov eax, 61     ; sys_sysinfo
+//   BF 0F 00 00 00        mov edi, 15     ; op 15 = SMP rendezvous
+//   31 F6 / 31 D2         xor esi/edx
+//   CD 80                 int 0x80        ; rax = 0xAC on a completed rendezvous
+//   48 89 C6              mov rsi, rax
+//   48 89 DF / 48 01 FF / 48 83 C7 01     ; rdi = 2*arg+1
+//   CD 81 / EB FE
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_RV_CODE: [u8; 36] = [
+    0x48, 0x89, 0xFB, 0xB8, 0x3D, 0x00, 0x00, 0x00, 0xBF, 0x0F, 0x00, 0x00, 0x00, 0x31, 0xF6,
+    0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48, 0x83,
+    0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
+];
+
+/// AP side of the concurrency rendezvous (invoked by `sys_sysinfo` op 15 while the
+/// migrated task runs in ring 3 on an application processor): publish arrival, then
+/// spin (bounded) for the BSP's acknowledgement. Returns 0xAC if the BSP answered
+/// (proof both CPUs were executing at the same time), 0xFA on timeout. On the BSP it
+/// is a no-op sentinel (0) -- only the AP performs the rendezvous.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn smp_rendezvous_ap() -> u64 {
+    if is_bsp() {
+        return 0;
+    }
+    SMP_RV.store(1, Ordering::Release); // AP has arrived
+    let mut spins = 0u64;
+    while SMP_RV.load(Ordering::Acquire) != 2 && spins < 200_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    if SMP_RV.load(Ordering::Acquire) == 2 {
+        0xAC
+    } else {
+        0xFA
+    }
+}
 
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 static AP_USER_TASKID: AtomicU64 = AtomicU64::new(0); // id of the task migrated to the AP
@@ -1022,6 +1106,8 @@ pub fn smp_init() {
                 }
                 // Migrate a REAL R4 task (a scheduler task struct) to an AP.
                 let _ = ap_r4_migrate_selftest();
+                // Prove two tasks run on two CPUs AT ONCE (BSP + a ring-3 AP task).
+                let _ = ap_r4_concurrent_selftest();
             }
         }
     }
@@ -1093,6 +1179,68 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
     serial_write_hex(cur);
     serial_write(b" sctid=0x");
     serial_write_hex(sctid);
+    if ok {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+    ok
+}
+
+/// SMP concurrency proof (full-os guide Part I.3): a ring-3 task on an application
+/// processor and the BSP executing AT THE SAME TIME. The BSP dispatches the task
+/// ASYNCHRONOUSLY (`smp_dispatch_async` — it does NOT block), then performs a
+/// rendezvous with it: the task (via `sys_sysinfo` op 15 -> `smp_rendezvous_ap`)
+/// signals arrival and waits in-kernel on the AP for the BSP's acknowledgement; the
+/// BSP waits for the arrival, acks, then joins. The handshake can only close if both
+/// CPUs are live at the same instant — were the BSP blocked (as with the synchronous
+/// dispatch), the AP's bounded wait would time out — so a completed rendezvous
+/// (the task returns 0xAC) is proof of genuine multi-CPU multitasking.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ap_r4_concurrent_selftest() -> bool {
+    const CODE_VA: u64 = 0x0140_0000;
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    const ARG: u64 = 44;
+    const TASK_ID: u64 = 0x5B;
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let ucr3 = match crate::mm::address_space_create(kcr3) {
+        Some(p) => p,
+        None => return false,
+    };
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_RV_CODE)
+        || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+    {
+        crate::mm::address_space_release(ucr3);
+        return false;
+    }
+    AP_USER_CR3.store(ucr3, Ordering::Release);
+    AP_USER_ENTRY.store(CODE_VA, Ordering::Release);
+    AP_USER_SP.store(STACK_TOP, Ordering::Release);
+    AP_USER_TASKID.store(TASK_ID, Ordering::Release);
+    AP_USER_CURRENT.store(0, Ordering::Release);
+    AP_USER_SYSRET.store(0, Ordering::Release);
+    SMP_RV.store(0, Ordering::Release);
+    // Dispatch WITHOUT blocking, then rendezvous concurrently with the AP task.
+    let gen = smp_dispatch_async(2, ARG);
+    let mut spins = 0u64;
+    while SMP_RV.load(Ordering::Acquire) < 1 && spins < 200_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    let arrived = SMP_RV.load(Ordering::Acquire) >= 1;
+    if arrived {
+        SMP_RV.store(2, Ordering::Release); // BSP acknowledges -> releases the AP task
+    }
+    let result = smp_join(gen);
+    let rv = AP_USER_SYSRET.load(Ordering::Acquire); // 0xAC if the task saw the ack
+    if result.is_some() {
+        crate::mm::address_space_release(ucr3);
+    }
+    let ok = matches!(result, Some(v) if v == ARG * 2 + 1) && arrived && rv == 0xAC;
+    serial_write(b"SMP: ap+bsp concurrent rv=0x");
+    serial_write_hex(rv);
     if ok {
         serial_write(b" ok\n");
     } else {

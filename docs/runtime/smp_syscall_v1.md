@@ -78,6 +78,19 @@ read back via GS, `sctid` is the tid a **real syscall resolved on the AP**. This
 the per-CPU `R4_CURRENT` mechanism working end to end through the syscall path for a
 real scheduler task. Asserted by `tests/runtime/test_smp_runtime_v1.py`.
 
+## Concurrent execution — two tasks, two CPUs, at once
+
+`ap_r4_concurrent_selftest` proves genuine simultaneity. The BSP dispatches the AP
+task **asynchronously** (`smp_dispatch_async` — it does *not* block) and then meets
+it in a rendezvous: the ring-3 task on the AP issues `sys_sysinfo` op 15 →
+`smp_rendezvous_ap`, which publishes "arrived" (`SMP_RV=1`) and spins *in kernel on
+the AP* for the BSP's ack; the BSP, running concurrently, waits for the arrival,
+stores `SMP_RV=2`, and joins. The handshake can only close if both CPUs are live at
+the same instant — under the old synchronous dispatch the BSP would be blocked and
+the AP's bounded wait would time out. The task returns `0xAC`; marker
+`SMP: ap+bsp concurrent rv=0xAC ok`. This is the literal "multiple tasks running on
+multiple CPUs": a real ring-3 task on an AP and the BSP executing at the same time.
+
 ## v1 boundary / carry-forward
 
 - One syscall (`sys_sysinfo` op 14) now resolves `current` per-CPU on the AP. The
