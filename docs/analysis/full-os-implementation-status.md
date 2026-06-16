@@ -116,7 +116,11 @@ single safe boot-verified slice and several have hard prerequisites.
    entry context run on the AP, with its real tid tracked as the AP's per-CPU
    `current` and its syscalls serviced there — `SMP: ap r4 migrate tid=0x1F
    cur=0x1F ok` (a reserved slot in state `Running`, beyond `R4_NUM_TASKS`, so the
-   BSP scheduler never races it). **Remaining (the full multi-CPU scheduler):**
+   BSP scheduler never races it). **Per-CPU affinity routing + load distribution
+   DONE** (`runqueue_v1.md`, `ap_affinity_selftest`): the BSP routes a DISTINCT
+   workload to each core and verifies each drained only its own (plus the grand
+   total) — `SMP: affinity ok` on the `-smp 4` lane — the targeting/distribution
+   basis a load-balancing scheduler needs. **Remaining (the full multi-CPU scheduler):**
    wire `tlb_shootdown` into the `munmap`/`mprotect`/CoW paths; migrate
    **scheduler-active** tasks with load balancing across the per-CPU run queues;
    and make `R4_CURRENT`/`R4_TASKS` + every `R4_CURRENT`-touching syscall

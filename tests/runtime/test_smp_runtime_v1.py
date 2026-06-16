@@ -107,6 +107,9 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "SMP: ap work ok",
         # Per-CPU run queues: each AP drained its own queue to the right total.
         "SMP: runqueue ok",
+        # Per-CPU affinity: the BSP routed DISTINCT work to each core and each ran
+        # only its own (the load-balancing basis), with the batch fully distributed.
+        "SMP: affinity ok",
         "RUGO: halt ok",
     ])
     assert "SMP: lock count" in out

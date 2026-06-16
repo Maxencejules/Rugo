@@ -260,6 +260,16 @@ unsafe fn rq_enqueue(cpu: usize, items: &[(u64, u64)]) {
     if cpu == 0 || cpu >= MAX_CPUS {
         return;
     }
+    // QUIESCE the queue FIRST by publishing COUNT=0, before resetting DONE/SUM or
+    // rewriting KIND/ARG. This matters when re-enqueueing onto a LIVE queue (e.g.
+    // the affinity test reusing a queue the run-queue test left at COUNT=DONE=3)
+    // while its consumer keeps polling: ap_poll_rq reads COUNT then DONE. With
+    // COUNT written LAST, on x86-TSO the consumer could observe the new DONE=0
+    // while still seeing the old COUNT=3 and drain stale items. With COUNT=0
+    // first, DONE=0's visibility implies COUNT=0's (stores propagate in program
+    // order), so the consumer sees `done < 0` (false) and waits for the final
+    // COUNT publish — after which all prior stores are already visible.
+    AP_RQ_COUNT[cpu].store(0, Ordering::Release);
     AP_RQ_DONE[cpu].store(0, Ordering::Release);
     AP_RQ_SUM[cpu].store(0, Ordering::Release);
     let n = items.len().min(RQ_LEN);
@@ -317,6 +327,66 @@ unsafe fn ap_runqueue_selftest() -> bool {
         s += 1;
     }
     ok
+}
+
+/// Per-CPU affinity + load-distribution self-test (full-os guide Part I.3, SMP
+/// scheduler load balancing): unlike `ap_runqueue_selftest` (every AP gets the
+/// SAME queue), this gives each CPU a DISTINCT workload and verifies each core
+/// drained exactly ITS OWN work — proving the BSP can ROUTE specific work to a
+/// specific core (affinity), the basis for load balancing across the per-CPU run
+/// queues. Also checks the grand total, i.e. that the whole batch was distributed
+/// across the cores with nothing lost or double-run. Returns true on full match.
+unsafe fn ap_affinity_selftest() -> bool {
+    let online = SMP_AP_COUNT.load(Ordering::Acquire) as usize;
+    if online == 0 {
+        return false;
+    }
+    // Each CPU's two-item queue is keyed off its slot, so no two cores share a
+    // workload — a core running the wrong queue would produce the wrong sum.
+    let mut slot = 1usize;
+    while slot <= online && slot < MAX_CPUS {
+        let a = (slot as u64) * 100;
+        let b = (slot as u64) * 50;
+        rq_enqueue(slot, &[(1u64, a), (1u64, b)]);
+        slot += 1;
+    }
+    // Wait (bounded) for every AP to drain its own (2-item) queue.
+    let mut spins = 0u64;
+    loop {
+        let mut all = true;
+        let mut s = 1usize;
+        while s <= online && s < MAX_CPUS {
+            if AP_RQ_DONE[s].load(Ordering::Acquire) != 2 {
+                all = false;
+                break;
+            }
+            s += 1;
+        }
+        if all || spins >= 200_000_000 {
+            break;
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    // Verify each CPU produced ITS OWN distinct sum, and accumulate the grand
+    // total to confirm the whole batch was distributed across the cores.
+    let mut ok = true;
+    let mut got_total = 0u64;
+    let mut want_total = 0u64;
+    let mut s = 1usize;
+    while s <= online && s < MAX_CPUS {
+        let a = (s as u64) * 100;
+        let b = (s as u64) * 50;
+        let expect = a * (a + 1) / 2 + b * (b + 1) / 2; // T(a)+T(b)
+        want_total += expect;
+        let sum = AP_RQ_SUM[s].load(Ordering::Acquire);
+        got_total += sum;
+        if AP_RQ_DONE[s].load(Ordering::Acquire) != 2 || sum != expect {
+            ok = false;
+        }
+        s += 1;
+    }
+    ok && got_total == want_total
 }
 
 // ---- SMP scheduler capstone: run a ring-3 USER task on an application
@@ -874,6 +944,16 @@ pub fn smp_init() {
                 }
             } else {
                 serial_write(b"SMP: runqueue timeout FAIL\n");
+            }
+            // Per-CPU affinity + load distribution: route DISTINCT work to each
+            // core and confirm each ran only its own (the basis for balancing).
+            if online >= expected {
+                serial_write(b"SMP: affinity ");
+                if ap_affinity_selftest() {
+                    serial_write(b"ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
             }
             // Capstone: run a real ring-3 USER task on an application processor.
             // The BSP builds the user address space + dispatches; an AP enters

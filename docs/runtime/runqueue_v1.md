@@ -2,7 +2,7 @@
 
 Status: boot-verified via `make test-smp-runtime-v1` (both `-smp 4` and `-smp 2`)
 Source: `kernel_rs/src/smp.rs` (`ap_poll_rq`, `rq_enqueue`, `ap_runqueue_selftest`,
-`AP_RQ_*`; the AP park loops poll their own queue).
+`ap_affinity_selftest`, `AP_RQ_*`; the AP park loops poll their own queue).
 Proof: `tests/runtime/test_smp_runtime_v1.py`.
 
 Full-OS guide Part I.3 (SMP scheduler): give **each CPU its own run queue** that
@@ -36,12 +36,22 @@ concurrently, each maintaining its own state.
 every AP drained its own queue concurrently and accumulated exactly 70300 — with
 no `SMP: runqueue FAIL`.
 
+It also shows `SMP: affinity ok` (`ap_affinity_selftest`): the BSP routes a
+**distinct** workload to each core (CPU *s* gets a queue keyed off its slot) and
+verifies each core drained exactly **its own** work (a core running the wrong
+queue would produce the wrong sum) plus that the grand total across cores matches
+— so the whole batch was distributed with nothing lost or double-run. This is the
+**per-CPU affinity / load-distribution** step (vs the uniform-broadcast run-queue
+test): the basis for a load-balancing scheduler.
+
 ## v1 boundary / carry-forward
 
-- The queues hold **kernel work items** (the proven per-CPU execution primitive).
-  Migrating actual R4 tasks onto per-CPU queues with a per-CPU `current`, load
-  balancing / work stealing between queues, and running the scheduler tick on
-  each AP (so ordinary user tasks are scheduled across all CPUs, not just the
-  boot self-test) is the remaining SMP-scheduler work — it builds directly on
-  these queues plus the per-CPU TSS + ring-3-entry capstone.
+- The queues hold **kernel work items** (the proven per-CPU execution primitive),
+  and the BSP can now **route distinct work to a chosen core** (affinity) and
+  distribute a batch across cores. Migrating actual R4 tasks onto per-CPU queues
+  with a per-CPU `current`, work stealing between queues, and running the
+  scheduler tick on each AP (so ordinary user tasks are scheduled across all
+  CPUs, not just the boot self-test) is the remaining SMP-scheduler work — it
+  builds directly on these queues plus the per-CPU TSS + ring-3-entry capstone +
+  the real-R4-task-migration ([`smp_syscall_v1.md`](smp_syscall_v1.md)).
 - Fixed 8-slot queues; a growable/linked run queue is carry-forward.
