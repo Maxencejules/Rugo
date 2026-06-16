@@ -342,6 +342,9 @@ pub(crate) unsafe fn mouse_irq() {
         if let Some((dx, dy, btn)) = mouse_decode(MOUSE_PKT) {
             MOUSE_X = MOUSE_X.wrapping_add(dx);
             MOUSE_Y = MOUSE_Y.wrapping_add(dy);
+            // Route the decoded movement into the input event queue so a
+            // compositor / app can poll it (sys_ioctl op 5), not just the log.
+            input_enqueue(1, btn as u32, MOUSE_X, MOUSE_Y);
             if !MOUSE_REPORTED && (dx != 0 || dy != 0 || btn != 0) {
                 MOUSE_REPORTED = true;
                 crate::serial_write(b"MOUSE: irq dx=0x");
@@ -353,5 +356,88 @@ pub(crate) unsafe fn mouse_irq() {
                 crate::serial_write(b"\n");
             }
         }
+    }
+}
+
+// ---- input event queue (full-os guide Part III input) ----
+//
+// A small ring the IRQ handlers enqueue into and userspace drains via
+// sys_ioctl op 5. Single core + IF=0 in the kernel, so producer (IRQ) and
+// consumer (syscall) never run concurrently -> no lock needed. Wire layout per
+// event (INPUT_EVENT_SIZE bytes): kind u8 @0, data u32 @4, x i32 @8, y i32 @12.
+// kind 1 = mouse (data = button bitmap, x/y = accumulated cursor); 2 = key
+// (data = scancode). Oldest events are overwritten when the ring is full.
+pub(crate) const INPUT_EVENT_SIZE: usize = 16;
+const INPUT_RING_CAP: usize = 64;
+static mut INPUT_RING: [[u8; INPUT_EVENT_SIZE]; INPUT_RING_CAP] =
+    [[0; INPUT_EVENT_SIZE]; INPUT_RING_CAP];
+static mut INPUT_READ: usize = 0;
+static mut INPUT_WRITE: usize = 0;
+static mut INPUT_COUNT: usize = 0;
+
+/// Enqueue one input event (called from IRQ context).
+pub(crate) unsafe fn input_enqueue(kind: u8, data: u32, x: i32, y: i32) {
+    let mut ev = [0u8; INPUT_EVENT_SIZE];
+    ev[0] = kind;
+    ev[4..8].copy_from_slice(&data.to_le_bytes());
+    ev[8..12].copy_from_slice(&x.to_le_bytes());
+    ev[12..16].copy_from_slice(&y.to_le_bytes());
+    INPUT_RING[INPUT_WRITE] = ev;
+    INPUT_WRITE = (INPUT_WRITE + 1) % INPUT_RING_CAP;
+    if INPUT_COUNT < INPUT_RING_CAP {
+        INPUT_COUNT += 1;
+    } else {
+        INPUT_READ = (INPUT_READ + 1) % INPUT_RING_CAP; // dropped the oldest
+    }
+}
+
+/// Drain up to `max` pending events into `out` (INPUT_EVENT_SIZE bytes each).
+/// Returns the number of events copied.
+pub(crate) unsafe fn input_drain(out: &mut [u8], max: usize) -> usize {
+    let mut n = 0usize;
+    while n < max && INPUT_COUNT > 0 && (n + 1) * INPUT_EVENT_SIZE <= out.len() {
+        let ev = INPUT_RING[INPUT_READ];
+        out[n * INPUT_EVENT_SIZE..(n + 1) * INPUT_EVENT_SIZE].copy_from_slice(&ev);
+        INPUT_READ = (INPUT_READ + 1) % INPUT_RING_CAP;
+        INPUT_COUNT -= 1;
+        n += 1;
+    }
+    n
+}
+
+/// Boot self-test: enqueue two synthetic events (a mouse move + a key) and drain
+/// them back, verifying the ring + the wire encoding round-trip exactly.
+pub(crate) unsafe fn input_event_selftest() -> u64 {
+    INPUT_READ = 0;
+    INPUT_WRITE = 0;
+    INPUT_COUNT = 0;
+    input_enqueue(1, 0x05, 100, -7); // mouse: buttons=5, cursor (100, -7)
+    input_enqueue(2, 0x41, 0, 0); // key: scancode 0x41
+    let mut buf = [0u8; INPUT_EVENT_SIZE * 4];
+    let n = input_drain(&mut buf, 4);
+    let m_data = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+    let m_x = i32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let m_y = i32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+    let k_kind = buf[INPUT_EVENT_SIZE];
+    let k_data = u32::from_le_bytes([
+        buf[INPUT_EVENT_SIZE + 4],
+        buf[INPUT_EVENT_SIZE + 5],
+        buf[INPUT_EVENT_SIZE + 6],
+        buf[INPUT_EVENT_SIZE + 7],
+    ]);
+    let ok = n == 2
+        && buf[0] == 1
+        && m_data == 0x05
+        && m_x == 100
+        && m_y == -7
+        && k_kind == 2
+        && k_data == 0x41
+        && INPUT_COUNT == 0;
+    if ok {
+        crate::serial_write(b"INPUT: event queue ok\n");
+        1
+    } else {
+        crate::serial_write(b"INPUT: event queue FAIL\n");
+        0
     }
 }

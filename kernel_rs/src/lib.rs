@@ -5572,6 +5572,24 @@ cfg_r4! {
                 }
                 painted
             }
+            // op 5 = input_poll (full-os guide Part III): drain up to a3 pending
+            // input events (16 bytes each: kind/data/x/y) from the kernel input
+            // ring into the user buffer a2. Returns the event count (0 = none).
+            5 => {
+                let max = core::cmp::min(a3 as usize, 64);
+                if max == 0 {
+                    return 0;
+                }
+                let mut buf = [0u8; kbd::INPUT_EVENT_SIZE * 64];
+                let n = kbd::input_drain(&mut buf[..max * kbd::INPUT_EVENT_SIZE], max);
+                if n > 0
+                    && copyout_user(a2, &buf[..n * kbd::INPUT_EVENT_SIZE], n * kbd::INPUT_EVENT_SIZE)
+                        .is_err()
+                {
+                    return ERR;
+                }
+                n as u64
+            }
             _ => ERR,
         }
     }
@@ -11282,6 +11300,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
+        let _ = kbd::input_event_selftest(); // full-os Part III: input event queue
         let _ = rng_hwseed_selftest(); // full-os Part IV.10: RDRAND-seeded CSPRNG
         // full-os Part I.3: online CPU count via the real sys_sysinfo op-13 path.
         serial_write(b"CPUS: count=0x");

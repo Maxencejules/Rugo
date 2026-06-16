@@ -45,12 +45,25 @@ decodes it via `mouse_decode`, and accumulates the cursor — logging the first 
 movement as `MOUSE: irq dx=… dy=… btn=…`. Proven with QMP-injected movement
 (`make test-mouse-irq-v1`): the keyboard + PIT keep working alongside it.
 
+## Input event queue (`sys_ioctl` op 5)
+
+The IRQ12 handler no longer just logs movement — it **enqueues** each decoded
+packet into a kernel input-event ring (`input_enqueue`), which userspace drains
+via `sys_ioctl` op 5 (`input_poll(buf, max_events)`). Each event is 16 bytes:
+`kind` u8 (1 = mouse: `data` = button bitmap, `x`/`y` = accumulated cursor;
+2 = key: `data` = scancode), `data` u32, `x` i32, `y` i32. The ring (64 entries)
+overwrites the oldest when full; producer (IRQ, IF=0) and consumer (syscall,
+IF=0) never run concurrently on the single core, so no lock is needed.
+`input_event_selftest` enqueues a synthetic mouse-move + key and drains them back,
+verifying the ring + encoding round-trip (`INPUT: event queue ok`).
+
 ## v1 boundary / carry-forward
 
-- **Bring-up + packet parser + live IRQ12 delivery** are all done. What remains:
-  an input **event queue** delivering movement/clicks to a compositor/window
-  server and routing clicks to the top window (status doc item 3); scroll-wheel /
-  Intellimouse (4-byte packets); absolute pointing (USB tablet).
+- **Bring-up + packet parser + live IRQ12 delivery + an input event queue
+  (`sys_ioctl` op 5)** are done. What remains: a keyboard-event producer feeding
+  the same ring; routing clicks to the top window in a compositor/window server;
+  an end-to-end QMP-injected poll test from ring 3; scroll-wheel / Intellimouse
+  (4-byte packets); absolute pointing (USB tablet).
 
 ## Acceptance
 

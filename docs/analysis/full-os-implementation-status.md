@@ -165,11 +165,14 @@ single safe boot-verified slice and several have hard prerequisites.
    composites multiple surfaces to the framebuffer in **z-order**
    (`compositor_v1.md`, verified via QMP screendump), the PC speaker beeps
    (`audio_v1.md`), and an Intel **HD Audio** controller is discovered + its
-   GCAP/version read (`hda_v1.md`, `-device intel-hda`). What remains: HDA
-   CORB/RIRB rings + codec enumeration + **PCM playback** (on the DMA pool);
-   continuous mouse movement/button packets (needs QMP `input-send-event`
-   injection); per-client **shared-memory pixel surfaces**, damage regions, alpha;
-   a standing compositor **process**; and an input event queue routing clicks.
+   GCAP/version read (`hda_v1.md`, `-device intel-hda`). **An input event queue
+   DONE** (`mouse_v1.md`): the IRQ12 mouse path enqueues decoded events into a
+   kernel ring that userspace drains via `sys_ioctl` op 5 (`input_poll`); a boot
+   self-test round-trips the 16-byte kind/data/x/y wire encoding (`INPUT: event
+   queue ok`). What remains: HDA CORB/RIRB rings + codec enumeration + **PCM
+   playback** (on the DMA pool); a keyboard-event producer + end-to-end
+   QMP-injected poll; per-client **shared-memory pixel surfaces**, damage regions,
+   alpha; and a standing compositor **process**.
 4. **V.11 dynamic loading — real ELF `.so` dynamic linker done.**
    `sys_dlctl` (id 60) is a genuine ELF64 dynamic linker (`dynlink_v1.md`):
    `dlopen` parses the embedded `.so`'s program headers, maps each `PT_LOAD`
@@ -242,7 +245,8 @@ single safe boot-verified slice and several have hard prerequisites.
   7 ICMPv6, 8 UDP-echo, 9 NDP, 10 TCP-RTO, 11 TCP-RTT, 12 TCP-congestion,
   13 routing, 14 IPv6-NUD, 15 IPv6-SLAAC, 16 TCP-fast-retransmit, 17 IPv6-UDP-echo,
   18 IPv6-TCP-listen, 19 TCP-send-window (4–19 are self-tests).
-- `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose.
+- `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose,
+  5 input-poll.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
   6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal, 11 FAT-write,
