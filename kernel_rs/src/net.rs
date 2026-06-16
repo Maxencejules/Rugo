@@ -182,9 +182,31 @@ pub(crate) unsafe fn net_mac() -> [u8; 6] {
     NET_MAC
 }
 
+/// Set the NIC MAC (the e1000 active driver reads it from EEPROM and publishes it
+/// here so ARP/DHCP use the right source address).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn set_mac(mac: [u8; 6]) {
+    NET_MAC = mac;
+}
+
+/// The live NIC the network stack drives: 1 = virtio-net (default), 2 = e1000. Set
+/// once at boot (e1000 only when no virtio is present); wire_send / net_rx_pump
+/// dispatch on it.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) static mut NIC_KIND: u8 = 1;
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn set_nic_e1000() {
+    NIC_KIND = 2;
+}
+
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) unsafe fn wire_send(frame: &[u8]) -> bool {
-    virtio_net_send(frame)
+    if NIC_KIND == 2 {
+        crate::e1000_active_send(frame)
+    } else {
+        virtio_net_send(frame)
+    }
 }
 
 // ---- Package fetch over TCP (full-os guide Part V.11, package manager). The
@@ -566,7 +588,11 @@ pub(crate) unsafe fn net_rx_pump() {
     let mut buf = [0u8; 1514];
     while budget > 0 {
         budget -= 1;
-        let n = virtio_net_recv(&mut buf);
+        let n = if NIC_KIND == 2 {
+            crate::e1000_active_recv(&mut buf)
+        } else {
+            virtio_net_recv(&mut buf)
+        };
         if n == 0 {
             break;
         }
@@ -1665,5 +1691,57 @@ pub(crate) unsafe fn r4_c4_runtime_init() {
             serial_write(b"NETC4: nic ready\n");
         }
     }
+    // No virtio-net: bring up the e1000 as the live NIC instead (full-os Part II.7).
+    // Generic lanes always have virtio, so this binds only in a dedicated e1000-only
+    // lane -- the existing network suite is untouched.
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if !nic_ready && crate::e1000_active_init() {
+            nic_ready = true;
+            serial_write(b"NETC4: e1000 active\n");
+        }
+    }
     r4_net_reset(nic_ready);
+    // Prove the e1000 is the real live NIC: run a full DHCP DORA over it.
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if NIC_KIND == 2 {
+            e1000_active_dhcp_proof();
+        }
+    }
+}
+
+/// Drive a full DHCP DORA over the active e1000 to prove it carries the real network
+/// stack: start a DISCOVER (sent via wire_send -> e1000) and pump the RX ring
+/// (net_rx_pump -> e1000_active_recv) until the lease is ACKed or a wall-clock budget
+/// elapses. Runs synchronously at boot (IF=0, no PIT-pump reentrancy); QEMU's slirp
+/// backend DMAs the OFFER/ACK into the RX ring regardless. The "DHCP: ack" marker
+/// firing in a lane with no virtio NIC is the proof the stack works over the e1000.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_active_dhcp_proof() {
+    serial_write(b"E1000: active link up\n");
+    let _ = crate::netcfg::start_dhcp();
+    let tsc_hz = crate::tsc_hz_via_pit();
+    let tsc_start = core::arch::x86_64::_rdtsc();
+    let budget = if tsc_hz != 0 { tsc_hz * 3 } else { u64::MAX };
+    let mut n = 0u64;
+    loop {
+        net_rx_pump();
+        if crate::netcfg::dhcp_done() {
+            break;
+        }
+        n += 1;
+        if n & 0xFFF == 0 && core::arch::x86_64::_rdtsc().wrapping_sub(tsc_start) > budget {
+            break;
+        }
+        if n > 200_000_000 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    if crate::netcfg::dhcp_done() {
+        serial_write(b"E1000: active dhcp ok\n");
+    } else {
+        serial_write(b"E1000: active dhcp timeout\n");
+    }
 }

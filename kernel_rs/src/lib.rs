@@ -7691,7 +7691,18 @@ unsafe fn mmio_map_4k(phys: u64) -> Option<u64> {
 /// from the window's PT index (true for the small counts used here).
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn mmio_map_region(phys: u64, npages: usize) -> Option<u64> {
-    const REGION_WINDOW_VA: u64 = 0xFFFF_FF10_0000_0000; // distinct from the 4k window
+    // Shared transient window: each caller maps, uses the region immediately, and is
+    // done before the next mmio_map_region call reuses the same window VA.
+    mmio_map_region_at(phys, npages, 0xFFFF_FF10_0000_0000)
+}
+
+/// Map `npages` of device MMIO at page-aligned `phys` into the kernel window based at
+/// `window_va`, returning the window VA of `phys`. Callers that must HOLD the mapping
+/// (e.g. the live e1000 NIC) pass a dedicated `window_va` so the shared transient
+/// window can't clobber it. `npages` must fit within one PT from the window's index.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn mmio_map_region_at(phys: u64, npages: usize, window_va: u64) -> Option<u64> {
+    let region_window_va = window_va;
     let hhdm = crate::mm::hhdm_offset();
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
@@ -7702,7 +7713,7 @@ unsafe fn mmio_map_region(phys: u64, npages: usize) -> Option<u64> {
     let mut npending = 0usize;
     for &shift in &[39u32, 30, 21] {
         let table = (table_phys + hhdm) as *mut u64;
-        let i = ((REGION_WINDOW_VA >> shift) & 0x1FF) as usize;
+        let i = ((region_window_va >> shift) & 0x1FF) as usize;
         let e = core::ptr::read_volatile(table.add(i));
         if e & 1 == 0 {
             let new = match crate::mm::alloc_frame() {
@@ -7731,7 +7742,7 @@ unsafe fn mmio_map_region(phys: u64, npages: usize) -> Option<u64> {
         k += 1;
     }
     let pt = (table_phys + hhdm) as *mut u64;
-    let base_i = ((REGION_WINDOW_VA >> 12) & 0x1FF) as usize;
+    let base_i = ((region_window_va >> 12) & 0x1FF) as usize;
     let mut p = 0usize;
     while p < npages && base_i + p < 512 {
         core::ptr::write_volatile(
@@ -7743,10 +7754,10 @@ unsafe fn mmio_map_region(phys: u64, npages: usize) -> Option<u64> {
                 | (1 << 4)
                 | (1u64 << 63),
         );
-        core::arch::asm!("invlpg [{}]", in(reg) REGION_WINDOW_VA + (p as u64) * 0x1000, options(nostack));
+        core::arch::asm!("invlpg [{}]", in(reg) region_window_va + (p as u64) * 0x1000, options(nostack));
         p += 1;
     }
-    Some(REGION_WINDOW_VA + (phys & 0xFFF))
+    Some(region_window_va + (phys & 0xFFF))
 }
 
 /// e1000 TX-ring self-test (full-os guide Part II.7, e1000 driver): set up a
@@ -8021,6 +8032,256 @@ unsafe fn e1000_rx_selftest(bdf: PciBdf) {
     }
 }
 
+// ---- Persistent e1000 driver: the active NIC (full-os guide Part II.7) ----
+// When no virtio-net is present, the e1000 becomes the live NIC the network stack
+// sends/receives through: net::wire_send and net_rx_pump dispatch on net::NIC_KIND.
+// Unlike the one-shot TX/RX self-tests above, these rings stay allocated for the
+// life of the system. Descriptor addresses are taken straight from the DMA pool
+// (real physical pages), so no kv2p translation is needed (virtio needs it because
+// its rings live in static BSS). The MMIO BAR is mapped into a DEDICATED window
+// (distinct from the shared transient mmio_map_region window) so it is never
+// clobbered by a later device mapping.
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const E1000_NTXD: usize = 8; // TX descriptors (minimum ring = 128 B = 8 descriptors)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const E1000_NRXD: usize = 8; // RX descriptors, each a 2048-byte receive buffer
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_MMIO: u64 = 0; // 0 until the active NIC is bound
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_TXRING_VA: u64 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_TXBUF_PHYS: u64 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_TXBUF_VA: u64 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_TXIDX: u32 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_RXRING_VA: u64 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_RXBUF_PHYS: u64 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut E1000_RXIDX: u32 = 0;
+
+/// Bring an Intel e1000 (QEMU 82540EM, 8086:100E) up as the live NIC: map its BAR
+/// into a dedicated persistent window, read the MAC from EEPROM, set up persistent
+/// TX + RX descriptor rings on the DMA pool, and route net::NIC_KIND to e1000.
+/// Returns false (the caller then has no NIC) if no e1000 is present or a resource
+/// can't be acquired. Idempotent: a second call after a successful bind is a no-op.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn e1000_active_init() -> bool {
+    if E1000_MMIO != 0 {
+        return true;
+    }
+    // Find the e1000 on bus 0.
+    let mut found: Option<PciBdf> = None;
+    let mut dev = 0u8;
+    while dev < 32 && found.is_none() {
+        let id0 = pci_read32(0, dev, 0, 0);
+        if (id0 & 0xFFFF) as u16 != 0xFFFF {
+            let hdr = (pci_read32(0, dev, 0, 0x0C) >> 16) & 0xFF;
+            let funcs = if hdr & 0x80 != 0 { 8u8 } else { 1u8 };
+            let mut func = 0u8;
+            while func < funcs {
+                let id = pci_read32(0, dev, func, 0);
+                if (id & 0xFFFF) as u16 == 0x8086 && ((id >> 16) & 0xFFFF) as u16 == 0x100E {
+                    found = Some(PciBdf { bus: 0, dev, func });
+                    break;
+                }
+                func += 1;
+            }
+        }
+        dev += 1;
+    }
+    let bdf = match found {
+        Some(b) => b,
+        None => return false,
+    };
+    // Enable memory space + bus master so the BAR decodes and DMA works.
+    let cmd = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x04);
+    pci_write32(bdf.bus, bdf.dev, bdf.func, 0x04, cmd | 0x0006);
+    let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
+    let base = (bar0 & 0xFFFF_FFF0) as u64;
+    // Dedicated persistent window (distinct PDPT subtree from the shared 0xFF10 one).
+    let mmio = match mmio_map_region_at(base, 4, 0xFFFF_FF20_0000_0000) {
+        Some(p) => p,
+        None => return false,
+    };
+    let reg = |off: u64| (mmio + off) as *mut u32;
+
+    // Device reset (CTRL.RST, bit 26): the boot-time TX/RX self-test runs first on
+    // this same device and leaves the rings enabled pointing at freed DMA, so clear
+    // all MAC state before reprogramming. RST self-clears when the reset completes.
+    core::ptr::write_volatile(reg(0x0000), core::ptr::read_volatile(reg(0x0000)) | (1 << 26));
+    let mut rs = 0u32;
+    while rs < 1_000_000 {
+        if core::ptr::read_volatile(reg(0x0000)) & (1 << 26) == 0 {
+            break;
+        }
+        rs += 1;
+        core::hint::spin_loop();
+    }
+
+    // MAC from EEPROM words 0..2 (word N holds bytes [2N, 2N+1] little-endian).
+    let mac = match (
+        e1000_eeprom_read(mmio, 0),
+        e1000_eeprom_read(mmio, 1),
+        e1000_eeprom_read(mmio, 2),
+    ) {
+        (Some(a), Some(b), Some(c)) => [
+            (a & 0xFF) as u8,
+            (a >> 8) as u8,
+            (b & 0xFF) as u8,
+            (b >> 8) as u8,
+            (c & 0xFF) as u8,
+            (c >> 8) as u8,
+        ],
+        _ => return false,
+    };
+    net::set_mac(mac);
+
+    // Persistent rings + buffers (cascade-free on any allocation failure).
+    let rxbuf_pages = (E1000_NRXD * 2048).div_ceil(4096); // 8*2048 = 4 pages
+    let txring = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => return false,
+    };
+    let txbuf = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(txring, 1);
+            return false;
+        }
+    };
+    let rxring = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(txbuf, 1);
+            dma::dma_free(txring, 1);
+            return false;
+        }
+    };
+    let rxbuf = match dma::dma_alloc(rxbuf_pages) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(rxring, 1);
+            dma::dma_free(txbuf, 1);
+            dma::dma_free(txring, 1);
+            return false;
+        }
+    };
+    let txring_va = mm::phys_to_virt(txring);
+    let rxring_va = mm::phys_to_virt(rxring);
+    core::ptr::write_bytes(txring_va as *mut u8, 0, 4096);
+    core::ptr::write_bytes(rxring_va as *mut u8, 0, 4096);
+
+    // Link up + full duplex (CTRL.SLU bit 6 | CTRL.FD bit 0).
+    core::ptr::write_volatile(reg(0x0000), core::ptr::read_volatile(reg(0x0000)) | (1 << 6) | 1);
+    // TX ring base/length/head/tail + TIPG + TCTL (EN | PSP | CT=0x0F | COLD=0x40).
+    core::ptr::write_volatile(reg(0x3800), txring as u32); // TDBAL
+    core::ptr::write_volatile(reg(0x3804), (txring >> 32) as u32); // TDBAH
+    core::ptr::write_volatile(reg(0x3808), (E1000_NTXD * 16) as u32); // TDLEN
+    core::ptr::write_volatile(reg(0x3810), 0); // TDH
+    core::ptr::write_volatile(reg(0x3818), 0); // TDT
+    core::ptr::write_volatile(reg(0x0410), 0x0060_200A); // TIPG
+    core::ptr::write_volatile(reg(0x0400), (1 << 1) | (1 << 3) | (0x0F << 4) | (0x40 << 12)); // TCTL
+
+    // RX ring: each descriptor points at its own 2048-byte buffer.
+    let rxring_p = rxring_va as *mut u8;
+    for i in 0..E1000_NRXD {
+        let d = rxring_p.add(i * 16);
+        core::ptr::write_volatile(d as *mut u64, rxbuf + (i as u64) * 2048);
+        *d.add(12) = 0; // status (DD cleared)
+    }
+    core::ptr::write_volatile(reg(0x2800), rxring as u32); // RDBAL
+    core::ptr::write_volatile(reg(0x2804), (rxring >> 32) as u32); // RDBAH
+    core::ptr::write_volatile(reg(0x2808), (E1000_NRXD * 16) as u32); // RDLEN
+    core::ptr::write_volatile(reg(0x2810), 0); // RDH
+    core::ptr::write_volatile(reg(0x2818), (E1000_NRXD - 1) as u32); // RDT
+    // RCTL: EN | UPE (accept all unicast, so our MAC's frames pass without RAL/RAH) |
+    // BAM (broadcast) | SECRC (strip CRC); BSIZE=2048.
+    core::ptr::write_volatile(reg(0x0100), (1 << 1) | (1 << 3) | (1 << 15) | (1 << 26));
+
+    E1000_TXRING_VA = txring_va;
+    E1000_TXBUF_PHYS = txbuf;
+    E1000_TXBUF_VA = mm::phys_to_virt(txbuf);
+    E1000_TXIDX = 0;
+    E1000_RXRING_VA = rxring_va;
+    E1000_RXBUF_PHYS = rxbuf;
+    E1000_RXIDX = 0;
+    E1000_MMIO = mmio; // set last: non-zero is the "bound" flag send/recv check
+    net::set_nic_e1000();
+    true
+}
+
+/// Transmit one Ethernet frame through the active e1000 (synchronous: rotate to the
+/// next TX descriptor, hand it to the device, poll its Done bit, bounded). Pads runt
+/// frames to the 60-byte minimum. Returns false if the device never reports Done or
+/// no e1000 is bound. One frame is in flight at a time, so the single TX buffer is
+/// safe to reuse across calls.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn e1000_active_send(frame: &[u8]) -> bool {
+    if E1000_MMIO == 0 || frame.len() > 2048 {
+        return false;
+    }
+    let len = if frame.len() < 60 { 60 } else { frame.len() };
+    let buf = E1000_TXBUF_VA as *mut u8;
+    core::ptr::write_bytes(buf, 0, len);
+    core::ptr::copy_nonoverlapping(frame.as_ptr(), buf, frame.len());
+    let i = (E1000_TXIDX as usize) % E1000_NTXD;
+    let d = (E1000_TXRING_VA as *mut u8).add(i * 16);
+    core::ptr::write_volatile(d as *mut u64, E1000_TXBUF_PHYS); // buffer address
+    core::ptr::write_volatile((d.add(8)) as *mut u16, len as u16); // length
+    *d.add(11) = 0x01 | 0x02 | 0x08; // CMD: EOP | IFCS | RS
+    *d.add(12) = 0; // status (DD cleared)
+    let next = ((i + 1) % E1000_NTXD) as u32;
+    E1000_TXIDX = next;
+    core::ptr::write_volatile((E1000_MMIO + 0x3818) as *mut u32, next); // TDT -> transmit
+    let mut spins = 0u32;
+    while spins < 2_000_000 {
+        if core::ptr::read_volatile(d.add(12)) & 0x01 != 0 {
+            return true;
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    false
+}
+
+/// Receive one frame from the active e1000 RX ring into `buf` (returns 0 if none is
+/// ready). Copies the DMA'd frame, recycles the descriptor back to the device (moves
+/// RDT to it), and advances to the next descriptor. Mirrors virtio_net_recv so the
+/// net_rx_pump dispatch is symmetric.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn e1000_active_recv(buf: &mut [u8]) -> usize {
+    if E1000_MMIO == 0 {
+        return 0;
+    }
+    let i = (E1000_RXIDX as usize) % E1000_NRXD;
+    let d = (E1000_RXRING_VA as *mut u8).add(i * 16);
+    // Status byte (offset 12) bit 0 = DD, written by the device via DMA -> volatile.
+    if core::ptr::read_volatile(d.add(12)) & 0x01 == 0 {
+        return 0;
+    }
+    let mut len = core::ptr::read_volatile((d.add(8)) as *const u16) as usize;
+    if len > buf.len() {
+        len = buf.len();
+    }
+    let src = mm::phys_to_virt(E1000_RXBUF_PHYS + (i as u64) * 2048) as *const u8;
+    let mut k = 0usize;
+    while k < len {
+        buf[k] = core::ptr::read_volatile(src.add(k));
+        k += 1;
+    }
+    // Recycle: clear the descriptor and hand it back to the device (RDT = i), then
+    // advance. The device fills descriptors from RDH up to (not including) RDT.
+    *d.add(12) = 0;
+    core::ptr::write_volatile((E1000_MMIO + 0x2818) as *mut u32, i as u32); // RDT = i
+    E1000_RXIDX = ((i + 1) % E1000_NRXD) as u32;
+    len
+}
+
 /// Read + report an xHCI controller's capability registers (xHCI spec 5.3).
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn xhci_report(bdf: PciBdf) {
@@ -8130,7 +8391,7 @@ unsafe fn xhci_wait_event(
 /// TCG both the PIT and the TSC advance with the VM's clock, so this yields a
 /// real-wall-clock relationship regardless of how slowly emulated code runs.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn tsc_hz_via_pit() -> u64 {
+pub(crate) unsafe fn tsc_hz_via_pit() -> u64 {
     const PIT_HZ: u64 = 1_193_182;
     const COUNT: u16 = 11_932; // ~10 ms
     // Gate (bit0) high, speaker data (bit1) off, so channel 2 counts silently.

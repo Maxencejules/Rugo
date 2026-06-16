@@ -51,6 +51,13 @@ pub(crate) unsafe fn query_active() -> bool {
     QUERY.state != Q_IDLE && QUERY.state != Q_DONE
 }
 
+/// True once a DHCP exchange has reached the ACK (lease confirmed). Used by the
+/// e1000 active-NIC proof to detect a completed DORA over the e1000.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn dhcp_done() -> bool {
+    QUERY.state == Q_DONE
+}
+
 fn csum_words(sum: &mut u32, data: &[u8]) {
     let mut i = 0;
     while i + 1 < data.len() {
