@@ -246,7 +246,7 @@ single safe boot-verified slice and several have hard prerequisites.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
   6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal, 11 FAT-write,
-  12 FAT-chain-read.
+  12 FAT-chain-read, 13 cpu-count.
 - `sys_proc_ctl` (51): 1 fork, 2 clone, 3 getuid, 4 setuid, 5 login.
 - Boot self-tests (markers, no syscall): SMP (spinlock, IPI, per-CPU timers, TLB
   shootdown, per-CPU GS, work dispatch, **ring-3 user task on an AP**, **per-CPU
@@ -254,4 +254,6 @@ single safe boot-verified slice and several have hard prerequisites.
   block buffer cache, AES-128 (FIPS-197 KAT, backs disk crypto), **SHA-256
   (FIPS 180-4 KAT) + measured-boot PCR**, **2 MiB huge page**, **swap / page
   eviction round-trip**, **TTY line discipline**, **GPT parse**, **mount table**;
-  PCI detection (xHCI, e1000, HD-Audio, **PCIe ECAM**, **MSI-X enable**).
+  PCI detection (xHCI, e1000, HD-Audio, **PCIe ECAM**, **MSI-X enable + table
+  programming**), **online CPU count** (`sys_sysinfo` op 13 -> `smp::cpu_count`),
+  **RDRAND-seeded CSPRNG**.

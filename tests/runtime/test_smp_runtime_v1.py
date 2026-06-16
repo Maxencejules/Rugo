@@ -153,6 +153,9 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # migrated to the AP: the AP ran its CR3 + ring-3 context, tracked its real
         # tid (slot 0x1F) as its per-CPU `current`, and serviced its syscalls.
         "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F ok",
+        # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
+        # real syscall dispatch path, sized from the live SMP state.
+        "CPUS: count=0x0000000000000002",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

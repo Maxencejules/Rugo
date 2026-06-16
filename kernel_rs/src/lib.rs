@@ -6246,6 +6246,9 @@ cfg_r4! {
                 serial_write(b"\n");
                 1
             }
+            // op 13 = online CPU count (the BSP + every checked-in AP). Lets
+            // userspace size thread pools to the machine (full-os guide Part I.3).
+            13 => smp::cpu_count(),
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }
@@ -8731,13 +8734,21 @@ unsafe fn msix_selftest() -> u64 {
                     serial_write_hex(device as u64);
                     serial_write(b" vectors=0x");
                     serial_write_hex(table_size as u64);
-                    if enabled {
-                        serial_write(b" enable ok\n");
-                        return 1;
-                    } else {
+                    if !enabled {
                         serial_write(b" enable fail\n");
                         return 0;
                     }
+                    serial_write(b" enable ok\n");
+                    // Program the MSI-X table (full-os guide Part II.7): locate
+                    // the table via the cap's Table BIR + offset (dword @cap+4),
+                    // map that BAR page, write a message address/data + the per-
+                    // vector mask into entry 0, read it back, then RESTORE the
+                    // original. MSI-X stays disabled (control was restored above)
+                    // so this only proves the table registers latch — no live
+                    // interrupt is armed. This is the concrete half of MSI-X; ISR
+                    // delivery + irq_dispatch wiring is carry-forward.
+                    msix_table_selftest(dev, func, cap);
+                    return 1;
                 }
             }
             func += 1;
@@ -8746,6 +8757,70 @@ unsafe fn msix_selftest() -> u64 {
     }
     serial_write(b"MSIX: none\n");
     0
+}
+
+/// Program MSI-X table entry 0 (message address/data + per-vector mask), read it
+/// back, and restore the original. Locates the table from the capability's Table
+/// BIR + offset (dword @cap+4) and maps the BAR page. MSI-X is disabled by the
+/// caller, so this never arms a real interrupt — it proves only that the table
+/// registers latch (full-os guide Part II.7).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn msix_table_selftest(dev: u8, func: u8, cap: u8) {
+    let tdw = pci_read32(0, dev, func, cap + 4);
+    let bir = (tdw & 0x7) as u8;
+    let toff = (tdw & 0xFFFF_FFF8) as u64;
+    let bar_off = 0x10 + bir * 4;
+    let bar = pci_read32(0, dev, func, bar_off);
+    if bar & 1 != 0 {
+        serial_write(b"MSIX: table not mmio\n"); // table must be in a memory BAR
+        return;
+    }
+    let mut base = (bar & 0xFFFF_FFF0) as u64;
+    if (bar >> 1) & 0x3 == 0x2 {
+        base |= (pci_read32(0, dev, func, bar_off + 4) as u64) << 32;
+    }
+    if base == 0 {
+        serial_write(b"MSIX: table bar unassigned\n");
+        return;
+    }
+    let table_phys = base + toff;
+    // Map TWO pages: the Table Offset is only 8-byte aligned (and the BAR base
+    // only 16-byte aligned), so entry 0 can sit as high as in-page offset 0xFF8;
+    // a 16-byte entry there would run off a single page. Two pages always cover it.
+    let page = match mmio_map_region(table_phys & !0xFFF, 2) {
+        Some(p) => p,
+        None => {
+            serial_write(b"MSIX: table map fail\n");
+            return;
+        }
+    };
+    let e0 = (page + (table_phys & 0xFFF)) as *mut u32;
+    // Save the original entry-0 (addr_lo, addr_hi, data, vector_control).
+    let s0 = core::ptr::read_volatile(e0);
+    let s1 = core::ptr::read_volatile(e0.add(1));
+    let s2 = core::ptr::read_volatile(e0.add(2));
+    let s3 = core::ptr::read_volatile(e0.add(3));
+    // Write a test message: address 0xFEE0_0000 (the x86 LAPIC MSI window),
+    // data 0x41 (a sample vector), vector_control bit 0 = masked.
+    core::ptr::write_volatile(e0, 0xFEE0_0000);
+    core::ptr::write_volatile(e0.add(1), 0);
+    core::ptr::write_volatile(e0.add(2), 0x41);
+    core::ptr::write_volatile(e0.add(3), 1);
+    let rb_addr = core::ptr::read_volatile(e0);
+    let rb_data = core::ptr::read_volatile(e0.add(2));
+    let rb_mask = core::ptr::read_volatile(e0.add(3)) & 1;
+    // Restore the original entry so the device is left exactly as found.
+    core::ptr::write_volatile(e0, s0);
+    core::ptr::write_volatile(e0.add(1), s1);
+    core::ptr::write_volatile(e0.add(2), s2);
+    core::ptr::write_volatile(e0.add(3), s3);
+    if rb_addr == 0xFEE0_0000 && (rb_data & 0xFFFF) == 0x41 && rb_mask == 1 {
+        serial_write(b"MSIX: table ok bir=0x");
+        serial_write_hex(bir as u64);
+        serial_write(b"\n");
+    } else {
+        serial_write(b"MSIX: table fail\n");
+    }
 }
 
 /// Claim a PCI function once so one function does not get initialized by
@@ -11208,6 +11283,10 @@ pub extern "C" fn kmain() -> ! {
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         let _ = rng_hwseed_selftest(); // full-os Part IV.10: RDRAND-seeded CSPRNG
+        // full-os Part I.3: online CPU count via the real sys_sysinfo op-13 path.
+        serial_write(b"CPUS: count=0x");
+        serial_write_hex(sys_sysinfo(13, 0, 0));
+        serial_write(b"\n");
         let _ = sha256::sha256_selftest(); // full-os Part IV.10: SHA-256 + measured boot
         let _ = sha256::secure_boot_selftest(); // full-os Part IV.10: secure boot (golden PCR verify)
         let _ = net::pkg_install_selftest(); // full-os Part V.11: package sig-verify + install

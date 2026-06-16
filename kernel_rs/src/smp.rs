@@ -621,6 +621,12 @@ static SHOOTDOWN_ACK: AtomicU64 = AtomicU64::new(0);
 static SMP_AP_COUNT: AtomicU64 = AtomicU64::new(0);
 const TLB_SHOOTDOWN_VECTOR: u64 = 242;
 
+/// Number of online CPUs (the BSP plus every AP that checked in). 1 on a
+/// uniprocessor lane. Exposed to userspace via sys_sysinfo op 13.
+pub fn cpu_count() -> u64 {
+    SMP_AP_COUNT.load(Ordering::Acquire) + 1
+}
+
 /// Invalidate `addr` on the current CPU, or reload CR3 (full flush) if `addr`
 /// is 0. Shared by the local path in `tlb_shootdown` and the AP handler.
 #[inline(always)]
