@@ -201,10 +201,14 @@ single safe boot-verified slice and several have hard prerequisites.
    full SimpleFS/app-region filesystem image into the partition (vs the
    fixed-pattern verification payload) and installing the bootloader stages
    (Limine BIOS/UEFI) onto the target; folding a UEFI El-Torito entry into the ISO
-   build so
-   `os-go.iso` is itself hybrid (needs xorriso/mtools); Secure Boot; a package
-   request/selection protocol + repo index + signature verification + unpack/install
-   on top of the fetch; and self-hosting.
+   build so `os-go.iso` is itself hybrid (needs xorriso/mtools); and self-hosting.
+   **The package-manager core is DONE** (`pkgmgr_v1.md`): an on-disk **signed repo
+   index** of multiple packages (HMAC-SHA256 over the manifest digest), **selection
+   by name**, **per-package SHA-256** integrity, tamper + forged-index rejection,
+   and a verified install — `PKGMGR: ok`. What remains there: installing into the
+   live app region (so the package spawns directly), fetching the repo + index over
+   the network (combining with the TCP fetch), dependency resolution, and asymmetric
+   (public-key) signatures instead of a shared HMAC key.
 6. **II.6 TCP reliability — RTO + RTT estimation + congestion control done.** The
    client/listener, v4/v6 echo, IPv6 **Neighbor Discovery responder**
    (`ndp_v1.md`), **TCP retransmission/RTO** (`tcp_rto_v1.md`), **RTT estimation**

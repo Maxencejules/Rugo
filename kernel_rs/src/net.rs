@@ -389,6 +389,171 @@ pub(crate) unsafe fn pkg_install_selftest() -> u64 {
     }
 }
 
+/// Package manager (full-os guide Part V.11): read an on-disk **signed package
+/// repository**, verify the HMAC-signed index, **select a package by name**,
+/// verify that package's SHA-256, and **install** it (write to a scratch LBA and
+/// read it back). Proves the package-manager core beyond the single-blob fetch:
+/// a repo index, package selection, per-package integrity, and a signed manifest
+/// (a tampered package or a forged index is rejected).
+///
+/// The repo (built host-side by `tools/pkg_repo_v1.py`) lives in the free
+/// 12..63 scratch gap: index @LBA 24, payloads @LBA 25+. A boot with no repo
+/// (the common case) reads a blank sector, reports `PKGMGR: no repo`, and writes
+/// nothing — safe on every boot.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_manager_selftest() -> u64 {
+    const KEY: &[u8] = b"rugo-repo-index-key-v1";
+    const REPO_INDEX_LBA: u64 = 24;
+    const INSTALL_SCRATCH_LBA: u64 = 22; // free; up to 2 sectors (22..23)
+    const ENTRY_SIZE: usize = 64;
+    const MAX_ENTRIES: usize = 7;
+    const MAX_PAYLOAD: usize = 1024;
+
+    if !crate::storage::r4_storage_available() {
+        return 1; // no disk: nothing to do
+    }
+    if !crate::block_io_dispatch(false, REPO_INDEX_LBA, 512, false) {
+        serial_write(b"PKGMGR: no repo\n");
+        return 1;
+    }
+    // Copy the index out of the shared block page before any payload read reuses it.
+    let mut idx = [0u8; 512];
+    idx.copy_from_slice(&crate::BLK_DATA_PAGE.0[..512]);
+    if &idx[0..4] != b"RPKG" {
+        serial_write(b"PKGMGR: no repo\n");
+        return 1;
+    }
+    let count = u32::from_le_bytes([idx[4], idx[5], idx[6], idx[7]]) as usize;
+    if count == 0 || count > MAX_ENTRIES {
+        serial_write(b"PKGMGR: bad index FAIL\n");
+        return 0;
+    }
+    // Verify the signed manifest: HMAC(KEY, SHA-256(entries)) covers all entries
+    // regardless of count (hmac caps msg at 256B, so sign the 32-byte digest).
+    let entries = &idx[40..40 + count * ENTRY_SIZE];
+    let dig = crate::sha256::sha256(entries);
+    let sig = crate::sha256::hmac_sha256(KEY, &dig);
+    if sig[..] != idx[8..40] {
+        serial_write(b"PKGMGR: index sig FAIL\n");
+        return 0;
+    }
+    // A forged index (flip one entry byte) must NOT verify against the signature.
+    let mut tampered_entries = [0u8; MAX_ENTRIES * ENTRY_SIZE];
+    tampered_entries[..count * ENTRY_SIZE].copy_from_slice(entries);
+    tampered_entries[0] ^= 0x01;
+    let forged_sig =
+        crate::sha256::hmac_sha256(KEY, &crate::sha256::sha256(&tampered_entries[..count * ENTRY_SIZE]));
+    if forged_sig[..] == idx[8..40] {
+        serial_write(b"PKGMGR: index forge NOT rejected FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: index count=0x");
+    serial_write_hex(count as u64);
+    serial_write(b" sig ok\n");
+
+    // Select the package named "calc".
+    let mut sel: Option<usize> = None;
+    let mut e = 0usize;
+    while e < count {
+        let base = 40 + e * ENTRY_SIZE;
+        if &idx[base..base + 4] == b"calc" && idx[base + 4] == 0 {
+            sel = Some(e);
+            break;
+        }
+        e += 1;
+    }
+    let e = match sel {
+        Some(e) => e,
+        None => {
+            serial_write(b"PKGMGR: select FAIL\n");
+            return 0;
+        }
+    };
+    let base = 40 + e * ENTRY_SIZE;
+    let plba = u32::from_le_bytes([idx[base + 24], idx[base + 25], idx[base + 26], idx[base + 27]])
+        as u64;
+    let plen =
+        u32::from_le_bytes([idx[base + 28], idx[base + 29], idx[base + 30], idx[base + 31]]) as usize;
+    if plen == 0 || plen > MAX_PAYLOAD {
+        serial_write(b"PKGMGR: bad len FAIL\n");
+        return 0;
+    }
+    let mut ehash = [0u8; 32];
+    ehash.copy_from_slice(&idx[base + 32..base + 64]);
+
+    // Read the package payload off the repo.
+    let mut payload = [0u8; MAX_PAYLOAD];
+    let sectors = (plen + 511) / 512;
+    let mut s = 0usize;
+    while s < sectors {
+        if !crate::block_io_dispatch(false, plba + s as u64, 512, false) {
+            serial_write(b"PKGMGR: read FAIL\n");
+            return 0;
+        }
+        let off = s * 512;
+        let n = core::cmp::min(512, plen - off);
+        payload[off..off + n].copy_from_slice(&crate::BLK_DATA_PAGE.0[..n]);
+        s += 1;
+    }
+    // Per-package integrity: SHA-256(payload) must match the entry's hash.
+    if crate::sha256::sha256(&payload[..plen]) != ehash {
+        serial_write(b"PKGMGR: hash FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: select calc lba=0x");
+    serial_write_hex(plba);
+    serial_write(b" len=0x");
+    serial_write_hex(plen as u64);
+    serial_write(b" hash ok\n");
+    // A tampered payload must NOT match the entry's hash.
+    let mut t = payload;
+    t[0] ^= 0x01;
+    if crate::sha256::sha256(&t[..plen]) == ehash {
+        serial_write(b"PKGMGR: tamper NOT rejected FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: tamper rejected\n");
+
+    // Install the verified payload: write to a scratch LBA, then read it back.
+    let mut install_ok = true;
+    let mut s = 0usize;
+    while s < sectors {
+        core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+        let off = s * 512;
+        let n = core::cmp::min(512, plen - off);
+        crate::BLK_DATA_PAGE.0[..n].copy_from_slice(&payload[off..off + n]);
+        if !crate::block_io_dispatch(true, INSTALL_SCRATCH_LBA + s as u64, 512, true) {
+            install_ok = false;
+            break;
+        }
+        s += 1;
+    }
+    if install_ok {
+        let mut s = 0usize;
+        while s < sectors {
+            core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+            if !crate::block_io_dispatch(false, INSTALL_SCRATCH_LBA + s as u64, 512, false) {
+                install_ok = false;
+                break;
+            }
+            let off = s * 512;
+            let n = core::cmp::min(512, plen - off);
+            if crate::BLK_DATA_PAGE.0[..n] != payload[off..off + n] {
+                install_ok = false;
+                break;
+            }
+            s += 1;
+        }
+    }
+    if !install_ok {
+        serial_write(b"PKGMGR: install FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: install ok\n");
+    serial_write(b"PKGMGR: ok\n");
+    1
+}
+
 /// PIT-tick RX pump for the default lane: answer ARP for the guest IP,
 /// hand ARP replies and IPv4/TCP packets to the TCP machine, drop the
 /// rest. Runs in interrupt context (single core, IF=0 in kernel).
