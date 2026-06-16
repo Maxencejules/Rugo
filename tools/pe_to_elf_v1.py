@@ -51,8 +51,10 @@ def main() -> int:
     entry = image_base + entry_rva
 
     # ELF64: header + one program header, then the payload. The segment
-    # maps ImageBase..ImageBase+memsz; vaddr-offset congruence holds
-    # because the loader copies by p_offset/p_vaddr directly.
+    # maps ImageBase..ImageBase+memsz. NB: p_offset (0x78) is intentionally
+    # NOT congruent to p_vaddr modulo p_align -- a standard mmap-based loader
+    # (ld.so) would reject that, but the kernel's exec_load_app copies bytes by
+    # absolute p_offset/p_vaddr (no mmap, no alignment check), so it is fine here.
     ehsize, phsize = 64, 56
     payload_off = ehsize + phsize
     eh = struct.pack(

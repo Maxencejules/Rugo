@@ -55,7 +55,7 @@ endif
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
-       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-tcp-v1 test-netcfg-v1 test-console-v1 test-coreutils-v1 test-pipes-v1 test-concurrent-exec-v1 test-fork-v1 test-mmap-v1 test-clock-v1 test-rng-v1 test-sandbox-v1 test-devfs-v1 test-sysinfo-v1 test-power-v1 test-futex-v1 test-proc-v1 test-dhcp-dora-v1 test-icmp-v1 test-arp-v1 test-icmpv6-v1 test-udp-echo-v1 test-tcp-listen-v1 test-page3-v1 test-beep-v1 test-audit-v1 test-crypt-v1 test-journal-v1 test-userid-v1 test-dmesg-v1 test-pty-v1 test-partitions-v1 test-fat16-v1 test-lseek-v1 test-nanosleep-v1 test-graphics-v1 test-waitpid-v1 test-timerfd-v1 test-drivers-v1 test-aslr-v1 test-tmpfs-v1 test-libc-v1 test-wx-v1 test-signals-v1 test-users-v1 test-smp-v1 test-smp-syscall-v1 test-xhci-hid-v1 test-xhci-hid-input-v1 test-pkgfetch-v1 test-secure-boot-v1 test-pkg-install-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
+       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-tcp-v1 test-netcfg-v1 test-console-v1 test-coreutils-v1 test-pipes-v1 test-concurrent-exec-v1 test-fork-v1 test-mmap-v1 test-clock-v1 test-rng-v1 test-sandbox-v1 test-devfs-v1 test-sysinfo-v1 test-power-v1 test-futex-v1 test-proc-v1 test-dhcp-dora-v1 test-icmp-v1 test-arp-v1 test-icmpv6-v1 test-udp-echo-v1 test-tcp-listen-v1 test-page3-v1 test-bigc-v1 test-beep-v1 test-audit-v1 test-crypt-v1 test-journal-v1 test-userid-v1 test-dmesg-v1 test-pty-v1 test-partitions-v1 test-fat16-v1 test-lseek-v1 test-nanosleep-v1 test-graphics-v1 test-waitpid-v1 test-timerfd-v1 test-drivers-v1 test-aslr-v1 test-tmpfs-v1 test-libc-v1 test-wx-v1 test-signals-v1 test-users-v1 test-smp-v1 test-smp-syscall-v1 test-xhci-hid-v1 test-xhci-hid-input-v1 test-pkgfetch-v1 test-secure-boot-v1 test-pkg-install-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-connected-runtime-c4 test-reliable-isolated-runtime-c5 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
@@ -188,7 +188,7 @@ $(X1_PROC_SOCK_ELF): $(OUT)/x1-proc-sock.o services/compat/linker.ld | $(OUT)
 
 APP_BASE_SHELL_ELF = $(OUT)/app-base-shell.elf
 COREUTILS_ELFS = $(OUT)/app-echo.elf $(OUT)/app-cat.elf $(OUT)/app-ls.elf $(OUT)/app-ps.elf $(OUT)/app-wc.elf $(OUT)/app-nxprobe.elf $(OUT)/app-sigprobe.elf $(OUT)/app-fsperm.elf $(OUT)/app-asprobe.elf $(OUT)/app-forkprobe.elf $(OUT)/app-vmprobe.elf $(OUT)/app-timeprobe.elf $(OUT)/app-rngprobe.elf $(OUT)/app-sandboxprobe.elf $(OUT)/app-devprobe.elf $(OUT)/app-sysinfoprobe.elf $(OUT)/app-futexprobe.elf $(OUT)/app-lseekprobe.elf $(OUT)/app-sleepprobe.elf $(OUT)/app-gfxprobe.elf $(OUT)/app-waitprobe.elf $(OUT)/app-timerfdprobe.elf $(OUT)/app-dmesgprobe.elf $(OUT)/app-ptyprobe.elf $(OUT)/app-partprobe.elf $(OUT)/app-fatprobe.elf $(OUT)/app-page3probe.elf $(OUT)/app-beepprobe.elf $(OUT)/app-auditprobe.elf $(OUT)/app-fatlsprobe.elf $(OUT)/app-cryptprobe.elf $(OUT)/app-journalprobe.elf $(OUT)/app-userprobe.elf $(OUT)/app-compositorprobe.elf $(OUT)/app-dlprobe.elf $(OUT)/app-fatwrprobe.elf $(OUT)/app-fatbigprobe.elf $(OUT)/app-loginprobe.elf
-APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf
+APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf $(OUT)/app-bigcprobe.elf
 
 $(OUT)/app-base-shell.o: apps/base-shell/base_shell.asm | $(OUT)
 	$(NASM) $(NASMFLAGS) $< -o $@
@@ -238,6 +238,16 @@ $(OUT)/app-hello-main-pe.o: apps/hello-c/hello.c libc/include/rugo/libc.h | $(OU
 $(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
 	$(MINGW_LD) -m i386pep --gc-sections --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
 	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-hello.pe $@
+
+# bigcprobe: a C program that spans MORE THAN TWO pages (a ~8 KiB const table
+# in .rdata + an 8 KiB .bss array), proving the PE->ELF toolchain and the exec
+# loader handle a multi-page C image end to end (companion to the asm page3probe).
+$(OUT)/app-bigcprobe-main-pe.o: apps/c-bigprobe/bigprobe.c libc/include/rugo/libc.h | $(OUT)
+	$(CC) $(RLIBC_CFLAGS) $< -o $@
+
+$(OUT)/app-bigcprobe.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
+	$(MINGW_LD) -m i386pep --gc-sections --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-bigcprobe.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o
+	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-bigcprobe.pe $@
 
 # --- Rust kernel --------------------------------------------------------------
 
@@ -1070,6 +1080,9 @@ test-swap-v1: image-go
 
 test-page3-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
+
+test-bigc-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_bigc_v1.py -v --junitxml=$(OUT)/pytest-bigc-v1.xml
 
 test-beep-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_beep_v1.py -v --junitxml=$(OUT)/pytest-beep-v1.xml

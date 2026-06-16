@@ -54,10 +54,11 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
   lseek (`lseek_v1.md`), multi-page exec, package fetch over TCP
   (`pkgfetch_v1.md`). **rlibc v2** (`rlibc_v2.md`): errno + string helpers
   (strcpy/strncpy/strcat/strchr/atoi), unblocked by `--gc-sections` (each C app
-  links only what it uses, so the library can grow while `hello` stays under the
-  PE→ELF 2-page limit). The earlier rlibc-v2 attempt was reverted for crossing
-  that limit; section GC is the workaround. `FILE*` stdio + a real allocator +
-  apps that need >2 pages remain carry-forward (the underlying pe_to_elf limit).
+  links only what it uses). **C apps >2 pages DONE** (`capp_multipage_v1.md`):
+  the feared PE→ELF "refptr/reloc limit" was a misdiagnosis — apps load at exactly
+  their PE image base, so all baked-in absolute addresses are correct at any size;
+  a 6-page C app (`bigcprobe`) is boot-verified end to end. `FILE*` stdio + a real
+  allocator remain carry-forward.
 
 ## Carry-forward — the L/XL subsystems (with concrete next steps)
 
@@ -134,9 +135,16 @@ single safe boot-verified slice and several have hard prerequisites.
    then, with a `usb-kbd` attached, port reset → Enable Slot → device/input
    contexts + EP0 transfer ring → Address Device → a GET_DESCRIPTOR(device)
    control transfer that reads the 18-byte device descriptor — `XHCI: hid
-   enumerated … vid=0x0627 pid=0x0001`). What remains for a full HID driver: the
-   config/HID descriptors, SET_CONFIGURATION/SET_PROTOCOL, and an interrupt-IN
-   endpoint reading actual key reports (needs QMP input injection). The **e1000 TX ring driver** is done
+   enumerated … vid=0x0627 pid=0x0001`). **HID boot-keyboard input reports DONE**
+   (`xhci_v1.md`): SET_CONFIGURATION + Configure Endpoint (interrupt-IN endpoint,
+   EP type 7) + SET_PROTOCOL(boot), then it polls the interrupt-IN endpoint and
+   reads a real 8-byte boot report from a host-injected key (QMP `send-key`) —
+   `XHCI: hid report mod=0x0 key=0x04`. The report poll is bounded by **wall-clock
+   time** (TSC calibrated against a one-shot PIT interval), so a keyboard-attached
+   boot stays fast when no key arrives. What remains for a full HID driver: parsing
+   the HID report descriptor (vs the fixed boot layout), a continuously-serviced
+   interrupt ring feeding an input subsystem, and other HID classes (mouse).
+   The **e1000 TX ring driver** is done
    (`e1000_v1.md`: a descriptor ring on the DMA pool transmits a frame and the
    device's Done bit confirms it); an **e1000 RX ring** (`e1000_v1.md`) now
    receives a real wire frame too — the kernel ARPs the slirp gateway 10.0.2.2 and

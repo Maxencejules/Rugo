@@ -45,7 +45,10 @@ nonexistent path sets `errno`) and `HELLOC: v2 cpy=rugo chr=go atoi=-123`
 
 - A genuine but **bounded** libc growth: errno + string helpers, made possible by
   section GC. `FILE*` buffered stdio (`fopen`/`fgets`/`fputs`), `snprintf`, and a
-  real (non-bump) allocator with `free` remain carry-forward — and a C app that
-  legitimately needs **more than two pages** still hits the PE→ELF refptr/reloc
-  limit (the underlying toolchain block), so large additions must keep per-app
-  reachable size under two pages or wait on a `pe_to_elf` fix.
+  real (non-bump) allocator with `free` remain carry-forward.
+- **Update:** C apps larger than two pages are **no longer blocked** — the feared
+  PE→ELF "refptr/reloc limit" was a misdiagnosis. Because every app loads at
+  exactly its PE image base (`EXEC_APP_BASE`), all baked-in absolute addresses
+  (incl. `.reloc` targets and mingw `.refptr` cells) are already correct
+  regardless of image size. A 6-page C app (`bigcprobe`) is now boot-verified end
+  to end; see [`capp_multipage_v1.md`](capp_multipage_v1.md).
