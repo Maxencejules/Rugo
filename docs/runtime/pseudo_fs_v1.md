@@ -26,6 +26,12 @@ the shell's `fswrite`/`fscat` builtins.
 `tid=0x<hex16> uid=0x<hex2> state=run\n` (hex in v1; `R4_CURRENT` is the
 reader). Read via `fscat /proc/self/stat`.
 
+`/proc/<tid>/stat` (read-only) does the same for an **arbitrary** live task: the
+path's decimal tid is parsed at open and stored in `M8_FD_VFS_NODE[fd]`
+(`M8FdKind::ProcTidStat`); the read generates `tid=0x… uid=0x… state=<run|ready|
+block|other>` for `R4_TASKS[tid]` (EOF if the tid is out of range or Dead). This
+is the per-task introspection `ps` needs. Read via `fscat /proc/<tid>/stat`.
+
 No new syscall: these route through the existing `open`/`read`/`write`/
 `poll` (ids 18/19/20/23) by path, like `/dev/console`. They are public — no
 capability required (a sandboxed app can still read entropy). `poll` reports
@@ -34,9 +40,9 @@ writable.
 
 ## v1 boundary / carry-forward
 
-- `/dev`: the three classic character devices. `/proc`: only
-  `/proc/self/stat` (hex fields). Per-`<tid>` `/proc` entries with decimal
-  fields and rss, `/tmp` tmpfs, and a mount-table pseudo-fs factory are
+- `/dev`: the three classic character devices. `/proc`: `/proc/self/stat` +
+  `/proc/<tid>/stat` (hex fields). Decimal `ps`-style fields + rss/cmdline
+  enrichment, `/proc/<tid>/status`, and a mount-table pseudo-fs factory are
   carry-forward.
 - `/dev/urandom` shares the `sys_getrandom` pool; its v1 entropy caveats
   (see [`rng_v1.md`](rng_v1.md)) apply.

@@ -32,7 +32,8 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
   marks it EOC in every FAT copy, fills a free root-dir entry, verified by
   read-back: `FATWR: write+read ok`), write-ahead journaling + replay
   (`journal_v1.md`); plus the pre-existing SimpleFS `/data` tree and `/dev`,
-  `/proc/self/stat`.
+  `/proc/self/stat` **and `/proc/<tid>/stat`** (arbitrary-task introspection,
+  `pseudo_fs_v1.md`).
 - **II.6 Networking**: DHCP/DNS clients (`netcfg_v1.md`), and a comprehensively
   reachable host — ARP responder (`arp_v1.md`), ICMP echo (`icmp_v1.md`),
   ICMPv6 echo (`icmpv6_v1.md`), TCP client **and** passive-open/listener

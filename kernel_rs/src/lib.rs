@@ -1218,6 +1218,36 @@ cfg_m3! {
                 return fd;
             }
         }
+        // /proc/<tid>/stat (full-os guide Part II.5): inspect an ARBITRARY task
+        // (vs /proc/self/stat above). Path is NUL-terminated "/proc/<dec>/stat".
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if bytes.len() > 12 && &bytes[..6] == b"/proc/" && bytes[bytes.len() - 1] == 0 {
+                let body = &bytes[6..bytes.len() - 1]; // "<dec>/stat"
+                let mut i = 0usize;
+                let mut tid = 0usize;
+                while i < body.len() && body[i].is_ascii_digit() && tid <= 255 {
+                    tid = tid * 10 + (body[i] - b'0') as usize;
+                    i += 1;
+                }
+                if i > 0 && tid <= 255 && &body[i..] == b"/stat" {
+                    let kind = M8FdKind::ProcTidStat;
+                    let max = m10_rights_for_kind(kind);
+                    let effective = requested | M10_RIGHT_POLL;
+                    if effective & !max != 0 {
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
+                    let fd = m8_alloc_fd(kind);
+                    if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                        return fd;
+                    }
+                    M8_FD_TABLE[fd as usize].rights = effective;
+                    M8_FD_TABLE[fd as usize].offset = 0;
+                    M8_FD_VFS_NODE[fd as usize] = tid as u8;
+                    return fd;
+                }
+            }
+        }
         // /mnt/<NAME> mounts the FAT16 volume into the namespace (full-os guide
         // Part II.5 mounts): read-only, root-directory 8.3 names. The file is
         // cached on open; one open /mnt file at a time (v1).
@@ -1576,6 +1606,44 @@ cfg_m3! {
                 n as u64
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            M8FdKind::ProcTidStat => {
+                // Generate an arbitrary task's stat line on demand (the target
+                // tid was stored at open time in M8_FD_VFS_NODE[fd]).
+                let tid = M8_FD_VFS_NODE[idx] as usize;
+                if tid >= R4_NUM_TASKS || matches!(R4_TASKS[tid].state, R4State::Dead) {
+                    return 0; // no such live task -> EOF
+                }
+                let mut line = [0u8; 64];
+                let mut w = 0usize;
+                let tag = b"tid=";
+                line[w..w + tag.len()].copy_from_slice(tag);
+                w += tag.len();
+                w += fmt_hex_u64(&mut line[w..], tid as u64);
+                let utag = b" uid=";
+                line[w..w + utag.len()].copy_from_slice(utag);
+                w += utag.len();
+                w += fmt_hex_u64(&mut line[w..], R4_TASKS[tid].uid as u64);
+                let stag: &[u8] = match R4_TASKS[tid].state {
+                    R4State::Running => b" state=run\n",
+                    R4State::Ready => b" state=ready\n",
+                    R4State::Blocked => b" state=block\n",
+                    _ => b" state=other\n",
+                };
+                line[w..w + stag.len()].copy_from_slice(stag);
+                w += stag.len();
+                let off = M8_FD_TABLE[idx].offset;
+                if off >= w {
+                    return 0;
+                }
+                let remaining = w - off;
+                let n = core::cmp::min(len as usize, remaining);
+                if copyout_user(buf, &line[off..off + n], n).is_err() {
+                    return 0xFFFF_FFFF_FFFF_FFFF;
+                }
+                M8_FD_TABLE[idx].offset += n;
+                n as u64
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::TimerFd => {
                 // One-shot: 8-byte expiration count when fired, else 0.
                 if len < 8 {
@@ -1777,6 +1845,7 @@ cfg_m3! {
             M8FdKind::DevZero
             | M8FdKind::DevUrandom
             | M8FdKind::ProcSelfStat
+            | M8FdKind::ProcTidStat
             | M8FdKind::TimerFd => 0xFFFF_FFFF_FFFF_FFFF,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::TmpFile => {
@@ -2203,7 +2272,7 @@ cfg_m3! {
                             }
                         }
                         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-                        M8FdKind::ProcSelfStat => {
+                        M8FdKind::ProcSelfStat | M8FdKind::ProcTidStat => {
                             if events & POLLIN != 0 && rights & M10_RIGHT_READ != 0 {
                                 revents |= POLLIN;
                             }
@@ -2480,6 +2549,10 @@ cfg_m3! {
         // /proc/self/stat (full-os guide Part II.5, pseudo-fs).
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         ProcSelfStat,
+        // /proc/<tid>/stat (full-os guide Part II.5): inspect an arbitrary task;
+        // the target tid is held in M8_FD_VFS_NODE[fd].
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        ProcTidStat,
         // timerfd (full-os guide Part IV.9): offset holds the expiry tick.
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         TimerFd,
@@ -2908,7 +2981,7 @@ cfg_m3! {
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::DevNull => M10_RIGHT_WRITE | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-            M8FdKind::ProcSelfStat => M10_RIGHT_READ | M10_RIGHT_POLL,
+            M8FdKind::ProcSelfStat | M8FdKind::ProcTidStat => M10_RIGHT_READ | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::TimerFd => M10_RIGHT_READ | M10_RIGHT_POLL,
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
