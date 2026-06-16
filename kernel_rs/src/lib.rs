@@ -5615,6 +5615,85 @@ cfg_r4! {
     const DLOPEN_BASE: u64 = 0x0180_0000;
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static DL_SO: &[u8] = include_bytes!("dl_module.so");
+    // An on-disk `.so` read off the filesystem (vs the embedded `DL_SO`). dlopen
+    // of a `/data/…so` path reads the file here; `DL_CUR_ONDISK` selects which
+    // image dlsym resolves against. Bounded buffer (the loader caps at this size).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const DL_LOADED_MAX: usize = 8192;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_LOADED: [u8; DL_LOADED_MAX] = [0; DL_LOADED_MAX];
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_LOADED_LEN: usize = 0;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_CUR_ONDISK: bool = false;
+
+    /// The `.so` image dlsym currently resolves against (on-disk if the last
+    /// dlopen loaded a file, else the embedded blob).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_current() -> &'static [u8] {
+        if DL_CUR_ONDISK {
+            &DL_LOADED[..DL_LOADED_LEN]
+        } else {
+            DL_SO
+        }
+    }
+
+    /// dlopen a `.so` from the filesystem: look it up in the VFS, read it into
+    /// `DL_LOADED`, and load it. Returns the load base, or ERR.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_load_from_vfs(path: &[u8]) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        // The VFS root is mounted at /data (sys_open strips the prefix), so strip
+        // it here too: "/data/x.so" -> "/x.so".
+        if path.len() < 6 || &path[..5] != b"/data" {
+            return ERR;
+        }
+        let rel = &path[5..];
+        let (kind, size) = match vfs::vfs_stat(rel) {
+            Some(v) => v,
+            None => return ERR,
+        };
+        if kind != vfs::KIND_FILE || size < 64 || size > DL_LOADED_MAX {
+            return ERR;
+        }
+        let idx = match vfs::vfs_lookup(rel) {
+            Some(i) => i,
+            None => return ERR,
+        };
+        if vfs::vfs_read(idx, 0, &mut DL_LOADED[..size]) != size {
+            return ERR;
+        }
+        // Switch the dlsym image to the on-disk object ONLY on a successful load,
+        // so a failed dlopen leaves dlsym resolving the last good object (matching
+        // the libdl branch), not the bad/partial on-disk blob.
+        let r = dl_load_elf(&DL_LOADED[..size]);
+        if r != ERR {
+            DL_LOADED_LEN = size;
+            DL_CUR_ONDISK = true;
+        }
+        r
+    }
+
+    /// Seed the on-disk dynamic-linker test fixture: write the embedded `.so` to
+    /// `/data/dltest.so` so the on-disk dlopen path has a real file to load.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_ondisk_seed() {
+        // Only seed when an on-disk REQUEST MARKER is present (a "DLSEED" magic at
+        // a scratch sector), so ordinary boots never write to the VFS -- a write
+        // here would persist on the shared go-lane disk and perturb VFS node-count
+        // assertions. The on-disk dlopen test writes the marker; nothing else does.
+        const DLSEED_LBA: u64 = 17; // free scratch sector (12..63 gap)
+        if !storage::r4_storage_available() || !block_io_dispatch(false, DLSEED_LBA, 512, false) {
+            return;
+        }
+        if &BLK_DATA_PAGE.0[..6] != b"DLSEED" {
+            return;
+        }
+        // VFS root is mounted at /data, so the file is "dltest.so" at the root.
+        if let Some(idx) = vfs::vfs_open(b"/dltest.so", true) {
+            let _ = vfs::vfs_write(idx, 0, DL_SO);
+        }
+    }
 
     /// Convert a `.so` virtual address to a byte offset in the file image by
     /// walking the PT_LOAD program headers.
@@ -5699,12 +5778,11 @@ cfg_r4! {
         None
     }
 
-    /// dlopen: map the embedded ELF `.so` into the user address space and apply
-    /// its relative relocations. Returns the load base, or ERR.
+    /// dlopen: map an ELF `.so` (the embedded blob or one read off disk) into the
+    /// user address space and apply its relocations. Returns the load base, or ERR.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn dl_load_elf() -> u64 {
+    unsafe fn dl_load_elf(so: &[u8]) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let so = DL_SO;
         let base = DLOPEN_BASE;
         if so.len() < 64 || so[0] != 0x7F || &so[1..4] != b"ELF" || so[4] != 2 {
             return ERR; // not a 64-bit ELF
@@ -5842,9 +5920,8 @@ cfg_r4! {
     /// dlsym: resolve `target` from the embedded `.so` .dynsym/.dynstr; returns
     /// its loaded VA (base + st_value), or ERR.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn dl_resolve(target: &[u8]) -> u64 {
+    unsafe fn dl_resolve(so: &[u8], target: &[u8]) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let so = DL_SO;
         let symtab = match dl_dyn(so, 6).and_then(|v| dl_vaddr_to_off(so, v)) {
             Some(o) => o,
             None => return ERR,
@@ -5897,18 +5974,28 @@ cfg_r4! {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         match op {
             1 => {
-                // dlopen: the kernel ships one embedded .so, named "libdl".
-                let mut name = [0u8; 8];
-                if copyin_user(&mut name, a2, 8).is_err() {
+                // dlopen: "libdl" loads the kernel-embedded .so; a "/data/<x>.so"
+                // path loads a shared object off the filesystem.
+                let mut name = [0u8; 32];
+                if copyin_user(&mut name, a2, 32).is_err() {
                     return ERR;
                 }
-                if &name[..6] != b"libdl\0" {
-                    return ERR;
+                let mut len = 0usize;
+                while len < 32 && name[len] != 0 {
+                    len += 1;
                 }
-                dl_load_elf()
+                let nm = &name[..len];
+                if nm == b"libdl" {
+                    DL_CUR_ONDISK = false;
+                    dl_load_elf(DL_SO)
+                } else if len > 6 && &nm[..6] == b"/data/" {
+                    dl_load_from_vfs(nm)
+                } else {
+                    ERR
+                }
             }
             2 => {
-                // dlsym: resolve a name from the loaded object's .dynsym.
+                // dlsym: resolve a name from the currently-loaded object's .dynsym.
                 let mut nm = [0u8; 16];
                 if copyin_user(&mut nm, a2, 16).is_err() {
                     return ERR;
@@ -5920,7 +6007,7 @@ cfg_r4! {
                 if len == 0 {
                     return ERR;
                 }
-                dl_resolve(&nm[..len])
+                dl_resolve(dl_current(), &nm[..len])
             }
             _ => ERR,
         }
@@ -11300,6 +11387,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
+        dl_ondisk_seed(); // full-os Part V.11: seed /data/dltest.so for on-disk dlopen
         let _ = kbd::input_event_selftest(); // full-os Part III: input event queue
         match fb::fb_alpha_selftest() {
             // full-os Part III: framebuffer alpha blending (src-over).

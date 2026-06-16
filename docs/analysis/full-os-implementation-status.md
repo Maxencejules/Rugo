@@ -193,10 +193,14 @@ single safe boot-verified slice and several have hard prerequisites.
    binaries past 2 pages, proved via `page3probe`) is **routed around**: the
    shared object is authored in assembly (`apps/dl/libdl.asm`) and linked as a
    real PIC ELF `.so` via `nasm -f elf64` + `rust-lld -shared` (`make dl-module`),
-   so the linker is exercised on a genuine `.so` without the C path. What remains:
-   **lazy** PLT binding (a runtime resolver stub; v1 eager-binds JUMP_SLOT),
-   `DT_NEEDED` dependency chains, multiple loaded objects + `dlclose`, on-disk
-   `.so` loading, and an allocator-chosen load base (v1 uses one fixed slot).
+   so the linker is exercised on a genuine `.so` without the C path. **On-disk
+   `.so` loading DONE** (`dl_load_from_vfs`): dlopen accepts a `/data/<name>.so`
+   path, reads it off the VFS into a kernel buffer, and links it; a boot fixture
+   seeds `/data/dltest.so` and `ondlprobe` dlopens it by path (`ONDISKDL: ok`,
+   `test_dlopen_ondisk_v1`). What remains: **lazy** PLT binding (a runtime
+   resolver stub; v1 eager-binds JUMP_SLOT), `DT_NEEDED` dependency chains,
+   multiple loaded objects + `dlclose`, and an allocator-chosen load base (v1 uses
+   one fixed slot).
 5. **V.11 installer + UEFI + package fetch + self-hosting — disk provisioning +
    UEFI boot + package fetch done.**
    The installer finds a target disk, writes a real **MBR partition table** (a
