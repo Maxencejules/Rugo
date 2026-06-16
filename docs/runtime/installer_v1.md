@@ -23,14 +23,25 @@ At boot (go lane, after storage + net are up), `installer_selftest`:
   `RUGOINST` magic (idempotent re-install) — otherwise it reports
   `INSTALL: target not blank, refusing` and writes nothing. This self-test runs
   on every boot, so it must never destroy an unrelated data disk;
-- writes a **boot record** to sector 0 — a `RUGOINST` magic, an image version
-  byte, and the `0x55AA` MBR boot signature — then reads sector 0 back into a
-  cleared buffer and verifies a byte-exact round-trip;
+- writes an **MBR** to sector 0 — a `RUGOINST` magic, an image version byte, a
+  real **primary partition-table entry** (bootable flag `0x80`, type `0x83`, LBA
+  start 64, 8 sectors — the same 16-byte layout the kernel's own MBR parser at
+  `sys_sysinfo` op 5 reads), and the `0x55AA` boot signature — then reads sector 0
+  back into a cleared buffer and verifies the magic, signature, **and** the
+  partition entry (type/LBA/sector-count) round-tripped exactly;
+- writes the **partition image**: an 8-sector payload into the partition (LBA
+  64..71) whose first sector is its own boot record (`RUGOPART` magic + `0x55AA`)
+  and whose every sector carries a deterministic fill pattern, then reads all 8
+  sectors back and verifies the magic + fill (a missing, duplicated, or
+  mis-ordered sector is detected);
 - **resets the target** (so it releases the shared single virtqueue) and
   **restores the boot disk** (`virtio_blk_init` on the boot disk's I/O base),
   halting loudly (`INSTALL: boot restore FAIL`) if that restore ever fails rather
   than feeding the shell a half-initialized disk0;
-- reports `INSTALL: image written+verified ok` (or `INSTALL: verify FAIL`).
+- reports `INSTALL: image written+verified ok`, then
+  `INSTALL: partition type=0x…83 lba=0x…40 sectors=0x…08` and
+  `INSTALL: bootable install ok` (or `INSTALL: payload FAIL` / `INSTALL: verify
+  FAIL`).
 
 Because the write path is only taken when a second, blank disk is present, the
 installer cannot disturb the boot disk, any single-disk lane, or an attached data
@@ -38,20 +49,27 @@ disk.
 
 ## v1 boundary / carry-forward
 
-- **Provisioning + write/read verification only.** v1 writes one boot-record
-  block and proves the cross-disk write/read path. A full bootable install — a
-  partition table sized to the target, copying the kernel + a SimpleFS/app-region
-  image onto a target partition, and installing the bootloader so the target
-  boots standalone — is carry-forward, as is UEFI (a second Limine boot path),
-  package fetch over the TCP client, and self-hosting.
+- **Partitioned install + write/read verification.** v1 lays down a real MBR
+  partition table and a multi-sector partition image on the target and verifies
+  the whole round-trip (incl. the partition entry the kernel parser reads back).
+  What remains for a target that boots *standalone*: copying the actual kernel +
+  a full SimpleFS/app-region filesystem image into the partition (vs the
+  fixed-pattern verification payload), and installing the bootloader stages
+  (Limine BIOS/UEFI) onto the target — which needs the host image-build tooling
+  (xorriso/mtools) on the target disk. UEFI boot of the *primary* image already
+  works (`uefi_boot_v1.md`); package fetch over TCP already works
+  (`pkgfetch_v1.md`); self-hosting remains.
 - The block layer is single-device, so the installer time-shares it (switch to
   target, provision, switch back). A persistent second-disk handle is future work.
 
 ## Acceptance
 
 `make test-installer-v1`: the go lane boots with a blank second virtio-blk disk;
-the transcript shows `INSTALL: image written+verified ok` (never
-`INSTALL: no target` / `INSTALL: verify FAIL`), the lane still reaches
-`GOINIT: result shutdown-clean` and `RUGO: halt ok` (the boot disk was restored),
-and host-side the target disk file's sector 0 holds `RUGOINST`, version `0x01`,
-and the `0x55AA` signature — proving the write reached the disk.
+the transcript shows `INSTALL: image written+verified ok`, the partition line,
+and `INSTALL: bootable install ok` (never `INSTALL: no target` / `INSTALL: verify
+FAIL` / `INSTALL: payload FAIL`), the lane still reaches `GOINIT: result
+shutdown-clean` and `RUGO: halt ok` (the boot disk was restored), and host-side
+the target disk file holds, at sector 0, `RUGOINST` + version `0x01` + a bootable
+`0x83` partition entry (LBA 64, 8 sectors) + the `0x55AA` signature, and at LBA 64
+the `RUGOPART` partition boot record + the fill pattern across all 8 sectors —
+proving the partitioned install reached the disk.

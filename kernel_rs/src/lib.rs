@@ -8963,7 +8963,8 @@ unsafe fn installer_selftest() {
     // data disk: only provision a target whose sector 0 is blank (a fresh disk)
     // or already carries our magic (idempotent re-install).
     let provisionable = install_target_provisionable();
-    let ok = provisionable && install_write_and_verify();
+    let mbr_ok = provisionable && install_write_and_verify();
+    let payload_ok = mbr_ok && install_payload_and_verify();
     // Reset the target so it releases the shared virtqueue (only one device may
     // be bound to VQ_MEM at a time), then restore the boot disk.
     outb(tgt_iobase + VIRTIO_DEVICE_STATUS, 0);
@@ -8979,8 +8980,18 @@ unsafe fn installer_selftest() {
     }
     if !provisionable {
         serial_write(b"INSTALL: target not blank, refusing\n");
-    } else if ok {
+    } else if payload_ok {
         serial_write(b"INSTALL: image written+verified ok\n");
+        serial_write(b"INSTALL: partition type=0x");
+        serial_write_hex(INSTALL_PART_TYPE as u64);
+        serial_write(b" lba=0x");
+        serial_write_hex(INSTALL_PART_LBA as u64);
+        serial_write(b" sectors=0x");
+        serial_write_hex(INSTALL_PART_SECTORS as u64);
+        serial_write(b"\n");
+        serial_write(b"INSTALL: bootable install ok\n");
+    } else if mbr_ok {
+        serial_write(b"INSTALL: payload FAIL\n");
     } else {
         serial_write(b"INSTALL: verify FAIL\n");
     }
@@ -9024,8 +9035,19 @@ unsafe fn install_target_provisionable() -> bool {
     true // already our image -> idempotent re-provision
 }
 
-/// Write a boot-record image to sector 0 of the active (target) block device and
-/// read it back to confirm a byte-exact round-trip.
+/// Install-target geometry: a single bootable primary partition starting at LBA
+/// `INSTALL_PART_LBA`, `INSTALL_PART_SECTORS` long, holding the installed image.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const INSTALL_PART_LBA: u32 = 64;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const INSTALL_PART_SECTORS: u32 = 8;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const INSTALL_PART_TYPE: u8 = 0x83; // Linux-type primary partition
+
+/// Write the MBR (boot-record magic + a real primary partition-table entry) to
+/// sector 0 of the active (target) device and read it back to confirm a
+/// byte-exact round-trip — including the partition entry the kernel's own MBR
+/// parser (sys_sysinfo op 5) reads.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn install_write_and_verify() -> bool {
     const MAGIC: &[u8; 8] = b"RUGOINST";
@@ -9033,6 +9055,18 @@ unsafe fn install_write_and_verify() -> bool {
     core::ptr::write_bytes(dp, 0, 512);
     core::ptr::copy_nonoverlapping(MAGIC.as_ptr(), dp, 8);
     *dp.add(8) = 0x01; // image version
+    // Primary partition entry 0 at MBR offset 446 (16 bytes): a BOOTABLE
+    // partition the kernel parser can read (boot flag@+0, type@+4, LBA@+8,
+    // sector count@+12). CHS fields are left zero — the parser uses LBA.
+    let e = 446usize;
+    *dp.add(e) = 0x80; // bootable flag
+    *dp.add(e + 4) = INSTALL_PART_TYPE;
+    core::ptr::copy_nonoverlapping(INSTALL_PART_LBA.to_le_bytes().as_ptr(), dp.add(e + 8), 4);
+    core::ptr::copy_nonoverlapping(
+        INSTALL_PART_SECTORS.to_le_bytes().as_ptr(),
+        dp.add(e + 12),
+        4,
+    );
     *dp.add(510) = 0x55; // MBR boot signature
     *dp.add(511) = 0xAA;
     if !virtio_blk_io(true, 0, 512) {
@@ -9051,7 +9085,85 @@ unsafe fn install_write_and_verify() -> bool {
         }
         i += 1;
     }
-    *dp.add(8) == 0x01 && *dp.add(510) == 0x55 && *dp.add(511) == 0xAA
+    if *dp.add(8) != 0x01 || *dp.add(510) != 0x55 || *dp.add(511) != 0xAA {
+        return false;
+    }
+    // Verify the partition entry round-tripped exactly.
+    if *dp.add(e) != 0x80 || *dp.add(e + 4) != INSTALL_PART_TYPE {
+        return false;
+    }
+    let rb_lba = u32::from_le_bytes([*dp.add(e + 8), *dp.add(e + 9), *dp.add(e + 10), *dp.add(e + 11)]);
+    let rb_secs =
+        u32::from_le_bytes([*dp.add(e + 12), *dp.add(e + 13), *dp.add(e + 14), *dp.add(e + 15)]);
+    rb_lba == INSTALL_PART_LBA && rb_secs == INSTALL_PART_SECTORS
+}
+
+/// Deterministic per-sector fill byte for the installed payload, so a missing,
+/// duplicated, or mis-ordered sector is detectable on read-back.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+fn install_fill(sector: u64, off: usize) -> u8 {
+    ((sector as u8).wrapping_mul(31)).wrapping_add(off as u8).wrapping_add(0x5A)
+}
+
+/// Write a multi-sector image into the partition (LBA `INSTALL_PART_LBA`..) and
+/// read every sector back to confirm the install landed: the partition's first
+/// sector is its own boot record (`RUGOPART` magic + 0x55AA), and all sectors
+/// carry a deterministic fill pattern.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn install_payload_and_verify() -> bool {
+    const PMAGIC: &[u8; 8] = b"RUGOPART";
+    let dp = BLK_DATA_PAGE.0.as_mut_ptr();
+    let part_lba = INSTALL_PART_LBA as u64;
+    let mut s = 0u64;
+    while s < INSTALL_PART_SECTORS as u64 {
+        core::ptr::write_bytes(dp, 0, 512);
+        let mut i = 16usize;
+        while i < 504 {
+            *dp.add(i) = install_fill(s, i);
+            i += 1;
+        }
+        if s == 0 {
+            core::ptr::copy_nonoverlapping(PMAGIC.as_ptr(), dp, 8);
+            *dp.add(8) = 0x01; // payload image version
+            *dp.add(510) = 0x55;
+            *dp.add(511) = 0xAA;
+        }
+        if !virtio_blk_io(true, part_lba + s, 512) {
+            return false;
+        }
+        s += 1;
+    }
+    // Read every sector back and verify magic + fill (cleared buffer each time so
+    // a stale page cannot pass).
+    s = 0;
+    while s < INSTALL_PART_SECTORS as u64 {
+        core::ptr::write_bytes(dp, 0, 512);
+        if !virtio_blk_io(false, part_lba + s, 512) {
+            return false;
+        }
+        if s == 0 {
+            let mut i = 0usize;
+            while i < 8 {
+                if *dp.add(i) != PMAGIC[i] {
+                    return false;
+                }
+                i += 1;
+            }
+            if *dp.add(510) != 0x55 || *dp.add(511) != 0xAA {
+                return false;
+            }
+        }
+        let mut i = 16usize;
+        while i < 504 {
+            if *dp.add(i) != install_fill(s, i) {
+                return false;
+            }
+            i += 1;
+        }
+        s += 1;
+    }
+    true
 }
 
 // --------------- M5: VirtIO block init ---------------------------------------

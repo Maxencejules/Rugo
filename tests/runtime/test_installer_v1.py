@@ -93,11 +93,12 @@ def _boot_with_target(timeout=40, target_seed=None):
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
-    # Read the target disk's sector 0 back on the host before cleanup.
+    # Read the target disk's MBR + the installed partition payload (LBA 64..71)
+    # back on the host before cleanup (72 sectors covers both).
     target_head = b""
     try:
         with open(target_disk, "rb") as f:
-            target_head = f.read(512)
+            target_head = f.read(72 * 512)
     except OSError:
         pass
     for path in (boot_disk, target_disk):
@@ -111,19 +112,49 @@ def _boot_with_target(timeout=40, target_seed=None):
     return transcript, target_head
 
 
+def _install_fill(sector, off):
+    # Mirror kernel install_fill(): ((sector*31) + off + 0x5A) & 0xFF.
+    return ((sector * 31) + off + 0x5A) & 0xFF
+
+
 def test_installer_provisions_target_disk(find_in_order):
     out, target_head = _boot_with_target()
     find_in_order(out, [
         "INSTALL: image written+verified ok",
+        # The MBR carries a real bootable primary partition...
+        "INSTALL: partition type=0x0000000000000083 lba=0x0000000000000040 "
+        "sectors=0x0000000000000008",
+        # ...and the multi-sector payload wrote+verified into it.
+        "INSTALL: bootable install ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "INSTALL: verify FAIL" not in out
+    assert "INSTALL: payload FAIL" not in out
     assert "INSTALL: no target" not in out
-    # Host-side: the image really landed on the target disk.
+    # Host-side: the boot record really landed on the target disk.
     assert target_head[0:8] == b"RUGOINST", f"magic missing: {target_head[0:16]!r}"
     assert target_head[8] == 0x01
     assert target_head[510] == 0x55 and target_head[511] == 0xAA
+    # Host-side: a real MBR partition entry (offset 446): bootable 0x80, type
+    # 0x83, LBA start 64, 8 sectors.
+    e = 446
+    assert target_head[e] == 0x80, f"part not bootable: {target_head[e]:#x}"
+    assert target_head[e + 4] == 0x83, f"part type: {target_head[e + 4]:#x}"
+    assert int.from_bytes(target_head[e + 8:e + 12], "little") == 64
+    assert int.from_bytes(target_head[e + 12:e + 16], "little") == 8
+    # Host-side: the installed partition payload (LBA 64..71). Sector 0 of the
+    # partition is its own boot record; every sector carries the fill pattern.
+    p0 = 64 * 512
+    assert target_head[p0:p0 + 8] == b"RUGOPART", f"payload magic: {target_head[p0:p0 + 8]!r}"
+    assert target_head[p0 + 510] == 0x55 and target_head[p0 + 511] == 0xAA
+    for s in range(8):
+        base = (64 + s) * 512
+        for off in (16, 100, 503):
+            assert target_head[base + off] == _install_fill(s, off), (
+                f"payload sector {s} off {off}: {target_head[base + off]:#x} "
+                f"!= {_install_fill(s, off):#x}"
+            )
 
 
 def test_installer_refuses_nonblank_target():
