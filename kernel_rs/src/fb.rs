@@ -110,6 +110,73 @@ pub fn fb_blit_rect(x: u64, y: u64, w: u64, h: u64, color: u32) -> bool {
     }
 }
 
+/// Fill a rectangle with an ARGB color **alpha-blended** (src-over) onto the
+/// existing pixels (full-os guide Part III graphics): `out = src*a + dst*(255-a)`
+/// per channel, where `a` is the top byte of `argb`. Unlike `fb_blit_rect` (which
+/// overwrites), this lets translucent surfaces show what is behind them. Clamped
+/// to screen bounds; returns false if no framebuffer or the origin is off-screen.
+pub fn fb_blit_rect_blend(x: u64, y: u64, w: u64, h: u64, argb: u32) -> bool {
+    unsafe {
+        if !FB.ready || x >= FB.width || y >= FB.height {
+            return false;
+        }
+        let a = (argb >> 24) & 0xFF;
+        let inv = 255 - a;
+        let sr = (argb >> 16) & 0xFF;
+        let sg = (argb >> 8) & 0xFF;
+        let sb = argb & 0xFF;
+        let x_end = core::cmp::min(x + w, FB.width);
+        let y_end = core::cmp::min(y + h, FB.height);
+        let mut yy = y;
+        while yy < y_end {
+            let line = (FB.addr + yy * FB.pitch) as *mut u32;
+            let mut xx = x;
+            while xx < x_end {
+                let dst = *line.add(xx as usize);
+                let dr = (dst >> 16) & 0xFF;
+                let dg = (dst >> 8) & 0xFF;
+                let db = dst & 0xFF;
+                let or = (sr * a + dr * inv) / 255;
+                let og = (sg * a + dg * inv) / 255;
+                let ob = (sb * a + db * inv) / 255;
+                *line.add(xx as usize) = (or << 16) | (og << 8) | ob;
+                xx += 1;
+            }
+            yy += 1;
+        }
+        true
+    }
+}
+
+/// Self-test the alpha blend on a single saved+restored pixel (so the on-screen
+/// console is left untouched): paint an opaque blue background, blend 50%-alpha
+/// red over it, read the result back, and confirm it equals the src-over mix.
+/// Returns 1 = ok, 0 = mismatch, 2 = no framebuffer.
+pub fn fb_alpha_selftest() -> u64 {
+    unsafe {
+        if !FB.ready {
+            return 2;
+        }
+        let p = ((FB.addr + 10 * FB.pitch) as *mut u32).add(10);
+        let saved = *p;
+        let _ = fb_blit_rect(10, 10, 1, 1, 0x0000_00FF); // opaque blue
+        let _ = fb_blit_rect_blend(10, 10, 1, 1, 0x80FF_0000); // 50% red (a=128)
+        let got = *p & 0x00FF_FFFF;
+        *p = saved; // restore the pixel
+        let a = 128u32;
+        let inv = 255 - a;
+        let er = (255 * a) / 255; // red: src 255 over dst 0
+        let eg = 0u32; // green: both 0
+        let eb = (255 * inv) / 255; // blue: src 0 over dst 255
+        let expect = (er << 16) | (eg << 8) | eb;
+        if got == expect {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 /// Adopt the Limine framebuffer if one was provided (32 bpp only).
 pub fn fb_init() {
     unsafe {

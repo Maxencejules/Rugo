@@ -169,10 +169,13 @@ single safe boot-verified slice and several have hard prerequisites.
    DONE** (`mouse_v1.md`): the IRQ12 mouse path enqueues decoded events into a
    kernel ring that userspace drains via `sys_ioctl` op 5 (`input_poll`); a boot
    self-test round-trips the 16-byte kind/data/x/y wire encoding (`INPUT: event
-   queue ok`). What remains: HDA CORB/RIRB rings + codec enumeration + **PCM
-   playback** (on the DMA pool); a keyboard-event producer + end-to-end
-   QMP-injected poll; per-client **shared-memory pixel surfaces**, damage regions,
-   alpha; and a standing compositor **process**.
+   queue ok`). **Framebuffer alpha blending DONE** (`graphics_v1.md`,
+   `fb_blit_rect_blend`): src-over compositing (`out = src*a + dst*(255-a)`),
+   self-tested on a saved+restored pixel (`FBALPHA: blend ok`). What remains: HDA
+   CORB/RIRB rings + codec enumeration + **PCM playback** (on the DMA pool); a
+   keyboard-event producer + end-to-end QMP-injected poll; per-client
+   **shared-memory pixel surfaces** + damage regions; and a standing compositor
+   **process**.
 4. **V.11 dynamic loading — real ELF `.so` dynamic linker done.**
    `sys_dlctl` (id 60) is a genuine ELF64 dynamic linker (`dynlink_v1.md`):
    `dlopen` parses the embedded `.so`'s program headers, maps each `PT_LOAD`

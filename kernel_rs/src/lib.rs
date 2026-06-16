@@ -11301,6 +11301,12 @@ pub extern "C" fn kmain() -> ! {
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         let _ = kbd::input_event_selftest(); // full-os Part III: input event queue
+        match fb::fb_alpha_selftest() {
+            // full-os Part III: framebuffer alpha blending (src-over).
+            1 => serial_write(b"FBALPHA: blend ok\n"),
+            2 => serial_write(b"FBALPHA: blend skip (no fb)\n"),
+            _ => serial_write(b"FBALPHA: blend FAIL\n"),
+        }
         let _ = rng_hwseed_selftest(); // full-os Part IV.10: RDRAND-seeded CSPRNG
         // full-os Part I.3: online CPU count via the real sys_sysinfo op-13 path.
         serial_write(b"CPUS: count=0x");
