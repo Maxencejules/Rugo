@@ -177,6 +177,39 @@ pub fn fb_alpha_selftest() -> u64 {
     }
 }
 
+/// Blit a client-provided `w`x`h` ARGB pixel buffer (`src`, row-major, 4 bytes
+/// per pixel, little-endian, top byte ignored) to the framebuffer at (x,y),
+/// clamped to screen bounds (full-os guide Part III, per-client pixel surfaces).
+/// Unlike `fb_blit_rect` (one solid color) this paints REAL per-pixel bitmaps --
+/// the basis for a compositor rendering app surfaces. Returns false if no
+/// framebuffer, the origin is off-screen, or `src` is too small for `w*h`.
+pub fn fb_blit_pixels(x: u64, y: u64, w: u64, h: u64, src: &[u8]) -> bool {
+    unsafe {
+        if !FB.ready || x >= FB.width || y >= FB.height {
+            return false;
+        }
+        if src.len() < (w * h * 4) as usize {
+            return false;
+        }
+        let x_end = core::cmp::min(x + w, FB.width);
+        let y_end = core::cmp::min(y + h, FB.height);
+        let mut yy = y;
+        while yy < y_end {
+            let line = (FB.addr + yy * FB.pitch) as *mut u32;
+            let srow = ((yy - y) * w) as usize;
+            let mut xx = x;
+            while xx < x_end {
+                let si = (srow + (xx - x) as usize) * 4;
+                let px = u32::from_le_bytes([src[si], src[si + 1], src[si + 2], src[si + 3]]);
+                *line.add(xx as usize) = px & 0x00FF_FFFF;
+                xx += 1;
+            }
+            yy += 1;
+        }
+        true
+    }
+}
+
 /// Adopt the Limine framebuffer if one was provided (32 bpp only).
 pub fn fb_init() {
     unsafe {

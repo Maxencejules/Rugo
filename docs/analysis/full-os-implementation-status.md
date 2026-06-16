@@ -174,9 +174,12 @@ single safe boot-verified slice and several have hard prerequisites.
    `fb_blit_rect_blend`): src-over compositing (`out = src*a + dst*(255-a)`),
    self-tested on a saved+restored pixel (`FBALPHA: blend ok`). What remains: HDA
    CORB/RIRB rings + codec enumeration + **PCM playback** (on the DMA pool); a
-   keyboard-event producer + end-to-end QMP-injected poll; per-client
-   **shared-memory pixel surfaces** + damage regions; and a standing compositor
-   **process**.
+   keyboard-event producer + end-to-end QMP-injected poll. **Per-client pixel
+   surfaces DONE** (`graphics_v1.md`, `sys_ioctl` op 6 + `fb_blit_pixels`): a real
+   per-pixel client bitmap composites to the framebuffer (vs op 4's solid rects),
+   screendump-verified two-color (`surfprobe`/`test_surface_v1`). What remains:
+   larger/shared-memory-backed surfaces, damage regions, and a standing
+   compositor **process**.
 4. **V.11 dynamic loading — real ELF `.so` dynamic linker done.**
    `sys_dlctl` (id 60) is a genuine ELF64 dynamic linker (`dynlink_v1.md`):
    `dlopen` parses the embedded `.so`'s program headers, maps each `PT_LOAD`
@@ -254,7 +257,7 @@ single safe boot-verified slice and several have hard prerequisites.
   13 routing, 14 IPv6-NUD, 15 IPv6-SLAAC, 16 TCP-fast-retransmit, 17 IPv6-UDP-echo,
   18 IPv6-TCP-listen, 19 TCP-send-window (4–19 are self-tests).
 - `sys_ioctl` (56): 1 fb-blit, 2 openpty, 3 beep, 4 compositor-compose,
-  5 input-poll.
+  5 input-poll, 6 surface-compose.
 - `sys_dlctl` (60): 1 dlopen, 2 dlsym.
 - `sys_sysinfo` (61): 1 tasks, 2 free-frames, 3 uptime, 4 dmesg, 5 MBR,
   6 FAT-read, 7 audit, 8 FAT-list, 9 disk-crypt, 10 journal, 11 FAT-write,

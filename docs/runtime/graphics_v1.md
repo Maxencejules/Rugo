@@ -2,9 +2,11 @@
 
 Status: boot-verified via `make test-graphics-v1` + `make test-fb-alpha-v1`
 Source: `kernel_rs/src/fb.rs` (`fb_blit_rect`, `fb_blit_rect_blend`,
-`fb_alpha_selftest`), `kernel_rs/src/lib.rs` (`sys_ioctl` op 1),
-`apps/coreutils/gfxprobe.asm`.
-Proof: `tests/runtime/test_graphics_v1.py`, `tests/runtime/test_fb_alpha_v1.py`.
+`fb_blit_pixels`, `fb_alpha_selftest`), `kernel_rs/src/lib.rs` (`sys_ioctl`
+op 1 fill, op 6 surface-compose), `apps/coreutils/gfxprobe.asm`,
+`apps/coreutils/surfprobe.asm`.
+Proof: `tests/runtime/test_graphics_v1.py`, `tests/runtime/test_fb_alpha_v1.py`,
+`tests/runtime/test_surface_v1.py`.
 
 Full-OS implementation guide Part III (input/graphics/audio), the graphics
 slice — direct framebuffer rectangle fill. First pixel-level drawing beyond
@@ -37,6 +39,18 @@ surface the text console renders into), one `u32` per pixel across
   (`mouse_v1.md`, `sys_ioctl` op 5) already exist.
 - Shares the console's single framebuffer (no per-window surfaces — the
   shared `USER_PML4` constraint the guide notes).
+
+## Per-client pixel surfaces (`sys_ioctl` op 6)
+
+Beyond op 4's solid-color rectangles, `surface_compose` (op 6) composites a
+**real per-pixel client bitmap**: the caller passes a pointer to a `w`x`h` ARGB
+buffer (`a2`) and the geometry (`a3` = `x<<48|y<<32|w<<16|h`); the kernel
+`copyin`s it (bounded to 32x32 / 4 KiB in v1) and `fb_blit_pixels` paints it to
+the framebuffer. `surfprobe` blits a 32x32 surface — top half green, bottom half
+blue — and a QMP screendump confirms **both** colors in the region, a two-color
+bitmap a solid-color rect could never produce (`make test-surface-v1`). This is
+the per-client surface a compositor renders app windows from. Larger surfaces
+(tiled or via shared memory) and damage tracking are carry-forward.
 
 ## Alpha blending (`fb_blit_rect_blend`)
 

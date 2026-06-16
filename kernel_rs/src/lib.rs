@@ -5663,6 +5663,31 @@ cfg_r4! {
                 }
                 n as u64
             }
+            // op 6 = surface_compose (full-os guide Part III): composite a client
+            // pixel bitmap (a real per-pixel surface, vs op 4's solid-color rects)
+            // to the framebuffer. a2 = pointer to w*h ARGB pixels; a3 = geom
+            // x<<48|y<<32|w<<16|h. Returns the pixel count blitted.
+            6 => {
+                const SURFACE_MAX_PX: u64 = 1024; // 32x32; bounds the copyin buffer
+                let geom = a3;
+                let x = (geom >> 48) & 0xFFFF;
+                let y = (geom >> 32) & 0xFFFF;
+                let w = (geom >> 16) & 0xFFFF;
+                let hh = geom & 0xFFFF;
+                if w == 0 || hh == 0 || w * hh > SURFACE_MAX_PX {
+                    return ERR;
+                }
+                let n = (w * hh * 4) as usize;
+                let mut buf = [0u8; SURFACE_MAX_PX as usize * 4];
+                if copyin_user(&mut buf[..n], a2, n).is_err() {
+                    return ERR;
+                }
+                if fb::fb_blit_pixels(x, y, w, hh, &buf[..n]) {
+                    w * hh
+                } else {
+                    ERR
+                }
+            }
             _ => ERR,
         }
     }
