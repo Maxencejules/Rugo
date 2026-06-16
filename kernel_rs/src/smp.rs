@@ -887,7 +887,75 @@ pub fn smp_init() {
                 } else {
                     serial_write(b"FAIL\n");
                 }
+                // Migrate a REAL R4 task (a scheduler task struct) to an AP.
+                let _ = ap_r4_migrate_selftest();
             }
         }
     }
+}
+
+/// SMP scheduler (full-os guide Part I.3): migrate a REAL R4 task to an
+/// application processor. Unlike the capstone (which runs a free-floating ring-3
+/// payload), this sets up an actual R4_TASKS scheduler entry via r4_init_task —
+/// with its own address space (pml4_phys) and ring-3 entry context (saved_frame)
+/// — and runs THAT task's context on the AP, tracking its real tid as the AP's
+/// per-CPU `current` and servicing its syscalls on the AP's own core.
+///
+/// The task uses a reserved slot (R4_MAX_TASKS-1), created in state Running and
+/// beyond R4_NUM_TASKS, so the BSP's scheduler (r4_find_ready takes only Ready
+/// tasks within R4_NUM_TASKS) never races it. r4_tasks_init() has already grown
+/// the task table (it runs before smp_init), so the slot is valid here.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ap_r4_migrate_selftest() -> bool {
+    const CODE_VA: u64 = 0x0140_0000; // exec-app window (NX cleared by the loader)
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    const ARG: u64 = 33;
+    let mig_tid: usize = crate::R4_MAX_TASKS - 1;
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let ucr3 = match crate::mm::address_space_create(kcr3) {
+        Some(p) => p,
+        None => return false,
+    };
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_USER_CODE)
+        || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+    {
+        crate::mm::address_space_release(ucr3);
+        return false;
+    }
+    // Register a real R4 task for it. State Running keeps the BSP scheduler off it.
+    crate::r4_init_task(mig_tid, CODE_VA, STACK_TOP, 0);
+    crate::R4_TASKS[mig_tid].pml4_phys = ucr3;
+    crate::R4_TASKS[mig_tid].state = crate::R4State::Running;
+    // Migrate its CR3 + ring-3 entry context (RIP/RSP from saved_frame) to the AP,
+    // and publish its real tid as the per-CPU `current` the AP records.
+    AP_USER_CR3.store(crate::R4_TASKS[mig_tid].pml4_phys, Ordering::Release);
+    AP_USER_ENTRY.store(crate::R4_TASKS[mig_tid].saved_frame[17], Ordering::Release);
+    AP_USER_SP.store(crate::R4_TASKS[mig_tid].saved_frame[20], Ordering::Release);
+    AP_USER_TASKID.store(mig_tid as u64, Ordering::Release);
+    AP_USER_CURRENT.store(0, Ordering::Release);
+    AP_USER_SYSRET.store(0, Ordering::Release);
+    let result = smp_dispatch_work(2, ARG);
+    let cpu = AP_USER_CPU.load(Ordering::Acquire);
+    let cur = AP_USER_CURRENT.load(Ordering::Acquire);
+    let sysret = AP_USER_SYSRET.load(Ordering::Acquire);
+    crate::R4_TASKS[mig_tid].state = crate::R4State::Dead; // retire the migrated task
+    if result.is_some() {
+        crate::mm::address_space_release(ucr3);
+    }
+    let ok = matches!(result, Some(v) if v == ARG * 2 + 1)
+        && cpu >= 1
+        && cur == mig_tid as u64
+        && sysret == 1;
+    serial_write(b"SMP: ap r4 migrate tid=0x");
+    serial_write_hex(mig_tid as u64);
+    serial_write(b" cur=0x");
+    serial_write_hex(cur);
+    if ok {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+    ok
 }

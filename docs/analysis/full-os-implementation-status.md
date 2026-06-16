@@ -109,13 +109,18 @@ single safe boot-verified slice and several have hard prerequisites.
    task issues **two real `int 0x80` syscalls** (`sys_time_now`) serviced on the
    AP's own per-CPU TSS `rsp0`, with a consecutive-tick delta of exactly 1
    (`SMP: ap-syscall delta=0x…1`) — the full ring-3→ring-0→ring-3 syscall path on a
-   second CPU. **Remaining (turning the mechanism into a running multi-CPU
-   scheduler):** wire `tlb_shootdown` into the `munmap`/`mprotect`/CoW paths;
-   migrate **live, scheduled** R4 tasks onto the per-CPU queues with load
-   balancing; and make `R4_CURRENT`/`R4_TASKS` + every `R4_CURRENT`-touching
-   syscall (yield/exit/fork/futex/…) SMP-safe (per-CPU `current` under a locked
-   task table) so ordinary user tasks run the full syscall surface across all
-   CPUs, not just a `R4_CURRENT`-free payload in the boot self-test.
+   second CPU. **A REAL R4 task migrated to an AP DONE**
+   (`ap_r4_migrate_selftest`): an actual `R4_TASKS` scheduler entry, set up via
+   `r4_init_task` with its own `pml4_phys` + ring-3 `saved_frame`, has its CR3 +
+   entry context run on the AP, with its real tid tracked as the AP's per-CPU
+   `current` and its syscalls serviced there — `SMP: ap r4 migrate tid=0x1F
+   cur=0x1F ok` (a reserved slot in state `Running`, beyond `R4_NUM_TASKS`, so the
+   BSP scheduler never races it). **Remaining (the full multi-CPU scheduler):**
+   wire `tlb_shootdown` into the `munmap`/`mprotect`/CoW paths; migrate
+   **scheduler-active** tasks with load balancing across the per-CPU run queues;
+   and make `R4_CURRENT`/`R4_TASKS` + every `R4_CURRENT`-touching syscall
+   (yield/exit/fork/futex/…) SMP-safe (per-CPU `current` under a locked task
+   table) so ordinary live tasks run the full syscall surface across all CPUs.
 2. **II.7 USB / XHCI + HID, DMA pool, e1000 — detection + DMA pool done.** The OS
    discovers a USB xHCI host controller (`-device qemu-xhci`, `xhci_v1.md`) and an
    Intel **e1000 NIC** (`-device e1000`, `e1000_v1.md`: maps BAR0, reads STATUS +
