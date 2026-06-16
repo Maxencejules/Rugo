@@ -50,13 +50,39 @@ verb count: QEMU's CORB engine stops servicing the ring once `rirb_count` reache
 the response-interrupt threshold, so a threshold of 1 (sufficient for the single
 identity verb) would stall enumeration after the first response.
 
+## PCM playback (BDL + output stream)
+
+After enumeration `hda_pcm_selftest` runs the actual streaming path. It walks the
+AFG's widgets reading **AUDIO_WIDGET_CAPABILITIES** (param 0x09) to find the **DAC**
+(the first widget whose type field, bits [23:20], is 0 = Audio Output), then:
+
+1. fills a DMA page with a 16-bit square-wave PCM buffer and builds a two-entry
+   **Buffer Descriptor List** (spec minimum) covering it (IOC set per entry);
+2. resets output **stream descriptor SD0** (`SRST`) — located at
+   `0x80 + ISS*0x20` where ISS is `GCAP[11:8]` (QEMU reports ISS=4, so SD0 is at
+   `0x100`) — and programs its BDL pointer, cyclic buffer length, last-valid-index,
+   format (`SDnFMT` = 48 kHz / 16-bit / 2-channel = `0x0011`), and stream number;
+3. configures the codec **DAC** with four verbs — `SET_POWER_STATE` D0,
+   `SET_CONVERTER_FORMAT` (matching `SDnFMT`), `SET_CONVERTER_STREAM_CHANNEL`
+   (binding the DAC to the same stream tag SD0 uses, so the codec pulls from it),
+   and `SET_AMP_GAIN_MUTE` (unmute);
+4. sets `SDnCTL.RUN` and watches **SDnLPIB** (link position in buffer) advance.
+
+A moving LPIB proves the controller is DMAing the BDL buffer to the codec — the end
+to end PCM path. `HDA: pcm lpib=0x<pos> ok` (a stalled stream reports
+`HDA: pcm no-progress`; both are wall-clock bounded via PIT-calibrated TSC so boot
+never wedges). The test attaches a null audio backend (`-audiodev none`,
+`hda-duplex,audiodev=...`) whose timer drives the stream deterministically.
+`make test-hda-codec-v1`.
+
 ## v1 boundary / carry-forward
 
 - **Detection + capability read + CORB/RIRB codec verb round-trip + codec-tree
-  enumeration** (function groups → AFG type → widget count). What remains:
-  per-widget capability reads (CONNECTION_LIST, AMP caps), stream descriptors /
-  BDL, and PCM playback (`sys_audio_write`) — they build on the DMA pool
-  ([`dma_v1.md`](dma_v1.md)) + this CORB/RIRB + enumeration foundation.
+  enumeration + PCM stream playback** (BDL → SD0 DMA → codec, LPIB-verified). What
+  remains: a `sys_audio_write` syscall exposing playback to userspace, input/capture
+  (ADC streams), interrupt-driven BDL completion (BCIS) instead of LPIB polling, and
+  per-widget routing (CONNECTION_LIST / pin config for real output paths).
 - HD Audio only (class 0x04/0x03); AC'97 (subclass 0x01, an I/O-BAR device) is
   not matched.
-- First BAR page only; single controller (first match wins).
+- First BAR page only; single controller (first match wins). First Audio Output
+  widget is used as the DAC; first output stream descriptor (SD0) is used.

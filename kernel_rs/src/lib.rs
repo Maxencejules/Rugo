@@ -8951,12 +8951,8 @@ unsafe fn hda_codec_selftest(mmio: u64) {
     let fg_base = (codec << 28) | (fg_start << 20) | 0x000F_0000;
     let fg_type = hda_verb(mmio, corb_va, rirb_va, 3, fg_base | 0x05).unwrap_or(0); // FUNCTION_GROUP_TYPE
     let fg_widgets = hda_verb(mmio, corb_va, rirb_va, 4, fg_base | 0x04).unwrap_or(0); // node count
+    let widget_start = (fg_widgets >> 16) & 0xFF; // first widget node id under the AFG
     let widget_count = fg_widgets & 0xFF;
-    // Stop the engines and release the rings.
-    core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0);
-    core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0);
-    dma::dma_free(corb, 1);
-    dma::dma_free(rirb, 1);
     serial_write(b"HDA: codec ");
     serial_write_hex(codec as u64);
     serial_write(b" vid=0x");
@@ -8973,6 +8969,38 @@ unsafe fn hda_codec_selftest(mmio: u64) {
     serial_write(b" widgets=0x");
     serial_write_hex(widget_count as u64);
     serial_write(b" ok\n");
+
+    // PCM playback: find the DAC (first Audio Output widget) by reading each widget's
+    // AUDIO_WIDGET_CAPABILITIES (param 0x09, type field bits [23:20] == 0). The
+    // CORB/RIRB engines are still running, so verb indices continue from 4.
+    let mut vi = 4u16;
+    let mut dac = 0u32;
+    let wmax = if widget_count > 16 { 16 } else { widget_count };
+    let mut wi = 0u32;
+    while wi < wmax {
+        let nid = widget_start + wi;
+        vi += 1;
+        let cap = hda_verb(
+            mmio,
+            corb_va,
+            rirb_va,
+            vi,
+            (codec << 28) | (nid << 20) | 0x000F_0000 | 0x09,
+        )
+        .unwrap_or(0);
+        if (cap >> 20) & 0xF == 0 {
+            dac = nid;
+            break;
+        }
+        wi += 1;
+    }
+    hda_pcm_selftest(mmio, corb_va, rirb_va, codec, dac, vi);
+
+    // Stop the engines and release the rings.
+    core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0);
+    core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0);
+    dma::dma_free(corb, 1);
+    dma::dma_free(rirb, 1);
 }
 
 /// Submit one HDA verb at CORB index `idx` and return the RIRB response dword
@@ -8989,6 +9017,150 @@ unsafe fn hda_verb(mmio: u64, corb_va: u64, rirb_va: u64, idx: u16, verb: u32) -
         return None;
     }
     Some(core::ptr::read_volatile((rirb_va + (idx as u64) * 8) as *const u32))
+}
+
+/// HD Audio PCM playback self-test (full-os guide Part III audio): the actual
+/// streaming path a sound driver uses. Build a buffer of PCM samples + a Buffer
+/// Descriptor List, point output stream descriptor SD0 at it, associate the DAC
+/// converter with that stream, run the stream, and confirm the controller is DMAing
+/// the buffer to the codec by watching SDnLPIB (the link position in the buffer)
+/// advance. This is the proof that the BDL -> stream-DMA -> codec path works.
+///
+/// Requires the CORB/RIRB engines running (for the codec config verbs, continuing
+/// the verb index from `start_idx`) and a real DAC node (`dac` != 0). The wait for
+/// LPIB to move is wall-clock bounded so a stalled stream cannot wedge boot.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_pcm_selftest(
+    mmio: u64,
+    corb_va: u64,
+    rirb_va: u64,
+    codec: u32,
+    dac: u32,
+    start_idx: u16,
+) {
+    if dac == 0 {
+        serial_write(b"HDA: pcm no dac\n");
+        return;
+    }
+    // Output stream descriptors follow the input ones: base = 0x80 + ISS*0x20, where
+    // ISS (input stream count) is GCAP bits [11:8]. SD0 is the first output stream.
+    let gcap = core::ptr::read_volatile(mmio as *const u16);
+    let iss = ((gcap >> 8) & 0xF) as u64;
+    let sd = mmio + 0x80 + iss * 0x20;
+    const STREAM: u32 = 1; // stream tag (1..15; 0 = unassociated)
+    const FMT: u16 = 0x0011; // 48 kHz base, 16-bit samples, 2 channels
+    const BUF_BYTES: u64 = 4096;
+
+    // One DMA page for the PCM samples, one for the BDL.
+    let buf = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            serial_write(b"HDA: pcm dma fail\n");
+            return;
+        }
+    };
+    let bdl = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(buf, 1);
+            serial_write(b"HDA: pcm dma fail\n");
+            return;
+        }
+    };
+    let buf_va = mm::phys_to_virt(buf);
+    let bdl_va = mm::phys_to_virt(bdl);
+    // Fill the buffer with a simple 16-bit square wave so a real backend would emit a
+    // tone; the test only needs the controller to stream the bytes.
+    let mut i = 0u64;
+    while i < BUF_BYTES / 2 {
+        let sample: u16 = if (i / 64) & 1 == 0 { 0x2000 } else { 0xE000 };
+        core::ptr::write_volatile((buf_va + i * 2) as *mut u16, sample);
+        i += 1;
+    }
+    // Two-entry BDL (spec minimum), each covering half the buffer, IOC set. Entry
+    // layout: [u64 buffer addr][u32 length][u32 flags (bit0 = interrupt-on-complete)].
+    let half = BUF_BYTES / 2;
+    core::ptr::write_volatile(bdl_va as *mut u64, buf);
+    core::ptr::write_volatile((bdl_va + 8) as *mut u32, half as u32);
+    core::ptr::write_volatile((bdl_va + 12) as *mut u32, 1);
+    core::ptr::write_volatile((bdl_va + 16) as *mut u64, buf + half);
+    core::ptr::write_volatile((bdl_va + 24) as *mut u32, half as u32);
+    core::ptr::write_volatile((bdl_va + 28) as *mut u32, 1);
+
+    // Reset SD0 (SRST: set bit0, wait until it reads 1, clear, wait until it reads 0).
+    core::ptr::write_volatile(sd as *mut u8, 0x01);
+    let mut s = 0u64;
+    while core::ptr::read_volatile(sd as *const u8) & 0x01 == 0 && s < 1_000_000 {
+        s += 1;
+    }
+    core::ptr::write_volatile(sd as *mut u8, 0x00);
+    s = 0;
+    while core::ptr::read_volatile(sd as *const u8) & 0x01 != 0 && s < 1_000_000 {
+        s += 1;
+    }
+    // Clear any latched stream status (BCIS/FIFOE/DESE are write-1-to-clear).
+    core::ptr::write_volatile((sd + 0x03) as *mut u8, 0x1C);
+    // Program the stream: BDL pointer, cyclic buffer length, last valid index, format,
+    // and the stream number (SDnCTL bits [23:20] = high nibble of the byte at +0x02).
+    core::ptr::write_volatile((sd + 0x18) as *mut u32, bdl as u32); // BDPL
+    core::ptr::write_volatile((sd + 0x1C) as *mut u32, (bdl >> 32) as u32); // BDPU
+    core::ptr::write_volatile((sd + 0x08) as *mut u32, BUF_BYTES as u32); // CBL
+    core::ptr::write_volatile((sd + 0x0C) as *mut u16, 1); // LVI = entries - 1
+    core::ptr::write_volatile((sd + 0x12) as *mut u16, FMT); // SDnFMT
+    core::ptr::write_volatile((sd + 0x02) as *mut u8, (STREAM as u8) << 4);
+
+    // Configure the codec DAC: power up, set the matching format, and bind it to our
+    // stream/channel so the codec pulls from SD0 once the stream runs; unmute it.
+    let dbase = (codec << 28) | (dac << 20);
+    let mut vi = start_idx;
+    vi += 1;
+    let _ = hda_verb(mmio, corb_va, rirb_va, vi, dbase | (0x705 << 8)); // SET_POWER_STATE D0
+    vi += 1;
+    let _ = hda_verb(mmio, corb_va, rirb_va, vi, dbase | (0x2 << 16) | FMT as u32); // SET_CONVERTER_FORMAT
+    vi += 1;
+    let _ = hda_verb(mmio, corb_va, rirb_va, vi, dbase | (0x706 << 8) | (STREAM << 4)); // SET_STREAM_CHANNEL
+    vi += 1;
+    let _ = hda_verb(mmio, corb_va, rirb_va, vi, dbase | (0x3 << 16) | 0xB000); // SET_AMP_GAIN_MUTE unmute
+
+    // Run the stream (SDnCTL.RUN = bit1) and confirm SDnLPIB advances. Reading LPIB
+    // forces a VM exit so QEMU runs the codec's audio timer (which drives the DMA).
+    let lpib0 = core::ptr::read_volatile((sd + 0x04) as *const u32);
+    let ctl0 = core::ptr::read_volatile(sd as *const u8);
+    core::ptr::write_volatile(sd as *mut u8, ctl0 | 0x02);
+    let tsc_hz = tsc_hz_via_pit();
+    let tsc_start = core::arch::x86_64::_rdtsc();
+    let tsc_budget = if tsc_hz != 0 { tsc_hz * 2 } else { u64::MAX };
+    let iter_cap: u64 = if tsc_hz != 0 { 200_000_000 } else { 20_000_000 };
+    let mut lpib = lpib0;
+    let mut n = 0u64;
+    loop {
+        lpib = core::ptr::read_volatile((sd + 0x04) as *const u32);
+        if lpib != lpib0 {
+            break;
+        }
+        n += 1;
+        if n & 0x3F == 0
+            && core::arch::x86_64::_rdtsc().wrapping_sub(tsc_start) > tsc_budget
+        {
+            break;
+        }
+        if n > iter_cap {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    // Stop the stream and release the buffers.
+    let ctl1 = core::ptr::read_volatile(sd as *const u8);
+    core::ptr::write_volatile(sd as *mut u8, ctl1 & !0x02);
+    dma::dma_free(bdl, 1);
+    dma::dma_free(buf, 1);
+    if lpib != lpib0 {
+        serial_write(b"HDA: pcm lpib=0x");
+        serial_write_hex(lpib as u64);
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b"HDA: pcm no-progress\n");
+    }
 }
 
 /// PCIe ECAM self-test (full-os guide Part II.7, PCIe ECAM): read PCI config

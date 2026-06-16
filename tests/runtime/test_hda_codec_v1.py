@@ -37,8 +37,12 @@ def _boot_with_hda_codec(timeout=40):
         "-device", "virtio-blk-pci,drive=disk0,disable-modern=on",
         "-netdev", "user,id=n0",
         "-device", "virtio-net-pci,netdev=n0,disable-modern=on",
-        # The device under test: an HDA controller with a codec attached.
-        "-device", "intel-hda", "-device", "hda-duplex",
+        # The device under test: an HDA controller with a codec attached. A null
+        # audio backend (audiodev=none) gives the codec a sink whose timer drives
+        # the PCM stream DMA deterministically, regardless of the host's QEMU
+        # audio default.
+        "-audiodev", "none,id=snd0",
+        "-device", "intel-hda", "-device", "hda-duplex,audiodev=snd0",
         "-serial", f"tcp:127.0.0.1:{serial_port},server=on,wait=off",
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -91,6 +95,11 @@ def test_hda_codec_verb_roundtrip(find_in_order):
         # (DAC, output pin, ADC, input pin) -- the topology a PCM driver walks.
         "HDA: codec enum fgs=0x0000000000000001 afgtype=0x0000000000000001 widgets=0x",
         "ok",
+        # PCM playback: the kernel builds a BDL + sample buffer, binds the DAC to
+        # output stream SD0, runs it, and watches SDnLPIB advance -- proof the
+        # controller is DMAing the buffer to the codec (the real streaming path).
+        "HDA: pcm lpib=0x",
+        "ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
@@ -98,3 +107,6 @@ def test_hda_codec_verb_roundtrip(find_in_order):
     assert "HDA: codec no-response" not in out
     assert "HDA: reset fail" not in out
     assert "HDA: dma fail" not in out
+    assert "HDA: pcm no-progress" not in out
+    assert "HDA: pcm no dac" not in out
+    assert "HDA: pcm dma fail" not in out
