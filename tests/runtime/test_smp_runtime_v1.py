@@ -151,8 +151,11 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: ap user task ok",
         # A REAL R4 task (an R4_TASKS scheduler entry created via r4_init_task) was
         # migrated to the AP: the AP ran its CR3 + ring-3 context, tracked its real
-        # tid (slot 0x1F) as its per-CPU `current`, and serviced its syscalls.
-        "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F ok",
+        # tid (slot 0x1F) as its per-CPU `current`, and serviced its syscalls. The
+        # task's OWN syscall (sys_sysinfo op 14 -> r4_current_smp) resolved that same
+        # real tid from per-CPU state while running on the AP (sctid=0x1F) -- the
+        # per-CPU R4_CURRENT mechanism working through the real syscall path.
+        "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F sctid=0x000000000000001F ok",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

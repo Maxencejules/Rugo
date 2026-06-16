@@ -50,6 +50,28 @@ unsafe fn wrmsr(msr: u32, val: u64) {
                      in("edx") (val >> 32) as u32, options(nomem, nostack));
 }
 
+/// The bootstrap processor's x2APIC ID, recorded in `smp_init`. Lets any CPU tell
+/// whether it is the BSP without reading GS (the BSP's GS base is left unset because
+/// ring-3 TinyGo uses GS), so it is safe in the syscall path on any core.
+static BSP_LAPIC_ID: AtomicU32 = AtomicU32::new(0xFFFF_FFFF);
+
+/// This CPU's x2APIC ID (IA32_X2APIC_APICID, MSR 0x802). Requires x2APIC enabled.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn current_apic_id() -> u32 {
+    (rdmsr(0x802) & 0xFFFF_FFFF) as u32
+}
+
+/// True if the calling CPU is the bootstrap processor. On a uniprocessor (or before
+/// any AP checked in) x2APIC may be disabled, so reading the ID MSR could #GP — there
+/// we are unconditionally the BSP. Otherwise compare the live x2APIC ID to the BSP's.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn is_bsp() -> bool {
+    if SMP_AP_COUNT.load(Ordering::Relaxed) == 0 {
+        return true;
+    }
+    current_apic_id() == BSP_LAPIC_ID.load(Ordering::Relaxed)
+}
+
 /// Enable x2APIC mode + software-enable the local APIC. The spurious vector is
 /// 65, whose IDT gate is installed unconditionally in `idt_init` (so a spurious
 /// delivery always lands on a present gate, in every lane). Requires CPU x2APIC
@@ -438,6 +460,30 @@ static AP_USER_CODE: [u8; 40] = [
     0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
 ];
 
+// Ring-3 payload for the REAL-R4-task migration test. It issues a genuine syscall
+// that resolves "which task am I" from PER-CPU state (sys_sysinfo op 14 ->
+// r4_current_smp), then reports the kernel-resolved tid so the BSP can confirm a
+// syscall ON THE AP saw the migrated task as its current — the per-CPU R4_CURRENT
+// mechanism working through the real syscall path (not just a side variable):
+//   48 89 FB              mov rbx, rdi    ; save arg
+//   B8 3D 00 00 00        mov eax, 61     ; nr 61 = sys_sysinfo
+//   BF 0E 00 00 00        mov edi, 14     ; op 14 = SMP per-CPU current tid
+//   31 F6                 xor esi, esi    ; a2 = 0
+//   31 D2                 xor edx, edx    ; a3 = 0
+//   CD 80                 int 0x80        ; rax = resolved current tid
+//   48 89 C6              mov rsi, rax    ; report resolved tid in RSI
+//   48 89 DF              mov rdi, rbx    ; restore arg
+//   48 01 FF              add rdi, rdi    ; rdi = 2*arg
+//   48 83 C7 01           add rdi, 1      ; rdi = 2*arg+1 (the ran-in-ring3 proof)
+//   CD 81                 int 0x81        ; report to ap_user_trap
+//   EB FE               1: jmp 1b
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_R4_CODE: [u8; 36] = [
+    0x48, 0x89, 0xFB, 0xB8, 0x3D, 0x00, 0x00, 0x00, 0xBF, 0x0E, 0x00, 0x00, 0x00, 0x31, 0xF6,
+    0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48, 0x83,
+    0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
+];
+
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 static AP_USER_TASKID: AtomicU64 = AtomicU64::new(0); // id of the task migrated to the AP
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -793,6 +839,7 @@ pub fn smp_init() {
         let mut have_ap = false;
         if !resp.is_null() {
             let bsp = (*resp).bsp_lapic_id;
+            BSP_LAPIC_ID.store(bsp, Ordering::Release); // for is_bsp() in the syscall path
             let mut i = 0u64;
             while i < count {
                 let info = *(*resp).cpus.add(i as usize);
@@ -1004,7 +1051,7 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
         Some(p) => p,
         None => return false,
     };
-    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_USER_CODE)
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_R4_CODE)
         || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
     {
         crate::mm::address_space_release(ucr3);
@@ -1025,19 +1072,27 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
     let result = smp_dispatch_work(2, ARG);
     let cpu = AP_USER_CPU.load(Ordering::Acquire);
     let cur = AP_USER_CURRENT.load(Ordering::Acquire);
-    let sysret = AP_USER_SYSRET.load(Ordering::Acquire);
+    // sctid: the tid the task's OWN syscall (sys_sysinfo op 14 -> r4_current_smp)
+    // resolved while running on the AP. The task reported it in RSI -> AP_USER_SYSRET.
+    let sctid = AP_USER_SYSRET.load(Ordering::Acquire);
     crate::R4_TASKS[mig_tid].state = crate::R4State::Dead; // retire the migrated task
     if result.is_some() {
         crate::mm::address_space_release(ucr3);
     }
+    // Proof: the task ran in ring 3 on an AP (result, cpu), its per-CPU `current`
+    // round-tripped via GS (cur), AND a real syscall it executed on the AP resolved
+    // that same real tid from per-CPU state (sctid) -- the per-CPU R4_CURRENT
+    // mechanism working end-to-end through the syscall path for a real R4 task.
     let ok = matches!(result, Some(v) if v == ARG * 2 + 1)
         && cpu >= 1
         && cur == mig_tid as u64
-        && sysret == 1;
+        && sctid == mig_tid as u64;
     serial_write(b"SMP: ap r4 migrate tid=0x");
     serial_write_hex(mig_tid as u64);
     serial_write(b" cur=0x");
     serial_write_hex(cur);
+    serial_write(b" sctid=0x");
+    serial_write_hex(sctid);
     if ok {
         serial_write(b" ok\n");
     } else {

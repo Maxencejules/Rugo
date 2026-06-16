@@ -55,15 +55,36 @@ per-CPU `current` set + read back on the AP), and `SMP: ap user task ok`, reachi
 `GOINIT: result shutdown-clean` / `RUGO: halt ok` with no `USERPF` / `PF:` and no
 `FAIL`.
 
+## Real R4 task + a syscall that resolves the per-CPU current
+
+`ap_r4_migrate_selftest` (`smp.rs`, run right after `ap_user_selftest`) goes a step
+further: instead of a free-floating payload it registers a **real `R4_TASKS`
+scheduler entry** via `r4_init_task` (its own `pml4_phys` address space + ring-3
+`saved_frame` context) in a reserved slot (`R4_MAX_TASKS-1`, kept `Running` and
+outside `R4_NUM_TASKS` so the BSP scheduler never races it), migrates *that* task's
+CR3 + entry context to the AP, and publishes its **real tid** as the AP's per-CPU
+`current`.
+
+Its ring-3 payload (`AP_R4_CODE`) then issues a syscall that **reads back its own
+identity from per-CPU state**: `sys_sysinfo` **op 14** → `r4_current_smp()`, which
+returns `R4_CURRENT` on the BSP but the AP's own `gs:[16]` on an application
+processor. BSP-vs-AP is decided by **x2APIC ID** (`smp::is_bsp`, comparing the live
+`IA32_X2APIC_APICID` to the BSP's, guarded by `SMP_AP_COUNT==0` so a uniprocessor
+never reads the MSR) — *not* GS, because the BSP's GS base is deliberately left
+unset (ring-3 TinyGo uses GS). The task reports the kernel-resolved tid; the BSP
+confirms it equals the migrated tid. Marker:
+`SMP: ap r4 migrate tid=0x1F cur=0x1F sctid=0x1F ok` — `cur` is the per-CPU current
+read back via GS, `sctid` is the tid a **real syscall resolved on the AP**. This is
+the per-CPU `R4_CURRENT` mechanism working end to end through the syscall path for a
+real scheduler task. Asserted by `tests/runtime/test_smp_runtime_v1.py`.
+
 ## v1 boundary / carry-forward
 
-- The task migrated to the AP is still a **kernel-built payload** in a private
-  address space, and it issues a deliberately **`R4_CURRENT`-free, non-printing**
-  syscall (`sys_time_now`). Migrating a **live, scheduled R4 task** mid-execution
-  and letting it run the *full* syscall surface on the AP requires making the
-  shared scheduler state SMP-safe — `R4_CURRENT`/`R4_TASKS` become per-CPU
-  `current` + a locked task table, and every `R4_CURRENT`-touching syscall
-  (yield/exit/fork/futex/…) must use the per-CPU current under that lock. That is
-  the remaining core rewrite and is carry-forward.
-- The per-CPU `current` is set/observed but the BSP still owns scheduling; the APs
-  do not yet pull from their run queues into ring 3 autonomously.
+- One syscall (`sys_sysinfo` op 14) now resolves `current` per-CPU on the AP. The
+  *rest* of the `R4_CURRENT`-touching surface (yield/exit/fork/futex/…) still reads
+  the global and runs only on the BSP. Routing the whole surface through
+  `r4_current_smp` (+ a lock on `R4_TASKS` mutations) so APs can run the full
+  syscall set concurrently is the remaining core rewrite, done incrementally.
+- The migrated R4 task is dispatched and run once as a boot self-test; the BSP still
+  owns the live scheduler and the APs do not yet pull ready tasks from their run
+  queues into ring 3 autonomously.

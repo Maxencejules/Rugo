@@ -6452,6 +6452,12 @@ cfg_r4! {
             // op 13 = online CPU count (the BSP + every checked-in AP). Lets
             // userspace size thread pools to the machine (full-os guide Part I.3).
             13 => smp::cpu_count(),
+            // op 14 = the calling CPU's current task id, resolved from PER-CPU state
+            // (full-os guide Part I.3, SMP scheduler): the global cursor on the BSP,
+            // the AP's own per-CPU `current` on an application processor. A task
+            // migrated to an AP reads its own real tid here -- the per-CPU R4_CURRENT
+            // mechanism exercised through a real syscall (see the ap_r4_migrate test).
+            14 => r4_current_smp() as u64,
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }
@@ -6508,6 +6514,24 @@ cfg_r4! {
         let tid = R4_NUM_TASKS;
         R4_NUM_TASKS += 1;
         Some(tid)
+    }
+
+    /// The current task on the CALLING CPU (full-os guide Part I.3, SMP scheduler).
+    /// On the bootstrap processor this is the global scheduler cursor `R4_CURRENT`;
+    /// on an application processor it is that CPU's own per-CPU `current` (gs:[16],
+    /// set when a task is dispatched to it) -- the per-CPU R4_CURRENT a multi-CPU
+    /// scheduler reads instead of one global. BSP-vs-AP is decided by x2APIC ID
+    /// (`smp::is_bsp`), NOT GS, so this is safe even on the BSP whose GS base is left
+    /// unset (ring-3 TinyGo uses GS). Exposed to a task via `sys_sysinfo` op 14.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_current_smp() -> usize {
+        if crate::smp::is_bsp() {
+            R4_CURRENT
+        } else {
+            let cur: u64;
+            core::arch::asm!("mov {}, gs:[16]", out(reg) cur, options(nostack));
+            cur as usize
+        }
     }
 
     #[inline(always)]
