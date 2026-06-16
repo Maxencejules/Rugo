@@ -37,6 +37,24 @@ _start:
     call rax                    ; addtwo(40) -> 42
     cmp  rax, 42
     jne  .fail
+    mov  edi, 2                 ; dlsym("getgvar")
+    lea  rsi, [rel sym_getgvar]
+    mov  eax, 60
+    int  0x80
+    cmp  rax, -1
+    je   .fail
+    call rax                    ; getgvar() -> 99 iff R_X86_64_GLOB_DAT was applied
+    cmp  rax, 99
+    jne  .fail
+    mov  edi, 2                 ; dlsym("callsum")
+    lea  rsi, [rel sym_callsum]
+    mov  eax, 60
+    int  0x80
+    cmp  rax, -1
+    je   .fail
+    call rax                    ; callsum() -> extadd(40)=42 iff R_X86_64_JUMP_SLOT applied
+    cmp  rax, 42
+    jne  .fail
     lea  rdi, [rel okmsg]
     mov  esi, okmsg_len
     xor  eax, eax
@@ -55,6 +73,8 @@ section .data
 modname:    db "libdl", 0, 0, 0                            ; 8 bytes, null-padded
 sym_getval: db "getval", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0      ; 16 bytes
 sym_addtwo: db "addtwo", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0      ; 16 bytes
+sym_getgvar: db "getgvar", 0, 0, 0, 0, 0, 0, 0, 0, 0       ; 16 bytes
+sym_callsum: db "callsum", 0, 0, 0, 0, 0, 0, 0, 0, 0       ; 16 bytes
 okmsg:   db "DLPROBE: dlsym ok", 10
 okmsg_len equ $ - okmsg
 failmsg: db "DLPROBE: FAIL", 10

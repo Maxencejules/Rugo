@@ -5559,6 +5559,18 @@ cfg_r4! {
         None
     }
 
+    /// `st_value` of `.dynsym` entry `idx` (for symbolic GLOB_DAT/JUMP_SLOT
+    /// relocations: the value to load the GOT slot with is base + this).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn dl_sym_value(so: &[u8], idx: usize) -> Option<u64> {
+        let symtab = dl_dyn(so, 6).and_then(|v| dl_vaddr_to_off(so, v))?;
+        let sym = symtab + idx * 24;
+        if idx == 0 || sym + 16 > so.len() {
+            return None;
+        }
+        Some(u64::from_le_bytes(so[sym + 8..sym + 16].try_into().ok()?))
+    }
+
     /// Look up a tag in the `.so` PT_DYNAMIC array; returns its `d_val`.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     fn dl_dyn(so: &[u8], tag: u64) -> Option<u64> {
@@ -5651,7 +5663,10 @@ cfg_r4! {
             }
             i += 1;
         }
-        // Pass 2: apply R_X86_64_RELATIVE relocations (*(base+off) = base+addend).
+        // Pass 2: apply DT_RELA relocations. R_X86_64_RELATIVE (8):
+        // *(base+off) = base+addend. R_X86_64_GLOB_DAT (6): *(base+off) =
+        // base + sym.st_value + addend (a SYMBOLIC reloc — the GOT slot for a
+        // global, resolved from .dynsym by the r_info symbol index).
         if let (Some(rela_va), Some(rela_sz)) = (dl_dyn(so, 7), dl_dyn(so, 8)) {
             if let Some(rela_off) = dl_vaddr_to_off(so, rela_va) {
                 let rela_sz = rela_sz as usize;
@@ -5662,8 +5677,46 @@ cfg_r4! {
                         let r_offset = u64::from_le_bytes(so[o..o + 8].try_into().unwrap());
                         let r_info = u64::from_le_bytes(so[o + 8..o + 16].try_into().unwrap());
                         let r_addend = u64::from_le_bytes(so[o + 16..o + 24].try_into().unwrap());
-                        if r_info & 0xFFFF_FFFF == 8 {
+                        let r_type = r_info & 0xFFFF_FFFF;
+                        if r_type == 8 {
                             let val = base.wrapping_add(r_addend);
+                            if copyout_user(base + r_offset, &val.to_le_bytes(), 8).is_err() {
+                                return ERR;
+                            }
+                        } else if r_type == 6 {
+                            let stv = match dl_sym_value(so, (r_info >> 32) as usize) {
+                                Some(v) => v,
+                                None => return ERR,
+                            };
+                            let val = base.wrapping_add(stv).wrapping_add(r_addend);
+                            if copyout_user(base + r_offset, &val.to_le_bytes(), 8).is_err() {
+                                return ERR;
+                            }
+                        }
+                        r += 24;
+                    }
+                }
+            }
+        }
+        // Pass 2b: apply DT_JMPREL (.rela.plt) R_X86_64_JUMP_SLOT (7) relocations —
+        // EAGER binding (*(base+off) = base + sym.st_value + addend). The kernel
+        // has no lazy PLT resolver, so every PLT slot is bound now.
+        if let (Some(jr_va), Some(jr_sz)) = (dl_dyn(so, 23), dl_dyn(so, 2)) {
+            if let Some(jr_off) = dl_vaddr_to_off(so, jr_va) {
+                let jr_sz = jr_sz as usize;
+                if jr_off + jr_sz <= so.len() {
+                    let mut r = 0usize;
+                    while r + 24 <= jr_sz {
+                        let o = jr_off + r;
+                        let r_offset = u64::from_le_bytes(so[o..o + 8].try_into().unwrap());
+                        let r_info = u64::from_le_bytes(so[o + 8..o + 16].try_into().unwrap());
+                        let r_addend = u64::from_le_bytes(so[o + 16..o + 24].try_into().unwrap());
+                        if r_info & 0xFFFF_FFFF == 7 {
+                            let stv = match dl_sym_value(so, (r_info >> 32) as usize) {
+                                Some(v) => v,
+                                None => return ERR,
+                            };
+                            let val = base.wrapping_add(stv).wrapping_add(r_addend);
                             if copyout_user(base + r_offset, &val.to_le_bytes(), 8).is_err() {
                                 return ERR;
                             }

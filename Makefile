@@ -209,7 +209,8 @@ $(OUT)/app-%.elf: $(OUT)/app-%.o apps/base-shell/linker.ld | $(OUT)
 .PHONY: dl-module
 dl-module: | $(OUT)
 	$(NASM) -f elf64 apps/dl/libdl.asm -o $(OUT)/libdl.o
-	$(LD) -shared -o kernel_rs/src/dl_module.so $(OUT)/libdl.o
+	$(NASM) -f elf64 apps/dl/libdl2.asm -o $(OUT)/libdl2.o
+	$(LD) -shared -o kernel_rs/src/dl_module.so $(OUT)/libdl.o $(OUT)/libdl2.o
 
 # --- rlibc: C programs, linked in PE then rewrapped as ELF -------------------
 # The host gcc/ld only target PE-COFF, and objcopy mistranslates PE
