@@ -87,6 +87,11 @@ keyboard** and reads an actual key report:
   test injects `a` via QMP `send-key`), the device returns the 8-byte boot report
   `[modifier, reserved, keycode*6]` and the kernel reads the keycode —
   `XHCI: hid report mod=0x0 key=0x04` (USB HID usage 0x04 == 'a').
+- the poll is bounded by **wall-clock time, not a raw spin count** (~2 s): the TSC
+  is calibrated against a one-shot PIT channel-2 interval (polled OUT bit, no
+  timer IRQ needed this early in boot). Under TCG a fixed iteration cap stalled
+  the keyboard-attached boot for tens of seconds when no key arrived; the
+  real-time bound keeps boot snappy while still catching an injected key.
 
 ## v1 boundary / carry-forward
 

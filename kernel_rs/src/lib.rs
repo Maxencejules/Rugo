@@ -7796,6 +7796,45 @@ unsafe fn xhci_wait_event(
 /// then a GET_DESCRIPTOR(device) control transfer that reads the 18-byte USB
 /// device descriptor (vendor/product id) — the full USB enumeration path a HID
 /// driver builds on. Called from xhci_detect when a controller is present.
+/// Estimate the TSC frequency (ticks/second) by counting `rdtsc` ticks across a
+/// fixed PIT channel-2 interval, polling the OUT bit (port 0x61 bit 5) — no
+/// timer interrupt needed, so it works this early in boot (before `pit_init`).
+/// Returns 0 if the result is implausible (so callers can fall back). Under QEMU
+/// TCG both the PIT and the TSC advance with the VM's clock, so this yields a
+/// real-wall-clock relationship regardless of how slowly emulated code runs.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn tsc_hz_via_pit() -> u64 {
+    const PIT_HZ: u64 = 1_193_182;
+    const COUNT: u16 = 11_932; // ~10 ms
+    // Gate (bit0) high, speaker data (bit1) off, so channel 2 counts silently.
+    let prev = arch_x86::inb(0x61);
+    arch_x86::outb(0x61, (prev & !0x02) | 0x01);
+    arch_x86::outb(0x43, 0xB0); // channel 2, lobyte/hibyte, mode 0 (one-shot)
+    arch_x86::outb(0x42, (COUNT & 0xFF) as u8);
+    arch_x86::outb(0x42, (COUNT >> 8) as u8);
+    let t0 = core::arch::x86_64::_rdtsc();
+    // Wait for OUT to go high (terminal count), bounded so a non-advancing PIT
+    // can't wedge boot.
+    let mut guard = 0u64;
+    while arch_x86::inb(0x61) & 0x20 == 0 {
+        guard += 1;
+        if guard > 2_000_000 {
+            arch_x86::outb(0x61, prev);
+            return 0;
+        }
+    }
+    let t1 = core::arch::x86_64::_rdtsc();
+    arch_x86::outb(0x61, prev); // restore the speaker/gate latch
+    let delta = t1.wrapping_sub(t0);
+    let hz = delta.saturating_mul(PIT_HZ) / (COUNT as u64);
+    // Plausible TSC range ~50 MHz .. 20 GHz; otherwise let the caller fall back.
+    if (50_000_000..=20_000_000_000).contains(&hz) {
+        hz
+    } else {
+        0
+    }
+}
+
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn xhci_ring_selftest(bdf: PciBdf) {
     let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
@@ -8159,8 +8198,21 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
                         let mut report_mod = 0u8;
                         let mut report_key = 0u8;
                         let mut got_report = false;
+                        // Bound the wait by WALL-CLOCK, not a raw spin count: under
+                        // TCG the per-iteration cost swings wildly with host load, so
+                        // an iteration cap once stalled boot past the test window (and
+                        // would stall every keyboard-attached boot). ~2 s of real time
+                        // is ample for a host-injected key while keeping boot snappy.
+                        // A large iteration cap is a backstop if the TSC never moves.
+                        let tsc_hz = tsc_hz_via_pit();
+                        let tsc_start = core::arch::x86_64::_rdtsc();
+                        // When calibration works the TSC budget (~2 s real time)
+                        // terminates first and the iteration cap is just paranoia.
+                        // When it fails, a tight iteration cap bounds boot instead.
+                        let tsc_budget = if tsc_hz != 0 { tsc_hz * 2 } else { u64::MAX };
+                        let iter_cap: u64 = if tsc_hz != 0 { 200_000_000 } else { 20_000_000 };
                         let mut s2 = 0u64;
-                        while s2 < 120_000_000 {
+                        loop {
                             let off = ev_idx * 16;
                             let d3 = core::ptr::read_volatile((ev + off + 12) as *const u32);
                             if (d3 & 1) == ev_ccs {
@@ -8186,13 +8238,24 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
                                 // MMIO read -> a VM exit so QEMU delivers the
                                 // host-injected key + runs the USB transfer. Re-ring
                                 // the endpoint doorbell periodically as a hint.
-                                if s2 & 0xFFF == 0 {
+                                if s2 & 0x3F == 0 {
                                     let _ = rd(op + 4);
                                 }
-                                if s2 & 0x3FFFF == 0 {
+                                if s2 & 0xFFFF == 0 {
                                     wr(dboff + slot * 4, 3);
                                 }
                                 s2 += 1;
+                                // Check the time budget on the MMIO cadence (rdtsc is
+                                // itself cheap, but this keeps the hot path tight).
+                                if s2 & 0x3F == 0
+                                    && core::arch::x86_64::_rdtsc().wrapping_sub(tsc_start)
+                                        > tsc_budget
+                                {
+                                    break;
+                                }
+                                if s2 > iter_cap {
+                                    break;
+                                }
                                 core::hint::spin_loop();
                             }
                         }
