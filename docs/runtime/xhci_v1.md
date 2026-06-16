@@ -72,16 +72,31 @@ cycle state, skipping unrelated events like Port Status Change, advancing ERDP).
 Reports `XHCI: hid enumerated port=<n> vid=<0x..> pid=<0x..>` — for the QEMU
 keyboard, vendor `0x0627`, product `0x0001`.
 
+## HID input reports (`make test-xhci-hid-input-v1`)
+
+After enumeration the kernel drives the device into a working **HID boot
+keyboard** and reads an actual key report:
+
+- **SET_CONFIGURATION(1)** + **SET_PROTOCOL(boot)** control transfers on EP0;
+- a **Configure Endpoint** command (input context Add-flags slot + DCI 3) that
+  adds an **interrupt-IN endpoint** (EP type 7, MPS 8) backed by its own transfer
+  ring — `XHCI: hid configured ep-in ok`;
+- it posts a Normal TRB on the interrupt ring, rings the endpoint doorbell, and
+  polls the event ring (pumping QEMU via MMIO reads + re-ringing the doorbell so
+  an asynchronously-delivered key lands). When a key is pressed on the host (the
+  test injects `a` via QMP `send-key`), the device returns the 8-byte boot report
+  `[modifier, reserved, keycode*6]` and the kernel reads the keycode —
+  `XHCI: hid report mod=0x0 key=0x04` (USB HID usage 0x04 == 'a').
+
 ## v1 boundary / carry-forward
 
 - **Detection + capability read + command/event-ring handshake + full device
-  enumeration to the device descriptor.** What remains for a complete HID driver:
-  the configuration/interface/HID descriptors, SET_CONFIGURATION + SET_PROTOCOL
-  (boot), and an **interrupt IN** endpoint transfer ring reading actual key/mouse
-  reports (which on QEMU needs QMP input injection to generate events).
-- The event ring uses a single ERST segment + polled completion (no MSI-X
-  interrupt-driven event delivery yet); one device is enumerated (first connected
-  port).
+  enumeration + HID boot-keyboard configuration + a real interrupt-IN input
+  report.** What remains: parsing the HID report descriptor (vs the fixed boot
+  layout), a continuously-serviced interrupt ring feeding the input subsystem, the
+  mouse/other HID classes, and MSI-X interrupt-driven event delivery (vs the
+  polled event ring).
+- One device is enumerated (first connected port); a single ERST segment.
 
 ## Acceptance
 

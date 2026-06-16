@@ -7954,12 +7954,15 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
     let inctx = dma::dma_alloc(1);
     let ep0ring = dma::dma_alloc(1);
     let databuf = dma::dma_alloc(1);
+    let hidring = dma::dma_alloc(1); // interrupt-IN transfer ring (HID reports)
     let mut enum_ok = false;
+    let mut hid_ok = false;
     let mut vid = 0u32;
     let mut pid = 0u32;
-    if let (true, Some(devctx), Some(inctx), Some(ep0ring), Some(databuf)) =
-        (found_port != 0, devctx, inctx, ep0ring, databuf)
+    if let (true, Some(devctx), Some(inctx), Some(ep0ring), Some(databuf), Some(hidring)) =
+        (found_port != 0, devctx, inctx, ep0ring, databuf, hidring)
     {
+        core::ptr::write_bytes(mm::phys_to_virt(hidring) as *mut u8, 0, 4096);
         core::ptr::write_bytes(mm::phys_to_virt(devctx) as *mut u8, 0, 4096);
         core::ptr::write_bytes(mm::phys_to_virt(inctx) as *mut u8, 0, 4096);
         core::ptr::write_bytes(mm::phys_to_virt(ep0ring) as *mut u8, 0, 4096);
@@ -8065,6 +8068,145 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
                         enum_ok = true;
                     }
                 }
+                if enum_ok {
+                    // ---- HID configuration (full-os Part II.7 / III.8): put the
+                    // device in its configured state and set up an interrupt-IN
+                    // endpoint so a HID boot keyboard's reports can be polled.
+                    let er = mm::phys_to_virt(ep0ring);
+                    let mut ep0_off = 48u64; // EP0 TRBs 0..2 used by GET_DESCRIPTOR
+
+                    // 1) SET_CONFIGURATION(1): bmRT 0x00, bReq 0x09, wValue 1, no data.
+                    core::ptr::write_volatile((er + ep0_off) as *mut u32, 0x0001_0900);
+                    core::ptr::write_volatile((er + ep0_off + 4) as *mut u32, 0);
+                    core::ptr::write_volatile((er + ep0_off + 8) as *mut u32, 8);
+                    core::ptr::write_volatile(
+                        (er + ep0_off + 12) as *mut u32,
+                        (2u32 << 10) | (1 << 6) | 1, // Setup, TRT=No-Data, IDT, cycle
+                    );
+                    core::ptr::write_volatile(
+                        (er + ep0_off + 28) as *mut u32,
+                        (4u32 << 10) | (1 << 16) | (1 << 5) | 1, // Status, DIR=IN, IOC
+                    );
+                    wr(dboff + slot * 4, 1);
+                    let setcfg_ok = matches!(
+                        xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 32),
+                        Some((d2, _)) if (d2 >> 24) == 1
+                    );
+                    ep0_off += 32;
+
+                    // 2) Configure Endpoint: add the interrupt-IN endpoint (DCI 3).
+                    let in_va = mm::phys_to_virt(inctx);
+                    core::ptr::write_bytes(in_va as *mut u8, 0, 4096);
+                    core::ptr::write_volatile((in_va + 4) as *mut u32, (1 << 0) | (1 << 3)); // Add slot + DCI3
+                    let slot_ctx = in_va + ctx_size;
+                    core::ptr::write_volatile(slot_ctx as *mut u32, (pspeed << 20) | (3u32 << 27)); // ctx entries=3
+                    core::ptr::write_volatile((slot_ctx + 4) as *mut u32, (found_port as u32) << 16);
+                    let ep1_ctx = in_va + 4 * ctx_size; // DCI 3 (EP1-IN)
+                    core::ptr::write_volatile(ep1_ctx as *mut u32, 6u32 << 16); // Interval
+                    core::ptr::write_volatile(
+                        (ep1_ctx + 4) as *mut u32,
+                        (3u32 << 1) | (7u32 << 3) | (8u32 << 16), // CErr=3, EP type Interrupt-IN, MPS=8
+                    );
+                    core::ptr::write_volatile((ep1_ctx + 8) as *mut u32, (hidring as u32) | 1);
+                    core::ptr::write_volatile((ep1_ctx + 12) as *mut u32, (hidring >> 32) as u32);
+                    core::ptr::write_volatile((ep1_ctx + 16) as *mut u32, 8 | (8 << 16)); // avg TRB len + max ESIT
+                    core::ptr::write_volatile((cmd_va + cmd_idx * 16) as *mut u64, inctx);
+                    core::ptr::write_volatile(
+                        (cmd_va + cmd_idx * 16 + 12) as *mut u32,
+                        (12u32 << 10) | ((slot as u32) << 24) | 1, // Configure Endpoint
+                    );
+                    cmd_idx += 1;
+                    wr(dboff, 0);
+                    let cfgep_ok = matches!(
+                        xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 33),
+                        Some((d2, _)) if (d2 >> 24) == 1
+                    );
+
+                    // 3) SET_PROTOCOL(boot): bmRT 0x21, bReq 0x0B, wValue 0, no data.
+                    core::ptr::write_volatile((er + ep0_off) as *mut u32, 0x0000_0B21);
+                    core::ptr::write_volatile((er + ep0_off + 4) as *mut u32, 0);
+                    core::ptr::write_volatile((er + ep0_off + 8) as *mut u32, 8);
+                    core::ptr::write_volatile(
+                        (er + ep0_off + 12) as *mut u32,
+                        (2u32 << 10) | (1 << 6) | 1,
+                    );
+                    core::ptr::write_volatile(
+                        (er + ep0_off + 28) as *mut u32,
+                        (4u32 << 10) | (1 << 16) | (1 << 5) | 1,
+                    );
+                    wr(dboff + slot * 4, 1);
+                    let setproto_ok = matches!(
+                        xhci_wait_event(mmio, ev_va, event_ring, ir0, &mut ev_idx, &mut ev_ccs, 32),
+                        Some((d2, _)) if (d2 >> 24) == 1
+                    );
+
+                    hid_ok = setcfg_ok && cfgep_ok && setproto_ok;
+
+                    if hid_ok {
+                        // ---- HID input report: poll the interrupt-IN endpoint for
+                        // an 8-byte boot-keyboard report [modifier, reserved,
+                        // keycode*6]. A key pressed on the host (QMP send-key)
+                        // generates a report; the kernel reads back its keycode.
+                        core::ptr::write_bytes(mm::phys_to_virt(databuf) as *mut u8, 0, 8);
+                        let hr = mm::phys_to_virt(hidring);
+                        core::ptr::write_volatile(hr as *mut u32, databuf as u32);
+                        core::ptr::write_volatile((hr + 4) as *mut u32, (databuf >> 32) as u32);
+                        core::ptr::write_volatile((hr + 8) as *mut u32, 8); // TRB transfer length
+                        core::ptr::write_volatile((hr + 12) as *mut u32, (1u32 << 10) | (1 << 5) | 1); // Normal, IOC
+                        serial_write(b"XHCI: hid polling\n");
+                        wr(dboff + slot * 4, 3); // ring the interrupt-IN doorbell (DCI 3)
+                        let ev = mm::phys_to_virt(event_ring);
+                        let mut report_mod = 0u8;
+                        let mut report_key = 0u8;
+                        let mut got_report = false;
+                        let mut s2 = 0u64;
+                        while s2 < 120_000_000 {
+                            let off = ev_idx * 16;
+                            let d3 = core::ptr::read_volatile((ev + off + 12) as *const u32);
+                            if (d3 & 1) == ev_ccs {
+                                let d2 = core::ptr::read_volatile((ev + off + 8) as *const u32);
+                                let ty = (d3 >> 10) & 0x3F;
+                                ev_idx += 1;
+                                if ev_idx >= 16 {
+                                    ev_idx = 0;
+                                    ev_ccs ^= 1;
+                                }
+                                wr64(ir0 + 0x18, (event_ring + ev_idx * 16) | (1 << 3));
+                                if ty == 32 {
+                                    let c = d2 >> 24;
+                                    if c == 1 || c == 13 {
+                                        let dbp = mm::phys_to_virt(databuf) as *const u8;
+                                        report_mod = core::ptr::read_volatile(dbp);
+                                        report_key = core::ptr::read_volatile(dbp.add(2));
+                                        got_report = true;
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // MMIO read -> a VM exit so QEMU delivers the
+                                // host-injected key + runs the USB transfer. Re-ring
+                                // the endpoint doorbell periodically as a hint.
+                                if s2 & 0xFFF == 0 {
+                                    let _ = rd(op + 4);
+                                }
+                                if s2 & 0x3FFFF == 0 {
+                                    wr(dboff + slot * 4, 3);
+                                }
+                                s2 += 1;
+                                core::hint::spin_loop();
+                            }
+                        }
+                        if got_report {
+                            serial_write(b"XHCI: hid report mod=0x");
+                            serial_write_hex(report_mod as u64);
+                            serial_write(b" key=0x");
+                            serial_write_hex(report_key as u64);
+                            serial_write(b"\n");
+                        } else {
+                            serial_write(b"XHCI: hid no-report\n");
+                        }
+                    }
+                }
             }
         }
     }
@@ -8078,6 +8220,9 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
         dma::dma_free(p, 1);
     }
     if let Some(p) = databuf {
+        dma::dma_free(p, 1);
+    }
+    if let Some(p) = hidring {
         dma::dma_free(p, 1);
     }
 
@@ -8101,6 +8246,13 @@ unsafe fn xhci_ring_selftest(bdf: PciBdf) {
             serial_write(b" pid=0x");
             serial_write_hex(pid as u64);
             serial_write(b"\n");
+            if hid_ok {
+                // The device is configured + an interrupt-IN endpoint is set up,
+                // ready to receive HID boot-keyboard reports.
+                serial_write(b"XHCI: hid configured ep-in ok\n");
+            } else {
+                serial_write(b"XHCI: hid configure fail\n");
+            }
         } else {
             serial_write(b"XHCI: enum fail port=0x");
             serial_write_hex(found_port);

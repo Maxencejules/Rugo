@@ -98,9 +98,14 @@ def test_xhci_enumerates_usb_keyboard(find_in_order):
         # GET_DESCRIPTOR returned the 18-byte device descriptor with the QEMU
         # HID keyboard's vendor (0x0627) and product (0x0001) ids.
         "XHCI: hid enumerated port=0x0000000000000005 vid=0x0000000000000627 pid=0x0000000000000001",
+        # The device is then put into its configured state (SET_CONFIGURATION),
+        # an interrupt-IN endpoint is added (Configure Endpoint command), and the
+        # HID boot protocol is selected (SET_PROTOCOL) -- ready to poll reports.
+        "XHCI: hid configured ep-in ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "XHCI: enum fail" not in out
+    assert "XHCI: hid configure fail" not in out
     assert "XHCI: noop fail" not in out
     assert "XHCI: none" not in out
