@@ -85,6 +85,12 @@ def test_hda_codec_verb_roundtrip(find_in_order):
         # vendor (Red Hat 0x1AF4) -> proof codec communication works.
         "HDA: codec 0000000000000000 vid=0x0000000000001AF4",
         "ok",
+        # Codec-tree enumeration: walk the root's SUBORDINATE_NODE_COUNT to the
+        # first function group, read its TYPE (1 = audio function group) and its
+        # widget count. QEMU's hda-duplex codec reports 1 fg, audio, 4 widgets
+        # (DAC, output pin, ADC, input pin) -- the topology a PCM driver walks.
+        "HDA: codec enum fgs=0x0000000000000001 afgtype=0x0000000000000001 widgets=0x",
+        "ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])

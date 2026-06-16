@@ -37,12 +37,26 @@ one verb — **GET_PARAMETER(node 0, VENDOR_ID)** — to the first codec named b
 controller with no codec reports `HDA: no codec` (a bounded, harmless no-op). This
 is the codec-communication core a PCM driver builds on. `make test-hda-codec-v1`.
 
+**Codec-tree enumeration.** After the identity round-trip the selftest issues
+three more GET_PARAMETER verbs to walk the codec topology: the root node's
+**SUBORDINATE_NODE_COUNT** (how many function groups, and the first one's node id),
+then that function group's **FUNCTION_GROUP_TYPE** (1 = audio) and its own
+**SUBORDINATE_NODE_COUNT** (the widget count under the AFG):
+`HDA: codec enum fgs=0x1 afgtype=0x1 widgets=0x4 ok`. QEMU's `hda-duplex` reports
+one audio function group with four widgets (DAC, output pin, ADC, input pin) — the
+node tree a real driver walks to locate the DAC and output-pin widgets before
+configuring a stream. Issuing more than one verb requires **RINTCNT** set above the
+verb count: QEMU's CORB engine stops servicing the ring once `rirb_count` reaches
+the response-interrupt threshold, so a threshold of 1 (sufficient for the single
+identity verb) would stall enumeration after the first response.
+
 ## v1 boundary / carry-forward
 
-- **Detection + capability read + CORB/RIRB codec verb round-trip.** What
-  remains: full codec node/widget enumeration, stream descriptors / BDL, and PCM
-  playback (`sys_audio_write`) — they build on the DMA pool
-  ([`dma_v1.md`](dma_v1.md)) + this CORB/RIRB foundation.
+- **Detection + capability read + CORB/RIRB codec verb round-trip + codec-tree
+  enumeration** (function groups → AFG type → widget count). What remains:
+  per-widget capability reads (CONNECTION_LIST, AMP caps), stream descriptors /
+  BDL, and PCM playback (`sys_audio_write`) — they build on the DMA pool
+  ([`dma_v1.md`](dma_v1.md)) + this CORB/RIRB + enumeration foundation.
 - HD Audio only (class 0x04/0x03); AC'97 (subclass 0x01, an I/O-BAR device) is
   not matched.
 - First BAR page only; single controller (first match wins).

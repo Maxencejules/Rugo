@@ -8915,46 +8915,80 @@ unsafe fn hda_codec_selftest(mmio: u64) {
         s += 1;
     }
     core::ptr::write_volatile((mmio + CORBWP) as *mut u16, 0);
-    // Reset the RIRB write pointer; one response per interrupt threshold.
+    // Reset the RIRB write pointer. RINTCNT is the response-interrupt threshold,
+    // but QEMU's CORB engine also *stops* once `rirb_count == rirb_cnt` (it won't
+    // service further verbs until the RIRB interrupt is acked) -- so a threshold of
+    // 1 caps us at a single response. Set it well above our verb count so the whole
+    // enumeration sequence drains in one run.
     core::ptr::write_volatile((mmio + RIRBWP) as *mut u16, 0x8000);
-    core::ptr::write_volatile((mmio + RINTCNT) as *mut u16, 1);
+    core::ptr::write_volatile((mmio + RINTCNT) as *mut u16, 0xFF);
     // Run both DMA engines.
     core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0x02);
     core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0x02);
 
-    // GET_PARAMETER(node 0, VENDOR_ID=0x00): verb = CAd<<28 | NID<<20 | 0xF00<<8 | param.
-    let verb = (codec << 28) | (0u32 << 20) | 0x000F_0000 | 0x00;
     let corb_va = mm::phys_to_virt(corb);
-    core::ptr::write_volatile((corb_va + 4) as *mut u32, verb); // CORB[1]
-    core::ptr::write_volatile((mmio + CORBWP) as *mut u16, 1);
-    // Wait (bounded) for the response to land in RIRB[1] (RIRBWP advances to 1).
-    s = 0;
-    while core::ptr::read_volatile((mmio + RIRBWP) as *const u16) & 0xFF == 0 && s < 8_000_000 {
-        s += 1;
-    }
-    let got = core::ptr::read_volatile((mmio + RIRBWP) as *const u16) & 0xFF != 0;
-    let resp = if got {
-        let rirb_va = mm::phys_to_virt(rirb);
-        core::ptr::read_volatile((rirb_va + 8) as *const u32) // RIRB[1] response dword
-    } else {
-        0
+    let rirb_va = mm::phys_to_virt(rirb);
+    // GET_PARAMETER verb = CAd<<28 | NID<<20 | 0xF00<<8 | param. Issue the verbs
+    // in sequence (CORB index 1.., RIRB tracks responses): VENDOR_ID, then walk
+    // the codec tree -- root SUBORDINATE_NODE_COUNT (function groups), the audio
+    // function group's TYPE, and its SUBORDINATE_NODE_COUNT (widgets).
+    let base = (codec << 28) | 0x000F_0000;
+    let vid = hda_verb(mmio, corb_va, rirb_va, 1, base | 0x00); // VENDOR_ID
+    let root_nc = hda_verb(mmio, corb_va, rirb_va, 2, base | 0x04); // SUBORDINATE_NODE_COUNT
+    let (vid, root_nc) = match (vid, root_nc) {
+        (Some(v), Some(n)) => (v, n),
+        _ => {
+            core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0);
+            core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0);
+            dma::dma_free(corb, 1);
+            dma::dma_free(rirb, 1);
+            serial_write(b"HDA: codec no-response\n");
+            return;
+        }
     };
+    let fg_start = (root_nc >> 16) & 0xFF; // first function-group node id
+    let fg_count = root_nc & 0xFF;
+    let fg_base = (codec << 28) | (fg_start << 20) | 0x000F_0000;
+    let fg_type = hda_verb(mmio, corb_va, rirb_va, 3, fg_base | 0x05).unwrap_or(0); // FUNCTION_GROUP_TYPE
+    let fg_widgets = hda_verb(mmio, corb_va, rirb_va, 4, fg_base | 0x04).unwrap_or(0); // node count
+    let widget_count = fg_widgets & 0xFF;
     // Stop the engines and release the rings.
     core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0);
     core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0);
     dma::dma_free(corb, 1);
     dma::dma_free(rirb, 1);
-    if !got {
-        serial_write(b"HDA: codec no-response\n");
-        return;
-    }
     serial_write(b"HDA: codec ");
     serial_write_hex(codec as u64);
     serial_write(b" vid=0x");
-    serial_write_hex(((resp >> 16) & 0xFFFF) as u64);
+    serial_write_hex(((vid >> 16) & 0xFFFF) as u64);
     serial_write(b" did=0x");
-    serial_write_hex((resp & 0xFFFF) as u64);
+    serial_write_hex((vid & 0xFFFF) as u64);
     serial_write(b" ok\n");
+    // Codec enumeration: function-group count, the AFG's type (1 = audio), and its
+    // widget count -- the codec topology a driver walks to find DAC/pin widgets.
+    serial_write(b"HDA: codec enum fgs=0x");
+    serial_write_hex(fg_count as u64);
+    serial_write(b" afgtype=0x");
+    serial_write_hex((fg_type & 0xFF) as u64);
+    serial_write(b" widgets=0x");
+    serial_write_hex(widget_count as u64);
+    serial_write(b" ok\n");
+}
+
+/// Submit one HDA verb at CORB index `idx` and return the RIRB response dword
+/// (bounded wait for the response). The CORB/RIRB DMA engines must be running.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_verb(mmio: u64, corb_va: u64, rirb_va: u64, idx: u16, verb: u32) -> Option<u32> {
+    core::ptr::write_volatile((corb_va + (idx as u64) * 4) as *mut u32, verb);
+    core::ptr::write_volatile((mmio + 0x48) as *mut u16, idx); // CORBWP
+    let mut s = 0u64;
+    while (core::ptr::read_volatile((mmio + 0x58) as *const u16) & 0xFF) < idx && s < 8_000_000 {
+        s += 1;
+    }
+    if (core::ptr::read_volatile((mmio + 0x58) as *const u16) & 0xFF) < idx {
+        return None;
+    }
+    Some(core::ptr::read_volatile((rirb_va + (idx as u64) * 8) as *const u32))
 }
 
 /// PCIe ECAM self-test (full-os guide Part II.7, PCIe ECAM): read PCI config
