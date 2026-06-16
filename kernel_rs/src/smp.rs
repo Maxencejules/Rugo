@@ -495,18 +495,18 @@ static AP_USER_CODE: [u8; 40] = [
     0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
 ];
 
-// Ring-3 payload for the REAL-R4-task migration test. It issues a genuine syscall
-// that resolves "which task am I" from PER-CPU state (sys_sysinfo op 14 ->
-// r4_current_smp), then reports the kernel-resolved tid so the BSP can confirm a
-// syscall ON THE AP saw the migrated task as its current — the per-CPU R4_CURRENT
-// mechanism working through the real syscall path (not just a side variable):
+// Ring-3 payload for the REAL-R4-task migration test. It issues a genuine, real
+// (not test-only) syscall -- getuid (sys_proc_ctl id 51, op 3) -- which reads
+// R4_TASKS[r4_current_smp()].uid: on an AP that resolves the migrated task's OWN
+// slot via per-CPU current, so the returned uid proves a real syscall indexed the
+// real task table's fields through per-CPU state on the AP. The task reports it:
 //   48 89 FB              mov rbx, rdi    ; save arg
-//   B8 3D 00 00 00        mov eax, 61     ; nr 61 = sys_sysinfo
-//   BF 0E 00 00 00        mov edi, 14     ; op 14 = SMP per-CPU current tid
+//   B8 33 00 00 00        mov eax, 51     ; nr 51 = sys_proc_ctl
+//   BF 03 00 00 00        mov edi, 3      ; op 3 = getuid
 //   31 F6                 xor esi, esi    ; a2 = 0
 //   31 D2                 xor edx, edx    ; a3 = 0
-//   CD 80                 int 0x80        ; rax = resolved current tid
-//   48 89 C6              mov rsi, rax    ; report resolved tid in RSI
+//   CD 80                 int 0x80        ; rax = R4_TASKS[per-cpu current].uid
+//   48 89 C6              mov rsi, rax    ; report resolved uid in RSI
 //   48 89 DF              mov rdi, rbx    ; restore arg
 //   48 01 FF              add rdi, rdi    ; rdi = 2*arg
 //   48 83 C7 01           add rdi, 1      ; rdi = 2*arg+1 (the ran-in-ring3 proof)
@@ -514,7 +514,7 @@ static AP_USER_CODE: [u8; 40] = [
 //   EB FE               1: jmp 1b
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 static AP_R4_CODE: [u8; 36] = [
-    0x48, 0x89, 0xFB, 0xB8, 0x3D, 0x00, 0x00, 0x00, 0xBF, 0x0E, 0x00, 0x00, 0x00, 0x31, 0xF6,
+    0x48, 0x89, 0xFB, 0xB8, 0x33, 0x00, 0x00, 0x00, 0xBF, 0x03, 0x00, 0x00, 0x00, 0x31, 0xF6,
     0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48, 0x83,
     0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
 ];
@@ -1147,6 +1147,9 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
     crate::r4_init_task(mig_tid, CODE_VA, STACK_TOP, 0);
     crate::R4_TASKS[mig_tid].pml4_phys = ucr3;
     crate::R4_TASKS[mig_tid].state = crate::R4State::Running;
+    // A sentinel uid so the task's getuid (which reads R4_TASKS[per-cpu current].uid
+    // on the AP) returns a value provably tied to THIS migrated slot.
+    crate::R4_TASKS[mig_tid].uid = 0x77;
     // Migrate its CR3 + ring-3 entry context (RIP/RSP from saved_frame) to the AP,
     // and publish its real tid as the per-CPU `current` the AP records.
     AP_USER_CR3.store(crate::R4_TASKS[mig_tid].pml4_phys, Ordering::Release);
@@ -1158,27 +1161,29 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
     let result = smp_dispatch_work(2, ARG);
     let cpu = AP_USER_CPU.load(Ordering::Acquire);
     let cur = AP_USER_CURRENT.load(Ordering::Acquire);
-    // sctid: the tid the task's OWN syscall (sys_sysinfo op 14 -> r4_current_smp)
-    // resolved while running on the AP. The task reported it in RSI -> AP_USER_SYSRET.
-    let sctid = AP_USER_SYSRET.load(Ordering::Acquire);
+    // scuid: the uid the task's OWN real syscall (getuid -> R4_TASKS[r4_current_smp()]
+    // .uid) resolved while running on the AP. The task reported it in RSI ->
+    // AP_USER_SYSRET. Equal to the sentinel iff per-CPU current indexed this slot.
+    let scuid = AP_USER_SYSRET.load(Ordering::Acquire);
     crate::R4_TASKS[mig_tid].state = crate::R4State::Dead; // retire the migrated task
     if result.is_some() {
         crate::mm::address_space_release(ucr3);
     }
     // Proof: the task ran in ring 3 on an AP (result, cpu), its per-CPU `current`
-    // round-tripped via GS (cur), AND a real syscall it executed on the AP resolved
-    // that same real tid from per-CPU state (sctid) -- the per-CPU R4_CURRENT
-    // mechanism working end-to-end through the syscall path for a real R4 task.
+    // round-tripped via GS (cur == real tid), AND a real syscall it executed on the
+    // AP (getuid) resolved its OWN slot's field through per-CPU current (scuid ==
+    // the sentinel uid) -- the per-CPU R4_CURRENT reroute working end to end through
+    // a real syscall, indexing the real task table, for a real R4 task.
     let ok = matches!(result, Some(v) if v == ARG * 2 + 1)
         && cpu >= 1
         && cur == mig_tid as u64
-        && sctid == mig_tid as u64;
+        && scuid == 0x77;
     serial_write(b"SMP: ap r4 migrate tid=0x");
     serial_write_hex(mig_tid as u64);
     serial_write(b" cur=0x");
     serial_write_hex(cur);
-    serial_write(b" sctid=0x");
-    serial_write_hex(sctid);
+    serial_write(b" scuid=0x");
+    serial_write_hex(scuid);
     if ok {
         serial_write(b" ok\n");
     } else {

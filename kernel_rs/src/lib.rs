@@ -5022,9 +5022,11 @@ cfg_r4! {
                 *frame.add(14) = tid as u64;
             }
             // op 3 = getuid (full-os guide Part IV.10 multi-user): the caller's
-            // user id.
+            // user id. Resolved via r4_current_smp so a task running on an AP reads
+            // ITS OWN slot's uid (per-CPU current), not the BSP scheduler cursor's;
+            // identical to R4_CURRENT on the bootstrap processor (full-os Part I.3).
             3 => {
-                *frame.add(14) = R4_TASKS[R4_CURRENT].uid as u64;
+                *frame.add(14) = R4_TASKS[r4_current_smp()].uid as u64;
             }
             // op 4 = setuid(a2): only root (uid 0) may change uid, enforcing the
             // privilege model. A non-root attempt is denied and audited.

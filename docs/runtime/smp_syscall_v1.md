@@ -65,18 +65,24 @@ outside `R4_NUM_TASKS` so the BSP scheduler never races it), migrates *that* tas
 CR3 + entry context to the AP, and publishes its **real tid** as the AP's per-CPU
 `current`.
 
-Its ring-3 payload (`AP_R4_CODE`) then issues a syscall that **reads back its own
-identity from per-CPU state**: `sys_sysinfo` **op 14** → `r4_current_smp()`, which
-returns `R4_CURRENT` on the BSP but the AP's own `gs:[16]` on an application
-processor. BSP-vs-AP is decided by **x2APIC ID** (`smp::is_bsp`, comparing the live
+Its ring-3 payload (`AP_R4_CODE`) then issues a **real, user-facing syscall** that
+reads its own identity from per-CPU state: **`getuid`** (`sys_proc_ctl` id 51, op 3),
+which now reads `R4_TASKS[r4_current_smp()].uid`. `r4_current_smp()` returns
+`R4_CURRENT` on the BSP but the AP's own `gs:[16]` on an application processor.
+BSP-vs-AP is decided by **x2APIC ID** (`smp::is_bsp`, comparing the live
 `IA32_X2APIC_APICID` to the BSP's, guarded by `SMP_AP_COUNT==0` so a uniprocessor
 never reads the MSR) — *not* GS, because the BSP's GS base is deliberately left
-unset (ring-3 TinyGo uses GS). The task reports the kernel-resolved tid; the BSP
-confirms it equals the migrated tid. Marker:
-`SMP: ap r4 migrate tid=0x1F cur=0x1F sctid=0x1F ok` — `cur` is the per-CPU current
-read back via GS, `sctid` is the tid a **real syscall resolved on the AP**. This is
-the per-CPU `R4_CURRENT` mechanism working end to end through the syscall path for a
-real scheduler task. Asserted by `tests/runtime/test_smp_runtime_v1.py`.
+unset (ring-3 TinyGo uses GS). The BSP stamps a sentinel uid (`0x77`) on the
+migrated slot; the task's `getuid` returns it; the BSP confirms `scuid == 0x77`.
+Marker: `SMP: ap r4 migrate tid=0x1F cur=0x1F scuid=0x77 ok` — `cur` is the per-CPU
+current read back via GS, `scuid` is the uid a **real syscall resolved by indexing
+the real task table through per-CPU current on the AP**. This is the per-CPU
+`R4_CURRENT` reroute working end to end through a real syscall (not a test op),
+indexing the real `R4_TASKS` fields, for a real scheduler task. The reroute is
+transparent on the BSP — `getuid` there is byte-for-byte unchanged
+(`r4_current_smp() == R4_CURRENT`), still covered by `test_userid_v1`. Asserted by
+`tests/runtime/test_smp_runtime_v1.py`. (`sys_sysinfo` op 14 returns the resolved
+tid via the same accessor.)
 
 ## Concurrent execution — two tasks, two CPUs, at once
 
@@ -93,11 +99,13 @@ multiple CPUs": a real ring-3 task on an AP and the BSP executing at the same ti
 
 ## v1 boundary / carry-forward
 
-- One syscall (`sys_sysinfo` op 14) now resolves `current` per-CPU on the AP. The
-  *rest* of the `R4_CURRENT`-touching surface (yield/exit/fork/futex/…) still reads
-  the global and runs only on the BSP. Routing the whole surface through
-  `r4_current_smp` (+ a lock on `R4_TASKS` mutations) so APs can run the full
-  syscall set concurrently is the remaining core rewrite, done incrementally.
+- `getuid` (a real syscall) and `sys_sysinfo` op 14 now resolve `current` per-CPU
+  (transparent on the BSP). The *rest* of the `R4_CURRENT`-touching surface
+  (yield/exit/fork/futex/…) still reads the global and runs only on the BSP. Routing
+  the remaining read sites through `r4_current_smp`, plus a lock on `R4_TASKS`
+  mutations for the write sites so APs can run the full syscall set concurrently, is
+  the remaining core rewrite, done incrementally (the read-site reroute is
+  mechanical and transparent; each batch is reviewed + gated).
 - The migrated R4 task is dispatched and run once as a boot self-test; the BSP still
   owns the live scheduler and the APs do not yet pull ready tasks from their run
   queues into ring 3 autonomously.
