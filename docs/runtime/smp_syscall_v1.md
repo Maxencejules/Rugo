@@ -99,13 +99,21 @@ multiple CPUs": a real ring-3 task on an AP and the BSP executing at the same ti
 
 ## v1 boundary / carry-forward
 
-- `getuid` (a real syscall) and `sys_sysinfo` op 14 now resolve `current` per-CPU
-  (transparent on the BSP). The *rest* of the `R4_CURRENT`-touching surface
-  (yield/exit/fork/futex/…) still reads the global and runs only on the BSP. Routing
-  the remaining read sites through `r4_current_smp`, plus a lock on `R4_TASKS`
+- `getuid` (a real read syscall), `sys_sysinfo` op 14 (read) and op 16 (a write that
+  bumps the caller's `yield_count`) now resolve `current` per-CPU (transparent on the
+  BSP) — the reroute works both directions, indexing the real `R4_TASKS` fields on an
+  AP. The *rest* of the `R4_CURRENT`-touching surface (yield/exit/fork/futex/…) still
+  reads the global and runs only on the BSP.
+- **The sandbox allowlist gate** (`syscall.rs`, runs on every syscall `nr < 64`) still
+  reads `R4_TASKS[R4_CURRENT]`, not `r4_current_smp()`. Routing it per-CPU is blocked
+  on a prerequisite: the *synthetic* `ap_user_selftest` uses `0x5A` as its per-CPU
+  `current`, which is **out of range** for an `R4_TASKS` index (len = `R4_MAX_TASKS`),
+  so indexing the table by per-CPU current there would be OOB. That synthetic test
+  must first migrate to a real `R4_TASKS` slot (as `ap_r4_migrate_selftest` already
+  does) before the gate can safely use `r4_current_smp`. Carry-forward.
+- Routing the remaining read sites through `r4_current_smp`, plus a lock on `R4_TASKS`
   mutations for the write sites so APs can run the full syscall set concurrently, is
-  the remaining core rewrite, done incrementally (the read-site reroute is
-  mechanical and transparent; each batch is reviewed + gated).
+  the remaining core rewrite, done incrementally (each batch reviewed + gated).
 - The migrated R4 task is dispatched and run once as a boot self-test; the BSP still
   owns the live scheduler and the APs do not yet pull ready tasks from their run
   queues into ring 3 autonomously.

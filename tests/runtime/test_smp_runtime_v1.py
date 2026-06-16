@@ -151,12 +151,12 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: ap user task ok",
         # A REAL R4 task (an R4_TASKS scheduler entry created via r4_init_task) was
         # migrated to the AP: the AP ran its CR3 + ring-3 context, tracked its real
-        # tid (slot 0x1F) as its per-CPU `current`, and serviced its syscalls. Its
-        # OWN real syscall -- getuid -> R4_TASKS[r4_current_smp()].uid -- resolved
-        # its own slot's uid from per-CPU state while running on the AP (scuid=0x77,
-        # the sentinel the BSP stamped on slot 0x1F): the per-CPU R4_CURRENT reroute
-        # working through a real syscall, indexing the real task table, on the AP.
-        "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F scuid=0x0000000000000077 ok",
+        # tid (slot 0x1F) as its per-CPU `current`, and serviced its syscalls. Two of
+        # its own real syscalls resolved its own slot through per-CPU state on the AP:
+        # a READ (getuid -> R4_TASKS[r4_current_smp()].uid == 0x77, the BSP's sentinel)
+        # and a WRITE (op 16 bumped this slot's yield_count -> scyc=0x1). The per-CPU
+        # R4_CURRENT reroute working both directions on the AP, indexing the real table.
+        "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F scuid=0x0000000000000077 scyc=0x0000000000000001 ok",
         # Concurrency: a ring-3 task on the AP and the BSP completed a rendezvous
         # (the AP signalled arrival + waited in-kernel for the BSP's ack while the
         # BSP, having dispatched ASYNCHRONOUSLY, supplied it). This can only close if

@@ -6465,6 +6465,17 @@ cfg_r4! {
             // returning 0xAC once both CPUs have met -- proof two tasks ran on two
             // CPUs at once. A no-op (0) on the BSP; see ap_r4_concurrent_selftest.
             15 => smp::smp_rendezvous_ap(),
+            // op 16 = bump the calling task's yield_count via per-CPU current and
+            // return the new value (full-os Part I.3): the WRITE counterpart of the
+            // op 14 read. On an AP it mutates THAT AP task's own R4_TASKS slot, so
+            // per-CPU current is proven to resolve correctly for writes to the real
+            // task table, not just reads. On the BSP it bumps the live caller (used
+            // only by the AP self-test, so harmless there).
+            16 => {
+                let t = r4_current_smp();
+                R4_TASKS[t].yield_count = R4_TASKS[t].yield_count.wrapping_add(1);
+                R4_TASKS[t].yield_count
+            }
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }

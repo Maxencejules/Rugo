@@ -48,6 +48,12 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
         // narrowed its mask via sys_sandbox is denied any syscall whose bit
         // is clear. Default mask is all-ones, so unsandboxed tasks are
         // unaffected.
+        // NOTE: this reads R4_CURRENT (the BSP scheduler cursor), not the
+        // per-CPU r4_current_smp. Routing it through per-CPU current is the
+        // remaining SMP reroute work, but it must wait until the AP self-tests
+        // use real R4_TASKS slots as their per-CPU current -- the synthetic
+        // ap_user_selftest uses 0x5A, which is out of range for an R4_TASKS index
+        // (carry-forward: see docs/runtime/smp_syscall_v1.md).
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         {
             if nr < 64 && (R4_TASKS[R4_CURRENT].sec_filter_mask >> nr) & 1 == 0 {

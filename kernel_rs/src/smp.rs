@@ -495,28 +495,30 @@ static AP_USER_CODE: [u8; 40] = [
     0x01, 0xFF, 0x48, 0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
 ];
 
-// Ring-3 payload for the REAL-R4-task migration test. It issues a genuine, real
-// (not test-only) syscall -- getuid (sys_proc_ctl id 51, op 3) -- which reads
-// R4_TASKS[r4_current_smp()].uid: on an AP that resolves the migrated task's OWN
-// slot via per-CPU current, so the returned uid proves a real syscall indexed the
-// real task table's fields through per-CPU state on the AP. The task reports it:
+// Ring-3 payload for the REAL-R4-task migration test. It issues two genuine, real
+// (not test-only) syscalls that both resolve the task's OWN slot via per-CPU current
+// on the AP: a WRITE -- sys_sysinfo op 16, which bumps R4_TASKS[r4_current_smp()]
+// .yield_count -- then a READ -- getuid (sys_proc_ctl id 51 op 3), R4_TASKS
+// [r4_current_smp()].uid. The BSP checks the write landed on the migrated slot (its
+// yield_count) and the read returned the slot's sentinel uid (reported in RSI):
 //   48 89 FB              mov rbx, rdi    ; save arg
+//   B8 3D 00 00 00        mov eax, 61     ; nr 61 = sys_sysinfo
+//   BF 10 00 00 00        mov edi, 16     ; op 16 = bump my yield_count (WRITE)
+//   31 F6 / 31 D2         xor esi/edx
+//   CD 80                 int 0x80
 //   B8 33 00 00 00        mov eax, 51     ; nr 51 = sys_proc_ctl
-//   BF 03 00 00 00        mov edi, 3      ; op 3 = getuid
-//   31 F6                 xor esi, esi    ; a2 = 0
-//   31 D2                 xor edx, edx    ; a3 = 0
+//   BF 03 00 00 00        mov edi, 3      ; op 3 = getuid (READ)
+//   31 F6 / 31 D2         xor esi/edx
 //   CD 80                 int 0x80        ; rax = R4_TASKS[per-cpu current].uid
 //   48 89 C6              mov rsi, rax    ; report resolved uid in RSI
-//   48 89 DF              mov rdi, rbx    ; restore arg
-//   48 01 FF              add rdi, rdi    ; rdi = 2*arg
-//   48 83 C7 01           add rdi, 1      ; rdi = 2*arg+1 (the ran-in-ring3 proof)
-//   CD 81                 int 0x81        ; report to ap_user_trap
-//   EB FE               1: jmp 1b
+//   48 89 DF / 48 01 FF / 48 83 C7 01     ; rdi = 2*arg+1 (ran-in-ring3 proof)
+//   CD 81 / EB FE
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static AP_R4_CODE: [u8; 36] = [
-    0x48, 0x89, 0xFB, 0xB8, 0x33, 0x00, 0x00, 0x00, 0xBF, 0x03, 0x00, 0x00, 0x00, 0x31, 0xF6,
-    0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48, 0x83,
-    0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
+static AP_R4_CODE: [u8; 52] = [
+    0x48, 0x89, 0xFB, 0xB8, 0x3D, 0x00, 0x00, 0x00, 0xBF, 0x10, 0x00, 0x00, 0x00, 0x31, 0xF6,
+    0x31, 0xD2, 0xCD, 0x80, 0xB8, 0x33, 0x00, 0x00, 0x00, 0xBF, 0x03, 0x00, 0x00, 0x00, 0x31,
+    0xF6, 0x31, 0xD2, 0xCD, 0x80, 0x48, 0x89, 0xC6, 0x48, 0x89, 0xDF, 0x48, 0x01, 0xFF, 0x48,
+    0x83, 0xC7, 0x01, 0xCD, 0x81, 0xEB, 0xFE,
 ];
 
 // Rendezvous state for the concurrent-execution proof: a ring-3 task running on an
@@ -1148,8 +1150,10 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
     crate::R4_TASKS[mig_tid].pml4_phys = ucr3;
     crate::R4_TASKS[mig_tid].state = crate::R4State::Running;
     // A sentinel uid so the task's getuid (which reads R4_TASKS[per-cpu current].uid
-    // on the AP) returns a value provably tied to THIS migrated slot.
+    // on the AP) returns a value provably tied to THIS migrated slot; yield_count
+    // starts at 0 so the task's op-16 WRITE (bump via per-CPU current) lands here.
     crate::R4_TASKS[mig_tid].uid = 0x77;
+    crate::R4_TASKS[mig_tid].yield_count = 0;
     // Migrate its CR3 + ring-3 entry context (RIP/RSP from saved_frame) to the AP,
     // and publish its real tid as the per-CPU `current` the AP records.
     AP_USER_CR3.store(crate::R4_TASKS[mig_tid].pml4_phys, Ordering::Release);
@@ -1165,25 +1169,32 @@ unsafe fn ap_r4_migrate_selftest() -> bool {
     // .uid) resolved while running on the AP. The task reported it in RSI ->
     // AP_USER_SYSRET. Equal to the sentinel iff per-CPU current indexed this slot.
     let scuid = AP_USER_SYSRET.load(Ordering::Acquire);
+    // The WRITE the task made through per-CPU current (op 16 bumped this slot's
+    // yield_count from 0). Read after the join's Acquire so the AP's write is visible.
+    let scyc = crate::R4_TASKS[mig_tid].yield_count;
     crate::R4_TASKS[mig_tid].state = crate::R4State::Dead; // retire the migrated task
     if result.is_some() {
         crate::mm::address_space_release(ucr3);
     }
     // Proof: the task ran in ring 3 on an AP (result, cpu), its per-CPU `current`
-    // round-tripped via GS (cur == real tid), AND a real syscall it executed on the
-    // AP (getuid) resolved its OWN slot's field through per-CPU current (scuid ==
-    // the sentinel uid) -- the per-CPU R4_CURRENT reroute working end to end through
-    // a real syscall, indexing the real task table, for a real R4 task.
+    // round-tripped via GS (cur == real tid), and TWO real syscalls it executed on
+    // the AP resolved its OWN slot through per-CPU current -- a READ (getuid ->
+    // scuid == the sentinel uid) and a WRITE (op 16 -> scyc, this slot's yield_count
+    // now 1). The per-CPU R4_CURRENT reroute working end to end, both directions,
+    // indexing the real task table, for a real R4 task.
     let ok = matches!(result, Some(v) if v == ARG * 2 + 1)
         && cpu >= 1
         && cur == mig_tid as u64
-        && scuid == 0x77;
+        && scuid == 0x77
+        && scyc == 1;
     serial_write(b"SMP: ap r4 migrate tid=0x");
     serial_write_hex(mig_tid as u64);
     serial_write(b" cur=0x");
     serial_write_hex(cur);
     serial_write(b" scuid=0x");
     serial_write_hex(scuid);
+    serial_write(b" scyc=0x");
+    serial_write_hex(scyc);
     if ok {
         serial_write(b" ok\n");
     } else {
