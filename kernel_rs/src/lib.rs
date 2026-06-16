@@ -8825,6 +8825,136 @@ unsafe fn hda_report(bdf: PciBdf) {
     serial_write(b" ver=0x");
     serial_write_hex(((vmaj << 8) | vmin) as u64);
     serial_write(b"\n");
+    hda_codec_selftest(mmio);
+}
+
+/// Bring the HDA controller up enough to round-trip ONE codec verb (full-os guide
+/// Part III audio): reset, set up the CORB (command) + RIRB (response) DMA rings,
+/// and issue GET_PARAMETER(node 0, VENDOR_ID) to the first present codec, reading
+/// its vendor/device id back from the RIRB. This is the codec-communication core
+/// every HDA driver needs (BDL stream descriptors + PCM playback build on it).
+/// A controller with no codec attached reports `HDA: no codec` (no-op, safe).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_codec_selftest(mmio: u64) {
+    const GCTL: u64 = 0x08;
+    const STATESTS: u64 = 0x0E;
+    const CORBLBASE: u64 = 0x40;
+    const CORBUBASE: u64 = 0x44;
+    const CORBWP: u64 = 0x48;
+    const CORBRP: u64 = 0x4A;
+    const CORBCTL: u64 = 0x4C;
+    const CORBSIZE: u64 = 0x4E;
+    const RIRBLBASE: u64 = 0x50;
+    const RIRBUBASE: u64 = 0x54;
+    const RIRBWP: u64 = 0x58;
+    const RINTCNT: u64 = 0x5A;
+    const RIRBCTL: u64 = 0x5C;
+    const RIRBSIZE: u64 = 0x5E;
+
+    // Reset: CRST=0, wait for halt, then CRST=1, wait for run.
+    let g = core::ptr::read_volatile((mmio + GCTL) as *const u32);
+    core::ptr::write_volatile((mmio + GCTL) as *mut u32, g & !1);
+    let mut s = 0u64;
+    while core::ptr::read_volatile((mmio + GCTL) as *const u32) & 1 != 0 && s < 2_000_000 {
+        s += 1;
+    }
+    core::ptr::write_volatile((mmio + GCTL) as *mut u32, 1);
+    s = 0;
+    while core::ptr::read_volatile((mmio + GCTL) as *const u32) & 1 == 0 && s < 2_000_000 {
+        s += 1;
+    }
+    if core::ptr::read_volatile((mmio + GCTL) as *const u32) & 1 == 0 {
+        serial_write(b"HDA: reset fail\n");
+        return;
+    }
+    // Wait (bounded) for a codec to assert its STATESTS bit after reset.
+    s = 0;
+    while core::ptr::read_volatile((mmio + STATESTS) as *const u16) == 0 && s < 4_000_000 {
+        s += 1;
+    }
+    let statests = core::ptr::read_volatile((mmio + STATESTS) as *const u16);
+    if statests == 0 {
+        serial_write(b"HDA: no codec\n");
+        return;
+    }
+    let codec = statests.trailing_zeros();
+
+    let corb = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            serial_write(b"HDA: dma fail\n");
+            return;
+        }
+    };
+    let rirb = match dma::dma_alloc(1) {
+        Some(p) => p,
+        None => {
+            dma::dma_free(corb, 1);
+            serial_write(b"HDA: dma fail\n");
+            return;
+        }
+    };
+    // Stop the ring DMA engines while we (re)configure them.
+    core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0);
+    core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0);
+    core::ptr::write_volatile((mmio + CORBSIZE) as *mut u8, 0x02); // 256 entries
+    core::ptr::write_volatile((mmio + RIRBSIZE) as *mut u8, 0x02);
+    core::ptr::write_volatile((mmio + CORBLBASE) as *mut u32, corb as u32);
+    core::ptr::write_volatile((mmio + CORBUBASE) as *mut u32, (corb >> 32) as u32);
+    core::ptr::write_volatile((mmio + RIRBLBASE) as *mut u32, rirb as u32);
+    core::ptr::write_volatile((mmio + RIRBUBASE) as *mut u32, (rirb >> 32) as u32);
+    // Reset the CORB read pointer (set bit 15, wait, clear, wait).
+    core::ptr::write_volatile((mmio + CORBRP) as *mut u16, 0x8000);
+    s = 0;
+    while core::ptr::read_volatile((mmio + CORBRP) as *const u16) & 0x8000 == 0 && s < 1_000_000 {
+        s += 1;
+    }
+    core::ptr::write_volatile((mmio + CORBRP) as *mut u16, 0x0000);
+    s = 0;
+    while core::ptr::read_volatile((mmio + CORBRP) as *const u16) & 0x8000 != 0 && s < 1_000_000 {
+        s += 1;
+    }
+    core::ptr::write_volatile((mmio + CORBWP) as *mut u16, 0);
+    // Reset the RIRB write pointer; one response per interrupt threshold.
+    core::ptr::write_volatile((mmio + RIRBWP) as *mut u16, 0x8000);
+    core::ptr::write_volatile((mmio + RINTCNT) as *mut u16, 1);
+    // Run both DMA engines.
+    core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0x02);
+    core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0x02);
+
+    // GET_PARAMETER(node 0, VENDOR_ID=0x00): verb = CAd<<28 | NID<<20 | 0xF00<<8 | param.
+    let verb = (codec << 28) | (0u32 << 20) | 0x000F_0000 | 0x00;
+    let corb_va = mm::phys_to_virt(corb);
+    core::ptr::write_volatile((corb_va + 4) as *mut u32, verb); // CORB[1]
+    core::ptr::write_volatile((mmio + CORBWP) as *mut u16, 1);
+    // Wait (bounded) for the response to land in RIRB[1] (RIRBWP advances to 1).
+    s = 0;
+    while core::ptr::read_volatile((mmio + RIRBWP) as *const u16) & 0xFF == 0 && s < 8_000_000 {
+        s += 1;
+    }
+    let got = core::ptr::read_volatile((mmio + RIRBWP) as *const u16) & 0xFF != 0;
+    let resp = if got {
+        let rirb_va = mm::phys_to_virt(rirb);
+        core::ptr::read_volatile((rirb_va + 8) as *const u32) // RIRB[1] response dword
+    } else {
+        0
+    };
+    // Stop the engines and release the rings.
+    core::ptr::write_volatile((mmio + CORBCTL) as *mut u8, 0);
+    core::ptr::write_volatile((mmio + RIRBCTL) as *mut u8, 0);
+    dma::dma_free(corb, 1);
+    dma::dma_free(rirb, 1);
+    if !got {
+        serial_write(b"HDA: codec no-response\n");
+        return;
+    }
+    serial_write(b"HDA: codec ");
+    serial_write_hex(codec as u64);
+    serial_write(b" vid=0x");
+    serial_write_hex(((resp >> 16) & 0xFFFF) as u64);
+    serial_write(b" did=0x");
+    serial_write_hex((resp & 0xFFFF) as u64);
+    serial_write(b" ok\n");
 }
 
 /// PCIe ECAM self-test (full-os guide Part II.7, PCIe ECAM): read PCI config

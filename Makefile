@@ -1037,6 +1037,9 @@ test-fat16-chain-v1: image-go
 test-hda-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_hda_v1.py -v --junitxml=$(OUT)/pytest-hda-v1.xml
 
+test-hda-codec-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_hda_codec_v1.py -v --junitxml=$(OUT)/pytest-hda-codec-v1.xml
+
 test-login-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_login_v1.py -v --junitxml=$(OUT)/pytest-login-v1.xml
 

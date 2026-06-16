@@ -165,16 +165,19 @@ single safe boot-verified slice and several have hard prerequisites.
    the compositor
    composites multiple surfaces to the framebuffer in **z-order**
    (`compositor_v1.md`, verified via QMP screendump), the PC speaker beeps
-   (`audio_v1.md`), and an Intel **HD Audio** controller is discovered + its
-   GCAP/version read (`hda_v1.md`, `-device intel-hda`). **An input event queue
+   (`audio_v1.md`), an Intel **HD Audio** controller is discovered + its
+   GCAP/version read, **and a codec verb round-trips over CORB/RIRB DMA rings**
+   (`hda_v1.md`: GET_PARAMETER(VENDOR_ID) -> `HDA: codec 0 vid=0x1AF4 ... ok` with
+   `-device hda-duplex`). **An input event queue
    DONE** (`mouse_v1.md`): the IRQ12 mouse path enqueues decoded events into a
    kernel ring that userspace drains via `sys_ioctl` op 5 (`input_poll`); a boot
    self-test round-trips the 16-byte kind/data/x/y wire encoding (`INPUT: event
    queue ok`). **Framebuffer alpha blending DONE** (`graphics_v1.md`,
    `fb_blit_rect_blend`): src-over compositing (`out = src*a + dst*(255-a)`),
    self-tested on a saved+restored pixel (`FBALPHA: blend ok`). What remains: HDA
-   CORB/RIRB rings + codec enumeration + **PCM playback** (on the DMA pool); a
-   keyboard-event producer + end-to-end QMP-injected poll. **Per-client pixel
+   full codec node/widget enumeration + stream BDL + **PCM playback** (on the DMA
+   pool, building on the CORB/RIRB verb path above); a keyboard-event producer +
+   end-to-end QMP-injected poll. **Per-client pixel
    surfaces DONE** (`graphics_v1.md`, `sys_ioctl` op 6 + `fb_blit_pixels`): a real
    per-pixel client bitmap composites to the framebuffer (vs op 4's solid rects),
    screendump-verified two-color (`surfprobe`/`test_surface_v1`). What remains:
