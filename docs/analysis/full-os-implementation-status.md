@@ -45,9 +45,10 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 ### Part IV — System services
 - **IV.9**: clock_gettime, nanosleep + scheduler idle/wait-queue, timerfd,
   power/ACPI (`clock_v1.md`, `power_v1.md`, …).
-- **IV.10**: getrandom (`rng_v1.md`), stack ASLR, sandbox (`sandbox_v1.md`),
-  security audit log (`audit_v1.md`), at-rest disk encryption
-  (`disk_crypt_v1.md`), multi-user getuid/setuid (`userid_v1.md`).
+- **IV.10**: getrandom + **RDRAND hardware seeding** (`rng_v1.md`), stack ASLR,
+  sandbox (`sandbox_v1.md`), security audit log (`audit_v1.md`), at-rest disk
+  encryption (`disk_crypt_v1.md`), multi-user getuid/setuid (`userid_v1.md`),
+  secure boot / measured PCR + HMAC (`secure_boot_v1.md`).
 
 ### Part V — Userspace & operations
 - dmesg ring (`dmesg_v1.md`), pty pair (`pty_v1.md`), /proc-style sysinfo,
@@ -226,11 +227,15 @@ single safe boot-verified slice and several have hard prerequisites.
    collapse), **longest-prefix-match routing** (`routing_v1.md`), and a
    **guest-initiated IPv6 neighbor cache / NUD** (`nud_v1.md`: the guest sends its
    own Neighbor Solicitation + caches the MAC from the returning advertisement)
-   exist. What remains: a real send window beyond one outstanding segment (cwnd is
-   computed but the single-segment send path does not yet clamp to it), fast
-   retransmit / fast recovery (3-dup-ACK); the full NUD state machine
-   (STALE/DELAY/PROBE timers) + DAD on the guest's own address; SLAAC / Router
-   Discovery for a global address; and per-route gateway resolution before send.
+   exist. **Also DONE (this item was previously mis-tracked as remaining):** fast
+   retransmit / fast recovery on 3 dup-ACKs (`tcp_fastrexmit_selftest`, op 16); a
+   real multi-segment **send window** clamped to min(cwnd, rwnd) with cumulative
+   ACK sliding (`tcp_sndwin_selftest`, op 19, `SndWindow`); SLAAC / Router
+   Discovery global-address formation (`slaac_selftest`, op 15); the guest NUD
+   (`nud_selftest`, op 14); IPv6 UDP-echo + TCP-listen (ops 17/18). What genuinely
+   remains: lazy NUD STALE/DELAY/PROBE *timers* + DAD on the guest's own address;
+   per-route gateway resolution before send; and wiring the SndWindow abstraction
+   into the live single-segment CONN send path.
 
 ## ABI op map (current)
 - `sys_net_query` (49): 1 DHCP, 2 DNS, 3 poll, 4 ICMP, 5 ARP, 6 TCP-listen,

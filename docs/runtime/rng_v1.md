@@ -1,9 +1,10 @@
 # getrandom / CSPRNG — contract v1
 
-Status: boot-verified via `make test-rng-v1`
-Source: `kernel_rs/src/lib.rs` (`RNG_STATE`, `rng_next`, `sys_getrandom`),
+Status: boot-verified via `make test-rng-v1` + `make test-rng-hwseed-v1`
+Source: `kernel_rs/src/lib.rs` (`RNG_STATE`, `RNG_HWSEED`, `rdrand64`,
+`rng_next`, `sys_getrandom`, `rng_hwseed_selftest`),
 `apps/coreutils/rngprobe.asm`.
-Proof: `tests/runtime/test_rng_v1.py`.
+Proof: `tests/runtime/test_rng_v1.py`, `tests/runtime/test_rng_hwseed_v1.py`.
 
 Full-OS implementation guide Part IV.10 (security), item 1 (RNG). The first
 slice of the security cascade; ASLR / sandbox / audit / secure-boot are
@@ -29,14 +30,21 @@ time and `copyout_user`-ed in ≤256-byte chunks.
 
 ## v1 boundary / carry-forward
 
-- **No RDRAND/RDSEED seeding.** v1 relies on clock + timing entropy; CPUID-
-  gated hardware seeding is carry-forward (kept out for portability across
-  QEMU CPU models). Output is therefore **not** cryptographic-grade yet.
-- **No `/dev/urandom` node** wired to the pool yet (carry-forward).
-- **No reseeding** from interrupt jitter / network handshakes yet.
+- **RDRAND hardware seeding DONE** (CPUID.1:ECX[30]-gated). When the CPU
+  advertises RDRAND, `rng_next`'s lazy init folds an `_rdrand64_step` value into
+  the seed, **XOR-mixed** with the CMOS/PIT soft seed so a spoofed or absent
+  RDRAND can only strengthen, never weaken, the entropy. On CPUs without it the
+  portable soft seed is used. `RDSEED` (the higher-quality entropy source) and
+  continuous **reseeding** from RDRAND/interrupt jitter remain carry-forward, as
+  does a `/dev/urandom` node wired to the pool.
 
 ## Acceptance
 
 `make test-rng-v1`: `probe rngprobe` draws two 16-byte buffers and asserts
 the output is not all zero (the pool produced bytes) and the two draws
 differ (the pool advances). Emits `RNGPROBE: ok`.
+
+`make test-rng-hwseed-v1`: booted on `-cpu qemu64,+rdrand` the kernel reports
+`RNG: hwseed rdrand ok` (RDRAND folded into the seed); on plain `-cpu qemu64` it
+reports `RNG: hwseed soft (no rdrand)` (portable fallback). Both paths confirm
+two distinct draws (never `RNG: hwseed FAIL`) and reach `RUGO: halt ok`.
