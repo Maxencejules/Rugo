@@ -222,6 +222,7 @@ dl-module: | $(OUT)
 RLIBC_CFLAGS = -ffreestanding -nostdlib -mabi=sysv -mno-red-zone \
                -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx \
                -fno-asynchronous-unwind-tables -fno-unwind-tables \
+               -ffunction-sections -fdata-sections \
                -fno-builtin -Ilibc/include -Wall -Wextra -O2 -c
 MINGW_LD = /c/mingw64/mingw64/bin/ld.exe
 
@@ -235,7 +236,7 @@ $(OUT)/app-hello-main-pe.o: apps/hello-c/hello.c libc/include/rugo/libc.h | $(OU
 	$(CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
-	$(MINGW_LD) -m i386pep --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
+	$(MINGW_LD) -m i386pep --gc-sections --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
 	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-hello.pe $@
 
 # --- Rust kernel --------------------------------------------------------------

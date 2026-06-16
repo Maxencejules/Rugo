@@ -20,6 +20,10 @@ def test_c_program_runs_against_rlibc(qemu_go_c4_runtime, find_in_order):
         "HELLOC: printf d=42 x=0xff s=works",
         "HELLOC: args=/data/etc/motd",
         "HELLOC: file[16]=from-c-with-love",
+        # rlibc v2 (Part V.11): errno is set on a failed syscall (EIO=5), and the
+        # string helpers work (strcpy+strcat -> "rugo", strchr -> "go", atoi).
+        "HELLOC: errno bad=-1 errno=5",
+        "HELLOC: v2 cpy=rugo chr=go atoi=-123",
         "HELLOC: done",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",

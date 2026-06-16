@@ -51,7 +51,13 @@ steps** for the subsystems the guide tags L/XL that remain as carry-forward.
 
 ### Part V — Userspace & operations
 - dmesg ring (`dmesg_v1.md`), pty pair (`pty_v1.md`), /proc-style sysinfo,
-  lseek (`lseek_v1.md`), rlibc v1 (POSIX-ish C library), multi-page exec.
+  lseek (`lseek_v1.md`), multi-page exec, package fetch over TCP
+  (`pkgfetch_v1.md`). **rlibc v2** (`rlibc_v2.md`): errno + string helpers
+  (strcpy/strncpy/strcat/strchr/atoi), unblocked by `--gc-sections` (each C app
+  links only what it uses, so the library can grow while `hello` stays under the
+  PE→ELF 2-page limit). The earlier rlibc-v2 attempt was reverted for crossing
+  that limit; section GC is the workaround. `FILE*` stdio + a real allocator +
+  apps that need >2 pages remain carry-forward (the underlying pe_to_elf limit).
 
 ## Carry-forward — the L/XL subsystems (with concrete next steps)
 

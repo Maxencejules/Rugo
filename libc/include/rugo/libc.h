@@ -78,6 +78,16 @@ size_t strlen(const char *s);
 int strcmp(const char *a, const char *b);
 int strncmp(const char *a, const char *b, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
+/* rlibc v2 string helpers */
+char *strcpy(char *dst, const char *src);
+char *strncpy(char *dst, const char *src, size_t n);
+char *strcat(char *dst, const char *src);
+char *strchr(const char *s, int c);
+int atoi(const char *s);
+
+/* ---- errno (rlibc v2) ---- */
+extern int errno;
+#define EIO 5
 
 /* ---- stdio subset (console or rugo_stdout_fd) ---- */
 int putchar(int c);
