@@ -47,21 +47,25 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
         // Sandbox allowlist (full-os guide Part IV.10): a task that has
         // narrowed its mask via sys_sandbox is denied any syscall whose bit
         // is clear. Default mask is all-ones, so unsandboxed tasks are
-        // unaffected.
-        // NOTE: this reads R4_CURRENT (the BSP scheduler cursor), not the
-        // per-CPU r4_current_smp. Routing it through per-CPU current is the
-        // remaining SMP reroute work, but it must wait until the AP self-tests
-        // use real R4_TASKS slots as their per-CPU current -- the synthetic
-        // ap_user_selftest uses 0x5A, which is out of range for an R4_TASKS index
-        // (carry-forward: see docs/runtime/smp_syscall_v1.md).
+        // unaffected. The calling task is resolved via r4_current_smp (full-os
+        // Part I.3): R4_CURRENT on the BSP (transparent), the AP's own per-CPU
+        // current on an application processor -- so the mask check consults the
+        // actually-running task on every core. The `cur < R4_MAX_TASKS` guard keeps
+        // it safe for the synthetic AP self-tests, whose per-CPU current is a marker
+        // value (e.g. 0x5A) rather than a real R4_TASKS index: an out-of-range
+        // current is treated as unsandboxed (mask check skipped). `nr < 64` is
+        // checked first, so r4_current_smp is only read on the gated path.
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         {
-            if nr < 64 && (R4_TASKS[R4_CURRENT].sec_filter_mask >> nr) & 1 == 0 {
-                serial_write(b"SANDBOX: deny nr=0x");
-                serial_write_hex(nr);
-                serial_write(b"\n");
-                *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
-                return;
+            if nr < 64 {
+                let cur = r4_current_smp();
+                if cur < R4_MAX_TASKS && (R4_TASKS[cur].sec_filter_mask >> nr) & 1 == 0 {
+                    serial_write(b"SANDBOX: deny nr=0x");
+                    serial_write_hex(nr);
+                    serial_write(b"\n");
+                    *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
+                    return;
+                }
             }
         }
         match nr {

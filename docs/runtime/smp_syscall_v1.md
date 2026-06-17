@@ -122,16 +122,15 @@ discipline the sibling self-tests use).
   BSP) — the reroute works both directions, indexing the real `R4_TASKS` fields on an
   AP. The *rest* of the `R4_CURRENT`-touching surface (yield/exit/fork/futex/…) still
   reads the global and runs only on the BSP.
-- **The sandbox allowlist gate** (`syscall.rs`, runs on every syscall `nr < 64`) still
-  reads `R4_TASKS[R4_CURRENT]`, not `r4_current_smp()`. Routing it per-CPU is blocked
-  on a prerequisite: the *synthetic* `ap_user_selftest` uses `0x5A` as its per-CPU
-  `current`, which is **out of range** for an `R4_TASKS` index (len = `R4_MAX_TASKS`),
-  so indexing the table by per-CPU current there would be OOB. That synthetic test
-  must first migrate to a real `R4_TASKS` slot (as `ap_r4_migrate_selftest` already
-  does) before the gate can safely use `r4_current_smp`. Carry-forward.
-- Routing the remaining read sites through `r4_current_smp`, plus a lock on `R4_TASKS`
-  mutations for the write sites so APs can run the full syscall set concurrently, is
-  the remaining core rewrite, done incrementally (each batch reviewed + gated).
+- **The sandbox allowlist gate** (`syscall.rs`, runs on every syscall `nr < 64`) now
+  resolves the caller via `r4_current_smp()` too, with a `cur < R4_MAX_TASKS` guard so
+  an out-of-range per-CPU current (the synthetic AP self-tests' marker ids like `0x5A`)
+  is treated as unsandboxed rather than indexing the table OOB. Transparent on the BSP
+  (`test_sandbox_v1` still denies correctly); per-CPU on an AP.
+- Routing the *remaining* `R4_CURRENT` read sites through `r4_current_smp`, plus a lock
+  on the live `R4_TASKS` spawn/exit mutations so APs can run the full syscall set
+  concurrently against the general task table, is the remaining core rewrite, done
+  incrementally (each batch reviewed + gated).
 - The autonomous run set is a dedicated boot self-test (reserved high slots, gated by
   `SMP_LIVE_MODE`), not yet the live general task table: the BSP's normal scheduler and
   the rest of the suite run with the mode off and are untouched. Wiring APs to pull
