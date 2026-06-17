@@ -100,10 +100,16 @@ def test_hda_codec_verb_roundtrip(find_in_order):
         # controller is DMAing the buffer to the codec (the real streaming path).
         "HDA: pcm lpib=0x",
         "ok",
+        # Userspace PCM path: the codec self-test leaves a persistent audio stream,
+        # and hda_audio_play (the core sys_ioctl op 7 / audio_write reaches) streams a
+        # PCM block through it -- proof ring-3 apps can play audio, not just the
+        # one-shot kernel self-test.
+        "AUDIO: play n=0x0000000000000200 ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "HDA: no codec" not in out
+    assert "AUDIO: play FAIL" not in out
     assert "HDA: codec no-response" not in out
     assert "HDA: reset fail" not in out
     assert "HDA: dma fail" not in out

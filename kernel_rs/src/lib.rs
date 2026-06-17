@@ -1934,18 +1934,36 @@ cfg_m3! {
     unsafe fn sys_fs_ctl_v1(op: u64, path_ptr: u64, arg: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if op == 6 {
-            // lseek(fd, offset): SEEK_SET (full-os guide Part V.11 rlibc).
-            // path_ptr carries the fd, arg the absolute offset. Owner-gated,
-            // no storage cap (a generic fd operation). Returns the new offset.
-            let fd = path_ptr as usize;
+            // lseek(fd, offset, whence) (full-os guide Part V.11 rlibc). The fd is the
+            // low 32 bits of path_ptr and the whence is bits [39:32]: 0 = SEEK_SET,
+            // 1 = SEEK_CUR (relative to the current offset), 2 = SEEK_END (relative to
+            // the file size). arg is the offset/delta (added with wrapping, so a
+            // two's-complement negative delta seeks backwards). Owner-gated, no
+            // storage cap (a generic fd operation). Returns the new absolute offset.
+            // SEEK_SET keeps the historical path_ptr==fd encoding (whence bits zero).
+            let fd = (path_ptr & 0xFFFF_FFFF) as usize;
+            let whence = ((path_ptr >> 32) & 0xFF) as u8;
             if fd < 3 || fd >= M8_FD_MAX || M8_FD_TABLE[fd].kind == M8FdKind::Free {
                 return ERR;
             }
             if !r4_fd_owner_ok(fd) {
                 return ERR;
             }
-            M8_FD_TABLE[fd].offset = arg as usize;
-            return arg;
+            let new = match whence {
+                0 => arg as usize,                                          // SEEK_SET
+                1 => M8_FD_TABLE[fd].offset.wrapping_add(arg as usize),     // SEEK_CUR
+                2 => {
+                    // SEEK_END needs a file size, which only a VFS file carries.
+                    if M8_FD_TABLE[fd].kind != M8FdKind::VfsFile {
+                        return ERR;
+                    }
+                    let node = M8_FD_VFS_NODE[fd] as usize;
+                    vfs::node_size(node).wrapping_add(arg as usize)
+                }
+                _ => return ERR,
+            };
+            M8_FD_TABLE[fd].offset = new;
+            return new as u64;
         }
         if !r4_current_has_cap(R4_TASK_CAP_STORAGE) || !vfs::vfs_ready() {
             return ERR;
@@ -5078,41 +5096,49 @@ cfg_r4! {
         }
     }
 
-    /// djb2 string hash (used for the demo password database). NOT a secure
-    /// password hash — a real system needs a salted KDF (bcrypt/argon2); this
-    /// demonstrates the credential-verify flow, like the demo disk cipher.
-    const fn djb2(s: &[u8]) -> u64 {
-        let mut h: u64 = 5381;
-        let mut i = 0;
-        while i < s.len() {
-            h = (h << 5).wrapping_add(h).wrapping_add(s[i] as u64); // h*33 + c
-            i += 1;
-        }
-        h
-    }
-
-    /// One account in the demo password database (full-os guide Part IV.10).
+    /// One account in the credential database (full-os guide Part IV.10). The
+    /// password is stored as its SHA-256 digest (`sha256.rs`), never the cleartext.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     struct PasswdEntry {
         name: [u8; 8],
         uid: u8,
-        pw_hash: u64,
+        pw_hash: [u8; 32],
     }
 
-    /// The password database: root (uid 0) and a regular user (uid 100). Hashes
-    /// are computed at compile time from the cleartext via `djb2`, so the table
-    /// is self-documenting and correct by construction.
+    /// The credential database: root (uid 0) and a regular user (uid 100). The
+    /// stored hashes are the SHA-256 digests of the cleartext — `sha256(b"toor")`
+    /// and `sha256(b"pass")` — a real cryptographic password hash (replacing the
+    /// prior djb2 demo). `login_verify` recomputes `sha256(pw)` and compares, so the
+    /// cleartext is never stored. (A per-user salt + iterated KDF, and moving the db
+    /// to a root-owned `/etc/passwd` VFS file, are the next hardening steps.)
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static PASSWD: [PasswdEntry; 2] = [
-        PasswdEntry { name: *b"root\0\0\0\0", uid: 0, pw_hash: djb2(b"toor") },
-        PasswdEntry { name: *b"user\0\0\0\0", uid: 100, pw_hash: djb2(b"pass") },
+        PasswdEntry {
+            name: *b"root\0\0\0\0",
+            uid: 0,
+            pw_hash: [
+                0xCE, 0x5C, 0xA6, 0x73, 0xD1, 0x3B, 0x36, 0x11, 0x8D, 0x54, 0xA7, 0xCF, 0x13,
+                0xAE, 0xB0, 0xCA, 0x01, 0x23, 0x83, 0xBF, 0x77, 0x1E, 0x71, 0x34, 0x21, 0xB4,
+                0xD1, 0xFD, 0x84, 0x1F, 0x53, 0x9A,
+            ],
+        },
+        PasswdEntry {
+            name: *b"user\0\0\0\0",
+            uid: 100,
+            pw_hash: [
+                0xD7, 0x4F, 0xF0, 0xEE, 0x8D, 0xA3, 0xB9, 0x80, 0x6B, 0x18, 0xC8, 0x77, 0xDB,
+                0xF2, 0x9B, 0xBD, 0xE5, 0x0B, 0x5B, 0xD8, 0xE4, 0xDA, 0xD7, 0xA3, 0xA7, 0x25,
+                0x00, 0x0F, 0xEB, 0x82, 0xE8, 0xF1,
+            ],
+        },
     ];
 
     /// Verify a username/password against `PASSWD`; returns the account uid on a
-    /// match. Constant-membership scan; the hash is the demo `djb2`.
+    /// match. The password is SHA-256 hashed and compared to the stored digest, so
+    /// the cleartext is never held in the table.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn login_verify(name: &[u8; 8], pw: &[u8]) -> Option<u8> {
-        let h = djb2(pw);
+        let h = crate::sha256::sha256(pw);
         let mut i = 0usize;
         while i < PASSWD.len() {
             if PASSWD[i].name == *name && PASSWD[i].pw_hash == h {
@@ -5690,6 +5716,24 @@ cfg_r4! {
                 } else {
                     ERR
                 }
+            }
+            // op 7 = audio_write (full-os guide Part III audio): play a block of
+            // 16-bit PCM from userspace through the HD Audio output stream. a2 =
+            // pointer to PCM bytes, a3 = length. Copies the samples in and streams
+            // them to the codec (DMA). Returns the byte count accepted, or 0 if no
+            // audio device is ready / the stream did not progress.
+            7 => {
+                const AUDIO_MAX: usize = AUDIO_BUF_BYTES as usize;
+                let len = a3 as usize;
+                let n = if len > AUDIO_MAX { AUDIO_MAX } else { len };
+                if n == 0 {
+                    return 0;
+                }
+                let mut buf = [0u8; AUDIO_MAX];
+                if copyin_user(&mut buf[..n], a2, n).is_err() {
+                    return ERR;
+                }
+                hda_audio_play(&buf[..n]) as u64
             }
             _ => ERR,
         }
@@ -9155,6 +9199,9 @@ unsafe fn hda_report(bdf: PciBdf) {
     serial_write_hex(((vmaj << 8) | vmin) as u64);
     serial_write(b"\n");
     hda_codec_selftest(mmio);
+    // With a duplex codec present, the codec self-test leaves a persistent audio
+    // stream; exercise the userspace audio_write core over it (full-os Part III).
+    hda_audio_selftest();
 }
 
 /// Bring the HDA controller up enough to round-trip ONE codec verb (full-os guide
@@ -9348,12 +9395,29 @@ unsafe fn hda_verb(mmio: u64, corb_va: u64, rirb_va: u64, idx: u16, verb: u32) -
     Some(core::ptr::read_volatile((rirb_va + (idx as u64) * 8) as *const u32))
 }
 
+// Persistent HD Audio output context (full-os guide Part III audio): once the PCM
+// self-test proves the BDL -> SD0 -> codec path on a real codec, the buffer + BDL +
+// SD0 programming + codec binding are KEPT (not torn down) so userspace can submit
+// PCM through them via sys_ioctl op 7 (audio_write) without re-initialising the
+// codec. AUDIO_READY is set only when a real duplex codec streamed successfully.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const AUDIO_BUF_BYTES: u64 = 4096;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut AUDIO_READY: bool = false;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut AUDIO_SD: u64 = 0; // SD0 register base
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut AUDIO_BUF_VA: u64 = 0; // PCM sample buffer (kernel VA)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut AUDIO_BDL_PHYS: u64 = 0; // Buffer Descriptor List (physical)
+
 /// HD Audio PCM playback self-test (full-os guide Part III audio): the actual
 /// streaming path a sound driver uses. Build a buffer of PCM samples + a Buffer
 /// Descriptor List, point output stream descriptor SD0 at it, associate the DAC
 /// converter with that stream, run the stream, and confirm the controller is DMAing
 /// the buffer to the codec by watching SDnLPIB (the link position in the buffer)
-/// advance. This is the proof that the BDL -> stream-DMA -> codec path works.
+/// advance. This is the proof that the BDL -> stream-DMA -> codec path works. On
+/// success it KEEPS the buffer/BDL/SD0 as the persistent audio context (see above).
 ///
 /// Requires the CORB/RIRB engines running (for the codec config verbs, continuing
 /// the verb index from `start_idx`) and a real DAC node (`dac` != 0). The wait for
@@ -9478,17 +9542,129 @@ unsafe fn hda_pcm_selftest(
         }
         core::hint::spin_loop();
     }
-    // Stop the stream and release the buffers.
+    // Stop the stream. On success, KEEP the buffer + BDL + SD0 programming + codec
+    // binding as the persistent audio context (the codec stays bound to stream 1) so
+    // sys_ioctl op 7 (audio_write) can stream userspace PCM through it without
+    // re-initialising the codec. On no-progress, release everything.
     let ctl1 = core::ptr::read_volatile(sd as *const u8);
     core::ptr::write_volatile(sd as *mut u8, ctl1 & !0x02);
-    dma::dma_free(bdl, 1);
-    dma::dma_free(buf, 1);
     if lpib != lpib0 {
+        AUDIO_SD = sd;
+        AUDIO_BUF_VA = buf_va;
+        AUDIO_BDL_PHYS = bdl;
+        AUDIO_READY = true;
         serial_write(b"HDA: pcm lpib=0x");
         serial_write_hex(lpib as u64);
         serial_write(b" ok\n");
     } else {
+        dma::dma_free(bdl, 1);
+        dma::dma_free(buf, 1);
         serial_write(b"HDA: pcm no-progress\n");
+    }
+}
+
+/// Play one block of 16-bit PCM through the persistent HD Audio output stream
+/// (full-os guide Part III audio): the reusable core a userspace app reaches via
+/// sys_ioctl op 7. Copies up to AUDIO_BUF_BYTES of `samples` into the stream buffer
+/// (zero-padding the remainder to silence), resets + reprograms SD0 for the buffer,
+/// runs it, and waits (wall-clock bounded) for the controller to DMA it (SDnLPIB
+/// advances). Returns the sample-byte count accepted, or 0 if no audio device is
+/// ready or the stream did not progress.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_audio_play(samples: &[u8]) -> usize {
+    if !AUDIO_READY {
+        return 0;
+    }
+    let cap = AUDIO_BUF_BYTES as usize;
+    let n = if samples.len() > cap { cap } else { samples.len() };
+    let dst = AUDIO_BUF_VA as *mut u8;
+    let mut i = 0usize;
+    while i < n {
+        core::ptr::write_volatile(dst.add(i), samples[i]);
+        i += 1;
+    }
+    while i < cap {
+        core::ptr::write_volatile(dst.add(i), 0); // pad with silence
+        i += 1;
+    }
+    let sd = AUDIO_SD;
+    const FMT: u16 = 0x0011; // 48 kHz / 16-bit / 2 channels (matches the codec binding)
+    const STREAM: u8 = 1;
+    // Reset SD0 (SRST), then reprogram it -- the BDL still points at the buffer halves.
+    core::ptr::write_volatile(sd as *mut u8, 0x01);
+    let mut s = 0u64;
+    while core::ptr::read_volatile(sd as *const u8) & 0x01 == 0 && s < 1_000_000 {
+        s += 1;
+    }
+    core::ptr::write_volatile(sd as *mut u8, 0x00);
+    s = 0;
+    while core::ptr::read_volatile(sd as *const u8) & 0x01 != 0 && s < 1_000_000 {
+        s += 1;
+    }
+    core::ptr::write_volatile((sd + 0x03) as *mut u8, 0x1C); // clear status (RW1C)
+    core::ptr::write_volatile((sd + 0x18) as *mut u32, AUDIO_BDL_PHYS as u32); // BDPL
+    core::ptr::write_volatile((sd + 0x1C) as *mut u32, (AUDIO_BDL_PHYS >> 32) as u32); // BDPU
+    core::ptr::write_volatile((sd + 0x08) as *mut u32, AUDIO_BUF_BYTES as u32); // CBL
+    core::ptr::write_volatile((sd + 0x0C) as *mut u16, 1); // LVI = entries - 1
+    core::ptr::write_volatile((sd + 0x12) as *mut u16, FMT); // SDnFMT
+    core::ptr::write_volatile((sd + 0x02) as *mut u8, STREAM << 4); // stream number
+    // Run + watch SDnLPIB advance (the DMA proof). Wall-clock bounded.
+    let lpib0 = core::ptr::read_volatile((sd + 0x04) as *const u32);
+    let ctl0 = core::ptr::read_volatile(sd as *const u8);
+    core::ptr::write_volatile(sd as *mut u8, ctl0 | 0x02);
+    let tsc_hz = tsc_hz_via_pit();
+    let tsc_start = core::arch::x86_64::_rdtsc();
+    let tsc_budget = if tsc_hz != 0 { tsc_hz * 2 } else { u64::MAX };
+    let iter_cap: u64 = if tsc_hz != 0 { 200_000_000 } else { 20_000_000 };
+    let mut lpib = lpib0;
+    let mut k = 0u64;
+    loop {
+        lpib = core::ptr::read_volatile((sd + 0x04) as *const u32);
+        if lpib != lpib0 {
+            break;
+        }
+        k += 1;
+        if k & 0x3F == 0 && core::arch::x86_64::_rdtsc().wrapping_sub(tsc_start) > tsc_budget {
+            break;
+        }
+        if k > iter_cap {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let ctl1 = core::ptr::read_volatile(sd as *const u8);
+    core::ptr::write_volatile(sd as *mut u8, ctl1 & !0x02); // stop
+    if lpib != lpib0 {
+        n
+    } else {
+        0
+    }
+}
+
+/// Userspace-PCM path self-test (full-os guide Part III audio): exercise the exact
+/// `hda_audio_play` core a ring-3 app reaches through sys_ioctl op 7, with a
+/// kernel-built PCM block, and confirm the controller streamed it. Runs only when a
+/// real duplex codec is present (AUDIO_READY). Marker `AUDIO: play n=0x.. ok`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn hda_audio_selftest() {
+    if !AUDIO_READY {
+        return;
+    }
+    let mut pcm = [0u8; 512];
+    let mut i = 0usize;
+    while i + 1 < pcm.len() {
+        let v: u16 = if (i / 64) & 1 == 0 { 0x3000 } else { 0xD000 };
+        pcm[i] = (v & 0xFF) as u8;
+        pcm[i + 1] = (v >> 8) as u8;
+        i += 2;
+    }
+    let n = hda_audio_play(&pcm);
+    if n == pcm.len() {
+        serial_write(b"AUDIO: play n=0x");
+        serial_write_hex(n as u64);
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b"AUDIO: play FAIL\n");
     }
 }
 

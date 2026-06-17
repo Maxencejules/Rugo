@@ -75,10 +75,25 @@ never wedges). The test attaches a null audio backend (`-audiodev none`,
 `hda-duplex,audiodev=...`) whose timer drives the stream deterministically.
 `make test-hda-codec-v1`.
 
+## Userspace PCM (`sys_ioctl` op 7 / `hda_audio_play`)
+
+On success the self-test **keeps** the buffer + BDL + SD0 programming + codec binding
+as a persistent audio context (`AUDIO_READY`) instead of tearing it down, so ring-3
+apps can play sound without re-initialising the codec. `sys_ioctl` (id 56) **op 7 =
+audio_write** (`a2` = PCM pointer, `a3` = length) `copyin_user`s up to one buffer of
+16-bit PCM and calls `hda_audio_play`, which copies the samples into the stream
+buffer (zero-padding to silence), reprograms + runs SD0, and waits (wall-clock
+bounded) for SDnLPIB to advance — returning the byte count accepted (0 if no audio
+device or the stream stalled). `hda_audio_selftest` drives that exact core with a
+kernel-built block at boot: `AUDIO: play n=0x200 ok`. This is the userspace PCM
+submission path (the headline Part III audio deliverable), on top of the full HD
+Audio driver rather than the guide's simpler AC'97/virtio-snd suggestion.
+
 ## v1 boundary / carry-forward
 
 - **Detection + capability read + CORB/RIRB codec verb round-trip + codec-tree
-  enumeration + PCM stream playback** (BDL → SD0 DMA → codec, LPIB-verified). What
+  enumeration + PCM stream playback + a userspace audio_write path** (sys_ioctl
+  op 7). What
   remains: a `sys_audio_write` syscall exposing playback to userspace, input/capture
   (ADC streams), interrupt-driven BDL completion (BCIS) instead of LPIB polling, and
   per-widget routing (CONNECTION_LIST / pin config for real output paths).
