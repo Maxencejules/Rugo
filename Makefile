@@ -884,6 +884,9 @@ test-exec-v1: image-go
 test-vfs-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_vfs_runtime_v1.py -v --junitxml=$(OUT)/pytest-vfs-v1.xml
 
+test-vfs-journal-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_vfs_journal_v1.py -v --junitxml=$(OUT)/pytest-vfs-journal-v1.xml
+
 test-tcp-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_runtime_v1.py -v --junitxml=$(OUT)/pytest-tcp-v1.xml
 

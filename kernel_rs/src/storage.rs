@@ -416,6 +416,10 @@ pub(crate) unsafe fn r4_storage_boot_probe() {
         r4_storage_runtime_load(R4StorageRuntimeFile::PkgState);
         r4_storage_runtime_load(R4StorageRuntimeFile::Platform);
         #[cfg(not(feature = "compat_real_test"))]
-        crate::vfs::vfs_mount();
+        {
+            crate::vfs::vfs_mount();
+            // Prove the SimpleFS metadata journal's crash-recovery path (full-os II.5).
+            let _ = crate::vfs::vfs_journal_selftest();
+        }
     }
 }

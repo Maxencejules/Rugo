@@ -12,9 +12,12 @@
 //   518..:    512-byte data blocks (block i lives at sector 518 + i)
 //
 // Files are contiguously allocated in v1; growth past the current run
-// reallocates and copies. Mutations are write-through: the cached node
-// table / bitmap sector is rewritten before the call returns. Crash
-// journaling is a documented carry-forward.
+// reallocates and copies. METADATA writes (node table, bitmap, superblock) are
+// crash-consistent via a write-ahead journal (see the journal region below):
+// vfs_write/vfs_mkdir/vfs_unlink wrap their metadata flushes in a transaction
+// that is committed atomically and replayed at mount after a crash. Data-block
+// writes stay write-through (ordered mode) -- a torn data write corrupts only a
+// file's bytes, never the directory tree or allocation map.
 
 #![allow(dead_code)]
 
@@ -66,14 +69,14 @@ unsafe fn write_sector(sector: u64, src: &[u8]) -> bool {
 unsafe fn flush_node_sector(node_idx: usize) -> bool {
     let per = 512 / NODE_SIZE;
     let s = node_idx / per;
-    write_sector(
+    jwrite(
         BASE_SECTOR + 1 + s as u64,
         &VFS.nodes[s * 512..(s + 1) * 512],
     )
 }
 
 unsafe fn flush_bitmap() -> bool {
-    write_sector(BITMAP_SECTOR, &VFS.bitmap)
+    jwrite(BITMAP_SECTOR, &VFS.bitmap)
 }
 
 unsafe fn flush_superblock() -> bool {
@@ -82,7 +85,214 @@ unsafe fn flush_superblock() -> bool {
     sb[4..8].copy_from_slice(&2u32.to_le_bytes());
     let used = node_used() as u32;
     sb[8..12].copy_from_slice(&used.to_le_bytes());
-    write_sector(BASE_SECTOR, &sb)
+    jwrite(BASE_SECTOR, &sb)
+}
+
+// ---- Write-ahead journal (full-os guide Part II.5, design #1) ----
+// Crash-consistency for SimpleFS METADATA writes (the node table, bitmap, and
+// superblock). A mutation opens a transaction; every metadata flush it makes is
+// logged to the journal region (the 512-byte payload to a journal data slot, the
+// home sector recorded in the header) instead of going straight home. txn_commit
+// writes the header with `committed = 1` (the atomic commit point), applies the
+// logged sectors to their homes, then clears the flag. A crash between commit and
+// clear leaves the header committed; `replay_journal` at mount re-applies the
+// logged sectors (idempotent), so the on-disk structure is never left with a
+// half-finished multi-sector metadata update. Data-block writes stay write-through
+// (ordered-mode style): a torn data write corrupts only that file's bytes, never
+// the directory tree / allocation map, and journaling only metadata keeps the
+// cached-write path free of stale-read hazards. Journal region is clear of the VFS
+// data blocks (which end at sector 1541) and the standalone-journal/cache scratch.
+const J_HEADER: u64 = 1543; // journal header sector
+const J_DATA: u64 = J_HEADER + 1; // journal data slots (1544..)
+const J_MAX: usize = 8; // max metadata sectors per transaction (txns touch <=3)
+const J_MAGIC: u32 = 0x31304A56; // "VJ01"
+
+struct JTxn {
+    active: bool,
+    overflow: bool,
+    count: usize,
+    targets: [u64; J_MAX],
+    // Snapshot of the in-RAM metadata caches taken at txn_begin (before the mutation
+    // touches them). The journal rolls back the on-DISK sectors on abort; these roll
+    // back the RAM caches in lockstep, so an aborted mutation leaves VFS.nodes /
+    // VFS.bitmap exactly matching the (untouched) disk -- no RAM/disk divergence.
+    nodes_snap: [u8; MAX_NODES * NODE_SIZE],
+    bitmap_snap: [u8; BLOCK_SIZE],
+}
+
+static mut JTXN: JTxn = JTxn {
+    active: false,
+    overflow: false,
+    count: 0,
+    targets: [0; J_MAX],
+    nodes_snap: [0; MAX_NODES * NODE_SIZE],
+    bitmap_snap: [0; BLOCK_SIZE],
+};
+
+/// Open a transaction. MUST be called BEFORE the mutation modifies VFS.nodes /
+/// VFS.bitmap, so the snapshot captures the pristine pre-mutation cache.
+unsafe fn txn_begin() {
+    JTXN.active = true;
+    JTXN.overflow = false;
+    JTXN.count = 0;
+    JTXN.nodes_snap.copy_from_slice(&VFS.nodes);
+    JTXN.bitmap_snap.copy_from_slice(&VFS.bitmap);
+}
+
+/// Log one metadata sector write to the open transaction (payload -> a journal
+/// slot, home sector recorded). With no transaction open, writes straight through
+/// (so format-time / replay-time writes are unaffected).
+unsafe fn jwrite(sector: u64, data: &[u8]) -> bool {
+    if !JTXN.active {
+        return write_sector(sector, data);
+    }
+    if JTXN.count >= J_MAX {
+        JTXN.overflow = true;
+        return false;
+    }
+    let slot = J_DATA + JTXN.count as u64;
+    if !write_sector(slot, data) {
+        JTXN.overflow = true;
+        return false;
+    }
+    JTXN.targets[JTXN.count] = sector;
+    JTXN.count += 1;
+    true
+}
+
+/// Abort the open transaction: invalidate any journal header (so a stale committed
+/// flag can't replay), drop the buffered writes, and ROLL BACK the in-RAM caches to
+/// the txn_begin snapshot. Nothing was applied to the FS homes, so disk is exactly as
+/// it was before txn_begin; restoring the caches keeps RAM in sync with it.
+unsafe fn txn_abort() {
+    let clr = [0u8; 512];
+    let _ = write_sector(J_HEADER, &clr);
+    VFS.nodes.copy_from_slice(&JTXN.nodes_snap);
+    VFS.bitmap.copy_from_slice(&JTXN.bitmap_snap);
+    JTXN.active = false;
+    JTXN.count = 0;
+    JTXN.overflow = false;
+}
+
+/// Commit the open transaction atomically: write the journal header with
+/// `committed = 1` (THE commit point), apply every logged sector to its home, then
+/// clear the header. Returns false (after a clean abort that applies nothing) if the
+/// transaction overflowed or the header write failed.
+unsafe fn txn_commit() -> bool {
+    if !JTXN.active {
+        return true;
+    }
+    if JTXN.overflow {
+        txn_abort();
+        return false;
+    }
+    let n = JTXN.count;
+    let mut hdr = [0u8; 512];
+    hdr[0..4].copy_from_slice(&J_MAGIC.to_le_bytes());
+    hdr[4..8].copy_from_slice(&1u32.to_le_bytes()); // committed
+    hdr[8..12].copy_from_slice(&(n as u32).to_le_bytes());
+    let mut i = 0;
+    while i < n {
+        hdr[12 + i * 4..16 + i * 4].copy_from_slice(&(JTXN.targets[i] as u32).to_le_bytes());
+        i += 1;
+    }
+    if !write_sector(J_HEADER, &hdr) {
+        txn_abort();
+        return false;
+    }
+    // Apply: copy each journal slot to its home sector.
+    let mut ok = true;
+    i = 0;
+    while i < n {
+        let mut buf = [0u8; 512];
+        ok = ok
+            && read_sector(J_DATA + i as u64, &mut buf)
+            && write_sector(JTXN.targets[i], &buf);
+        i += 1;
+    }
+    // Clear the committed flag ONLY if every apply succeeded. If an apply failed
+    // partway (a device I/O error), leave the header committed so the next mount's
+    // replay_journal re-drives the remaining (idempotent) applies -- erasing it here
+    // would strand a half-applied metadata update with no recovery record. The RAM
+    // caches already hold the intended state, which replay makes the disk match.
+    if ok {
+        let clr = [0u8; 512];
+        let _ = write_sector(J_HEADER, &clr);
+    }
+    JTXN.active = false;
+    ok
+}
+
+/// At mount: if the journal header is committed (a crash happened between the commit
+/// point and the clear), re-apply the logged metadata sectors to their homes, then
+/// clear the header. Idempotent. Returns the number of sectors replayed.
+unsafe fn replay_journal() -> usize {
+    let mut hdr = [0u8; 512];
+    if !read_sector(J_HEADER, &mut hdr) {
+        return 0;
+    }
+    let magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+    let committed = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
+    if magic != J_MAGIC || committed != 1 {
+        return 0;
+    }
+    let mut n = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
+    if n > J_MAX {
+        n = J_MAX;
+    }
+    let mut i = 0;
+    while i < n {
+        let b = 12 + i * 4;
+        let tgt = u32::from_le_bytes([hdr[b], hdr[b + 1], hdr[b + 2], hdr[b + 3]]) as u64;
+        let mut buf = [0u8; 512];
+        if read_sector(J_DATA + i as u64, &mut buf) {
+            let _ = write_sector(tgt, &buf);
+        }
+        i += 1;
+    }
+    let clr = [0u8; 512];
+    let _ = write_sector(J_HEADER, &clr);
+    n
+}
+
+/// Crash-recovery self-test for the metadata journal (full-os guide Part II.5):
+/// synthesize a committed journal (header + one data slot) targeting a scratch
+/// sector -- exactly the on-disk state a crash between commit and clear leaves --
+/// run `replay_journal` as a post-crash mount would, and confirm the scratch sector
+/// received the journaled payload and the header was cleared. Proves the live FS
+/// journal's replay path deterministically, independent of an actual crash. Leaves
+/// the journal clean (header cleared) so it never replays spuriously afterwards.
+pub(crate) unsafe fn vfs_journal_selftest() -> bool {
+    const SCRATCH: u64 = 1560; // free, clear of VFS data + the journal + other scratch
+    let pat = *b"VJTESTPATTERN-OK";
+    let mut slot = [0u8; 512];
+    slot[..pat.len()].copy_from_slice(&pat);
+    if !write_sector(J_DATA, &slot) {
+        return false;
+    }
+    let zero = [0u8; 512];
+    let _ = write_sector(SCRATCH, &zero); // so a stale match can't pass
+    let mut hdr = [0u8; 512];
+    hdr[0..4].copy_from_slice(&J_MAGIC.to_le_bytes());
+    hdr[4..8].copy_from_slice(&1u32.to_le_bytes()); // committed
+    hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // count = 1
+    hdr[12..16].copy_from_slice(&(SCRATCH as u32).to_le_bytes());
+    if !write_sector(J_HEADER, &hdr) {
+        return false;
+    }
+    let n = replay_journal();
+    let mut got = [0u8; 512];
+    let _ = read_sector(SCRATCH, &mut got);
+    let mut hdr2 = [0u8; 512];
+    let _ = read_sector(J_HEADER, &mut hdr2);
+    let committed_after = u32::from_le_bytes([hdr2[4], hdr2[5], hdr2[6], hdr2[7]]);
+    let ok = n == 1 && got[..pat.len()] == pat && committed_after == 0;
+    if ok {
+        serial_write(b"VFS: journal ok\n");
+    } else {
+        serial_write(b"VFS: journal FAIL\n");
+    }
+    ok
 }
 
 pub(crate) fn vfs_ready() -> bool {
@@ -215,6 +425,14 @@ pub(crate) unsafe fn vfs_mount() {
             serial_write(b"VFS: io err\n");
         }
         return;
+    }
+    // Recover any committed-but-unapplied metadata transaction BEFORE loading the
+    // node table / bitmap, so we read a structurally-consistent FS (full-os II.5).
+    let replayed = replay_journal();
+    if replayed != 0 {
+        serial_write(b"VFS: journal replay n=0x");
+        serial_write_hex(replayed as u64);
+        serial_write(b"\n");
     }
     let mut s = 0u64;
     while s < NODE_SECTORS {
@@ -360,11 +578,22 @@ pub(crate) unsafe fn vfs_open(path: &[u8], create: bool) -> Option<usize> {
         return None;
     }
     let idx = free_node_slot()?;
+    // Journal the new file's node-table + superblock entry atomically (begin before
+    // set_node so the cache snapshot is pristine for rollback on abort).
+    txn_begin();
     set_node(idx, seg, parent, KIND_FILE, 0, 0);
-    if !flush_node_sector(idx) || !flush_superblock() {
-        return None;
+    if flush_node_sector(idx) && flush_superblock() {
+        // txn_commit handles its own state (it aborts on overflow and leaves the
+        // header committed for replay on an apply failure); don't abort after it.
+        if txn_commit() {
+            Some(idx)
+        } else {
+            None
+        }
+    } else {
+        txn_abort();
+        None
     }
-    Some(idx)
 }
 
 pub(crate) unsafe fn vfs_mkdir(path: &[u8]) -> bool {
@@ -380,8 +609,16 @@ pub(crate) unsafe fn vfs_mkdir(path: &[u8]) -> bool {
     let Some(idx) = free_node_slot() else {
         return false;
     };
+    // Journal the node-table + superblock update atomically (full-os Part II.5).
+    // txn_begin before set_node so the cache snapshot is pristine for rollback.
+    txn_begin();
     set_node(idx, seg, parent, KIND_DIR, 0, 0);
-    flush_node_sector(idx) && flush_superblock()
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
 }
 
 pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
@@ -391,8 +628,9 @@ pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
     let Some((_, Some(idx), _)) = resolve(path) else {
         return false;
     };
-    if node_kind(idx) == KIND_DIR {
-        // Only empty directories can be removed.
+    let is_dir = node_kind(idx) == KIND_DIR;
+    if is_dir {
+        // Only empty directories can be removed (pure validation, before the txn).
         let mut i = 0;
         while i < MAX_NODES {
             if node_kind(i) != KIND_FREE && node_parent(i) == idx as u8 {
@@ -400,14 +638,25 @@ pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
             }
             i += 1;
         }
-    } else {
+    }
+    // Journal the bitmap (freed blocks) + node-table + superblock atomically, so a
+    // crash never leaves the node freed while the bitmap still marks its blocks used
+    // (or vice versa). (full-os guide Part II.5.)
+    txn_begin();
+    if !is_dir {
         free_blocks(node_start(idx), blocks_for(node_size(idx)));
         if !flush_bitmap() {
+            txn_abort();
             return false;
         }
     }
     set_node(idx, b"", 0, KIND_FREE, 0, 0);
-    flush_node_sector(idx) && flush_superblock()
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
 }
 
 /// stat: returns (kind, size).
@@ -461,9 +710,15 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
     let cur_blocks = blocks_for(size);
     let need_blocks = blocks_for(end);
     let mut start = node_start(idx);
+    // Journal this write's METADATA updates (the bitmap on a realloc + the node
+    // entry) atomically; the data blocks below stay write-through (ordered mode).
+    // (full-os guide Part II.5.) Every early exit after this aborts the txn, leaving
+    // the on-disk structure exactly as it was.
+    txn_begin();
     if need_blocks > cur_blocks {
         // Grow by reallocating a fresh contiguous run and copying.
         let Some(new_start) = alloc_blocks(need_blocks) else {
+            txn_abort();
             return 0;
         };
         let mut b = 0;
@@ -473,6 +728,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
                 || !write_sector(DATA_SECTOR + (new_start + b) as u64, &sec)
             {
                 free_blocks(new_start, need_blocks);
+                txn_abort();
                 return 0;
             }
             b += 1;
@@ -481,6 +737,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
         start = new_start;
         set_node_start(idx, start as u32);
         if !flush_bitmap() {
+            txn_abort();
             return 0;
         }
     }
@@ -495,6 +752,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
             && pos < size
             && !read_sector(DATA_SECTOR + block as u64, &mut sec)
         {
+            txn_abort();
             return done;
         }
         if in_off != 0 || n < BLOCK_SIZE {
@@ -503,6 +761,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
         }
         sec[in_off..in_off + n].copy_from_slice(&src[done..done + n]);
         if !write_sector(DATA_SECTOR + block as u64, &sec) {
+            txn_abort();
             return done;
         }
         done += n;
@@ -511,6 +770,10 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
         set_node_size(idx, end as u32);
     }
     if !flush_node_sector(idx) {
+        txn_abort();
+        return 0;
+    }
+    if !txn_commit() {
         return 0;
     }
     done
