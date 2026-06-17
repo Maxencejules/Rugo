@@ -127,10 +127,16 @@ discipline the sibling self-tests use).
   an out-of-range per-CPU current (the synthetic AP self-tests' marker ids like `0x5A`)
   is treated as unsandboxed rather than indexing the table OOB. Transparent on the BSP
   (`test_sandbox_v1` still denies correctly); per-CPU on an AP.
-- Routing the *remaining* `R4_CURRENT` read sites through `r4_current_smp`, plus a lock
-  on the live `R4_TASKS` spawn/exit mutations so APs can run the full syscall set
-  concurrently against the general task table, is the remaining core rewrite, done
-  incrementally (each batch reviewed + gated).
+- **The entire `R4_TASKS[R4_CURRENT]` surface now routes through `r4_current_smp`**:
+  `r4_current_smp` is defined for all `cfg_r4!` lanes (just `R4_CURRENT` off the go
+  lane) and every `R4_TASKS[R4_CURRENT]` read/write in `lib.rs` (48) and `net.rs` (3),
+  including the scheduler core, indexes the calling CPU's current task. Transparent on
+  the BSP (and on -smp 1 `is_bsp` short-circuits with no MSR read), per-CPU on an AP.
+- What still remains for a fully-live general scheduler: a lock on the live `R4_TASKS`
+  spawn/exit *mutations* (slot allocation / teardown) so APs can spawn/exit against
+  the general task table concurrently with the BSP -- the run-set already has its
+  `R4_RQ_LOCK`; the live spawn path (`r4_find_spawn_slot` + its callers' error paths)
+  is the last piece. Done incrementally, reviewed + gated.
 - The autonomous run set is a dedicated boot self-test (reserved high slots, gated by
   `SMP_LIVE_MODE`), not yet the live general task table: the BSP's normal scheduler and
   the rest of the suite run with the mode off and are untouched. Wiring APs to pull

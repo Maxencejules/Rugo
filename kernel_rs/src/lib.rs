@@ -1093,7 +1093,7 @@ cfg_m3! {
                         Some(v) => v,
                         None => return 0xFFFF_FFFF_FFFF_FFFF,
                     };
-                let uid = R4_TASKS[R4_CURRENT].uid;
+                let uid = R4_TASKS[r4_current_smp()].uid;
                 let existing = vfs::vfs_lookup(rel);
                 let node = match vfs::vfs_open(rel, create) {
                     Some(n) => n,
@@ -1589,7 +1589,7 @@ cfg_m3! {
                 let utag = b" uid=";
                 line[w..w + utag.len()].copy_from_slice(utag);
                 w += utag.len();
-                w += fmt_hex_u64(&mut line[w..], R4_TASKS[R4_CURRENT].uid as u64);
+                w += fmt_hex_u64(&mut line[w..], R4_TASKS[r4_current_smp()].uid as u64);
                 let stag = b" state=run\n";
                 line[w..w + stag.len()].copy_from_slice(stag);
                 w += stag.len();
@@ -1966,8 +1966,8 @@ cfg_m3! {
             let wfd = m8_alloc_fd(M8FdKind::PipeW);
             if wfd == ERR {
                 M8_FD_TABLE[rfd as usize] = M8FdEntry::EMPTY;
-                if R4_TASKS[R4_CURRENT].fd_count != 0 {
-                    R4_TASKS[R4_CURRENT].fd_count -= 1;
+                if R4_TASKS[r4_current_smp()].fd_count != 0 {
+                    R4_TASKS[r4_current_smp()].fd_count -= 1;
                 }
                 return ERR;
             }
@@ -1990,7 +1990,7 @@ cfg_m3! {
             return ERR;
         }
         let rel = &bytes[5..bytes.len() - 1];
-        let uid = R4_TASKS[R4_CURRENT].uid;
+        let uid = R4_TASKS[r4_current_smp()].uid;
         match op {
             1 => {
                 if vfs::vfs_mkdir(rel) {
@@ -3157,8 +3157,8 @@ cfg_m3! {
         #[cfg(feature = "go_test")]
         {
             if !runtime::isolation::under_quota(
-                R4_TASKS[R4_CURRENT].fd_count,
-                R4_TASKS[R4_CURRENT].fd_limit as usize,
+                R4_TASKS[r4_current_smp()].fd_count,
+                R4_TASKS[r4_current_smp()].fd_limit as usize,
             ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
@@ -3172,7 +3172,7 @@ cfg_m3! {
                 M8_FD_TABLE[i].owner_tid = owner_tid;
                 #[cfg(feature = "go_test")]
                 {
-                    R4_TASKS[R4_CURRENT].fd_count += 1;
+                    R4_TASKS[r4_current_smp()].fd_count += 1;
                 }
                 return i as u64;
             }
@@ -4071,7 +4071,7 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_net_query(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_NETWORK == 0 {
+        if R4_TASKS[r4_current_smp()].cap_flags & R4_TASK_CAP_NETWORK == 0 {
             audit_event(b"cap-deny", 49); // full-os guide Part IV.10 audit trail
             return ERR;
         }
@@ -4122,7 +4122,7 @@ cfg_r4! {
                     *frame.add(14) = ERR;
                     return;
                 }
-                R4_TASKS[R4_CURRENT].sig_handler = a2;
+                R4_TASKS[r4_current_smp()].sig_handler = a2;
                 *frame.add(14) = 0;
             }
             2 => {
@@ -4147,13 +4147,13 @@ cfg_r4! {
                 }
             }
             3 => {
-                if !R4_TASKS[R4_CURRENT].sig_in_handler {
+                if !R4_TASKS[r4_current_smp()].sig_in_handler {
                     *frame.add(14) = ERR;
                     return;
                 }
-                R4_TASKS[R4_CURRENT].sig_in_handler = false;
+                R4_TASKS[r4_current_smp()].sig_in_handler = false;
                 for i in 0..22 {
-                    *frame.add(i) = R4_TASKS[R4_CURRENT].sig_saved_frame[i];
+                    *frame.add(i) = R4_TASKS[r4_current_smp()].sig_saved_frame[i];
                 }
             }
             _ => {
@@ -4629,7 +4629,7 @@ cfg_r4! {
         stdout_fd: u64,
     ) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        if R4_TASKS[R4_CURRENT].cap_flags & R4_TASK_CAP_STORAGE == 0 {
+        if R4_TASKS[r4_current_smp()].cap_flags & R4_TASK_CAP_STORAGE == 0 {
             return ERR;
         }
         if name_len == 0 || name_len > 24 {
@@ -4822,8 +4822,8 @@ cfg_r4! {
             if fdv != u64::MAX {
                 let idx = fdv as usize;
                 M8_FD_TABLE[idx].owner_tid = tid;
-                if R4_TASKS[R4_CURRENT].fd_count != 0 {
-                    R4_TASKS[R4_CURRENT].fd_count -= 1;
+                if R4_TASKS[r4_current_smp()].fd_count != 0 {
+                    R4_TASKS[r4_current_smp()].fd_count -= 1;
                 }
                 R4_TASKS[tid].fd_count += 1;
             }
@@ -4951,10 +4951,10 @@ cfg_r4! {
             }
             3 => {
                 // brk(new) - 0 queries
-                if R4_TASKS[R4_CURRENT].heap_brk == 0 {
-                    R4_TASKS[R4_CURRENT].heap_brk = VM_BRK_BASE;
+                if R4_TASKS[r4_current_smp()].heap_brk == 0 {
+                    R4_TASKS[r4_current_smp()].heap_brk = VM_BRK_BASE;
                 }
-                let cur = R4_TASKS[R4_CURRENT].heap_brk;
+                let cur = R4_TASKS[r4_current_smp()].heap_brk;
                 let new = a2;
                 if new == 0 {
                     return cur;
@@ -4977,7 +4977,7 @@ cfg_r4! {
                         a += 0x1000;
                     }
                 }
-                R4_TASKS[R4_CURRENT].heap_brk = new;
+                R4_TASKS[r4_current_smp()].heap_brk = new;
                 serial_write(b"MM: brk 0x");
                 serial_write_hex(cur);
                 serial_write(b" -> 0x");
@@ -5031,13 +5031,13 @@ cfg_r4! {
             // op 4 = setuid(a2): only root (uid 0) may change uid, enforcing the
             // privilege model. A non-root attempt is denied and audited.
             4 => {
-                if R4_TASKS[R4_CURRENT].uid != 0 {
+                if R4_TASKS[r4_current_smp()].uid != 0 {
                     audit_event(b"setuid-deny", 51);
                     *frame.add(14) = ERR;
                 } else if a2 > 0xFF {
                     *frame.add(14) = ERR;
                 } else {
-                    R4_TASKS[R4_CURRENT].uid = a2 as u8;
+                    R4_TASKS[r4_current_smp()].uid = a2 as u8;
                     *frame.add(14) = 0;
                 }
             }
@@ -5061,7 +5061,7 @@ cfg_r4! {
                 }
                 match login_verify(&name, &pw[..plen]) {
                     Some(uid) => {
-                        R4_TASKS[R4_CURRENT].uid = uid;
+                        R4_TASKS[r4_current_smp()].uid = uid;
                         audit_event(b"login-ok", 51);
                         *frame.add(14) = uid as u64;
                     }
@@ -5167,7 +5167,7 @@ cfg_r4! {
                     *frame.add(14) = ERR;
                     return;
                 }
-                let cur_pml4 = R4_TASKS[R4_CURRENT].pml4_phys;
+                let cur_pml4 = R4_TASKS[r4_current_smp()].pml4_phys;
                 let limit = if val == 0 { u64::MAX } else { val };
                 let mut woken = 0u64;
                 let mut t = 0usize;
@@ -5490,12 +5490,12 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_sandbox(allow_mask: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let cur = R4_TASKS[R4_CURRENT].sec_filter_mask;
+        let cur = R4_TASKS[r4_current_smp()].sec_filter_mask;
         // Reject any attempt to re-grant a syscall not currently allowed.
         if allow_mask & !cur != 0 {
             return ERR;
         }
-        R4_TASKS[R4_CURRENT].sec_filter_mask = (cur & allow_mask) | (1 << 0) | (1 << 2);
+        R4_TASKS[r4_current_smp()].sec_filter_mask = (cur & allow_mask) | (1 << 0) | (1 << 2);
         0
     }
 
@@ -5543,8 +5543,8 @@ cfg_r4! {
                     // the fd_count m8_alloc_fd incremented (mirrors the pipe
                     // cleanup; otherwise a near-quota task leaks fd_count).
                     M8_FD_TABLE[mfd as usize] = M8FdEntry::EMPTY;
-                    if R4_TASKS[R4_CURRENT].fd_count != 0 {
-                        R4_TASKS[R4_CURRENT].fd_count -= 1;
+                    if R4_TASKS[r4_current_smp()].fd_count != 0 {
+                        R4_TASKS[r4_current_smp()].fd_count -= 1;
                     }
                     return ERR;
                 }
@@ -6487,7 +6487,7 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_power(op: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        if R4_TASKS[R4_CURRENT].uid != 0 {
+        if R4_TASKS[r4_current_smp()].uid != 0 {
             return ERR;
         }
         // Drain the UART so the marker reaches the host before we stop.
@@ -6536,19 +6536,29 @@ cfg_r4! {
 
     /// The current task on the CALLING CPU (full-os guide Part I.3, SMP scheduler).
     /// On the bootstrap processor this is the global scheduler cursor `R4_CURRENT`;
-    /// on an application processor it is that CPU's own per-CPU `current` (gs:[16],
-    /// set when a task is dispatched to it) -- the per-CPU R4_CURRENT a multi-CPU
-    /// scheduler reads instead of one global. BSP-vs-AP is decided by x2APIC ID
-    /// (`smp::is_bsp`), NOT GS, so this is safe even on the BSP whose GS base is left
-    /// unset (ring-3 TinyGo uses GS). Exposed to a task via `sys_sysinfo` op 14.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    /// on an application processor (go lane only) it is that CPU's own per-CPU
+    /// `current` (gs:[16], set when a task is dispatched to it) -- the per-CPU
+    /// R4_CURRENT a multi-CPU scheduler reads instead of one global. BSP-vs-AP is
+    /// decided by x2APIC ID (`smp::is_bsp`), NOT GS, so this is safe even on the BSP
+    /// whose GS base is left unset (ring-3 TinyGo uses GS). On -smp 1 (the whole
+    /// suite bar two lanes) `is_bsp` short-circuits to `R4_CURRENT` with just an
+    /// atomic load -- no MSR read -- so every call site is transparent there. Defined
+    /// for all cfg_r4! lanes (just `R4_CURRENT` off the go lane) so the entire
+    /// `R4_TASKS[r4_current_smp()]` syscall surface can route through it uniformly.
     unsafe fn r4_current_smp() -> usize {
-        if crate::smp::is_bsp() {
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if crate::smp::is_bsp() {
+                R4_CURRENT
+            } else {
+                let cur: u64;
+                core::arch::asm!("mov {}, gs:[16]", out(reg) cur, options(nostack));
+                cur as usize
+            }
+        }
+        #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+        {
             R4_CURRENT
-        } else {
-            let cur: u64;
-            core::arch::asm!("mov {}, gs:[16]", out(reg) cur, options(nostack));
-            cur as usize
         }
     }
 
@@ -6572,7 +6582,7 @@ cfg_r4! {
 
     #[inline(always)]
     unsafe fn r4_current_has_cap(flag: u8) -> bool {
-        R4_TASKS[R4_CURRENT].cap_flags & flag != 0
+        R4_TASKS[r4_current_smp()].cap_flags & flag != 0
     }
 
     unsafe fn r4_cleanup_task_resources(tid: usize) {
@@ -6732,7 +6742,7 @@ cfg_r4! {
         {
             if entry >= 0x0000_8000_0000_0000 { return 0xFFFF_FFFF_FFFF_FFFF; }
             if !runtime::isolation::under_quota(
-                R4_TASKS[R4_CURRENT].thread_count,
+                R4_TASKS[r4_current_smp()].thread_count,
                 MAX_THREADS_PER_PROC,
             ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
@@ -6740,8 +6750,8 @@ cfg_r4! {
             if !runtime::isolation::under_quota(R4_THREADS_CREATED, MAX_THREADS_GLOBAL) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
-            let tid = R4_TASKS[R4_CURRENT].thread_count as u64;
-            R4_TASKS[R4_CURRENT].thread_count += 1;
+            let tid = R4_TASKS[r4_current_smp()].thread_count as u64;
+            R4_TASKS[r4_current_smp()].thread_count += 1;
             R4_THREADS_CREATED += 1;
             return tid;
         }
@@ -6750,7 +6760,7 @@ cfg_r4! {
             if entry >= 0x0000_8000_0000_0000 {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
-            if !R4_TASKS[R4_CURRENT].can_spawn {
+            if !R4_TASKS[r4_current_smp()].can_spawn {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
             if !user_pages_ok(entry, 1, USER_PERM_READ) {
@@ -6919,12 +6929,12 @@ cfg_r4! {
         #[cfg(any(feature = "quota_endpoints_test", feature = "go_test"))]
         {
             let limit = if cfg!(feature = "go_test") {
-                R4_TASKS[R4_CURRENT].endpoint_limit as usize
+                R4_TASKS[r4_current_smp()].endpoint_limit as usize
             } else {
                 MAX_ENDPOINTS_PER_PROC
             };
             if !runtime::isolation::under_quota(
-                R4_TASKS[R4_CURRENT].endpoint_count,
+                R4_TASKS[r4_current_smp()].endpoint_count,
                 limit,
             ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
@@ -6937,7 +6947,7 @@ cfg_r4! {
                     R4_ENDPOINTS[i].waiter = -1;
                     R4_ENDPOINTS[i].owner_tid = R4_CURRENT;
                     R4_ENDPOINTS[i].owner_rights = R4_EP_RIGHT_RECV | R4_EP_RIGHT_CONTROL;
-                    R4_TASKS[R4_CURRENT].endpoint_count += 1;
+                    R4_TASKS[r4_current_smp()].endpoint_count += 1;
                     return i as u64;
                 }
             }
@@ -6969,7 +6979,7 @@ cfg_r4! {
         if n > 0 {
             if copyin_user(&mut kbuf[..n], buf, n).is_err() { return 0xFFFF_FFFF_FFFF_FFFF; }
         }
-        R4_TASKS[R4_CURRENT].ipc_send_count += 1;
+        R4_TASKS[r4_current_smp()].ipc_send_count += 1;
 
         // If someone is blocked on recv for this endpoint, deliver directly
         let waiter = R4_ENDPOINTS[ep].waiter;
@@ -7046,7 +7056,7 @@ cfg_r4! {
                 return;
             }
             R4_ENDPOINTS[ep].has_msg = false;
-            R4_TASKS[R4_CURRENT].ipc_recv_count += 1;
+            R4_TASKS[r4_current_smp()].ipc_recv_count += 1;
             *frame.add(14) = n as u64;
             return;
         }
@@ -7058,12 +7068,12 @@ cfg_r4! {
         }
 
         // No message â€” block current task and switch
-        R4_TASKS[R4_CURRENT].recv_ep = endpoint;
-        R4_TASKS[R4_CURRENT].recv_buf = buf;
-        R4_TASKS[R4_CURRENT].recv_cap = cap_n as u64;
+        R4_TASKS[r4_current_smp()].recv_ep = endpoint;
+        R4_TASKS[r4_current_smp()].recv_buf = buf;
+        R4_TASKS[r4_current_smp()].recv_cap = cap_n as u64;
         r4_save_frame(frame, R4_CURRENT);
-        R4_TASKS[R4_CURRENT].block_count += 1;
-        R4_TASKS[R4_CURRENT].state = R4State::Blocked;
+        R4_TASKS[r4_current_smp()].block_count += 1;
+        R4_TASKS[r4_current_smp()].state = R4State::Blocked;
         R4_ENDPOINTS[ep].waiter = R4_CURRENT as i32;
 
         match r4_find_ready(R4_CURRENT) {
@@ -7183,7 +7193,7 @@ cfg_r4! {
         {
             if size == 0 || size > 4096 { return 0xFFFF_FFFF_FFFF_FFFF; }
             if !runtime::isolation::under_quota(
-                R4_TASKS[R4_CURRENT].shm_count,
+                R4_TASKS[r4_current_smp()].shm_count,
                 MAX_SHM_PER_PROC,
             ) {
                 return 0xFFFF_FFFF_FFFF_FFFF;
@@ -7193,7 +7203,7 @@ cfg_r4! {
                     R4_SHM_OBJECTS[i].active = true;
                     R4_SHM_OBJECTS[i].size = 4096;
                     core::ptr::write_bytes(R4_SHM_PAGES[i].0.as_mut_ptr(), 0, 4096);
-                    R4_TASKS[R4_CURRENT].shm_count += 1;
+                    R4_TASKS[r4_current_smp()].shm_count += 1;
                     return i as u64;
                 }
             }

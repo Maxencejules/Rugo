@@ -1297,8 +1297,8 @@ pub(crate) unsafe fn sys_socket_open_r4(domain: u64, kind: u64) -> u64 {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     if !runtime::isolation::under_quota(
-        R4_TASKS[R4_CURRENT].socket_count,
-        R4_TASKS[R4_CURRENT].socket_limit as usize,
+        R4_TASKS[r4_current_smp()].socket_count,
+        R4_TASKS[r4_current_smp()].socket_limit as usize,
     ) {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
@@ -1308,7 +1308,7 @@ pub(crate) unsafe fn sys_socket_open_r4(domain: u64, kind: u64) -> u64 {
             R4_SOCKETS[idx].domain = dom;
             R4_SOCKETS[idx].kind = typ;
             R4_SOCKETS[idx].state = 1;
-            R4_TASKS[R4_CURRENT].socket_count += 1;
+            R4_TASKS[r4_current_smp()].socket_count += 1;
             idx as u64
         }
         None => 0xFFFF_FFFF_FFFF_FFFF,
