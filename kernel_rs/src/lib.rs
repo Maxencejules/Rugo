@@ -5758,6 +5758,34 @@ cfg_r4! {
     // [0x0190_0000,0x0200_0000) — that is the per-task stack region.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     const DLOPEN_BASE: u64 = 0x0180_0000;
+    // Code-base ASLR (full-os guide Part IV.10): a dlopen'd shared object loads at a
+    // RANDOMIZED base within its 1 MiB window, not the fixed DLOPEN_BASE. The window
+    // is divided into DL_NSLOTS non-overlapping slots (each larger than any shipped
+    // .so, so two loads never alias); each load picks a fresh random slot, different
+    // from the previous one. Because the object is position-independent and the
+    // loader applies R_X86_64_RELATIVE/GLOB_DAT/JUMP_SLOT relocations relative to the
+    // chosen base, the code runs correctly wherever it lands -- so two loads of the
+    // same module get different code bases. DL_LOAD_BASE holds the current base and is
+    // what dl_resolve adds st_value to.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const DL_SLOT: u64 = 0x8000; // 8 pages, > any shipped .so (libdl <0x4000, on-disk <=0x2000)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const DL_NSLOTS: u64 = 0x10_0000 / DL_SLOT; // 32 slots across [DLOPEN_BASE, +1 MiB)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_LOAD_BASE: u64 = DLOPEN_BASE;
+
+    /// Pick a randomized, slot-aligned load base for the next dlopen, different from
+    /// the previous load's slot (so the per-load base provably varies and never
+    /// overlaps the last one). (full-os guide Part IV.10, code-base ASLR.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_aslr_base() -> u64 {
+        let prev = (DL_LOAD_BASE - DLOPEN_BASE) / DL_SLOT;
+        let mut slot = rng_next() % DL_NSLOTS;
+        if slot == prev {
+            slot = (slot + 1) % DL_NSLOTS;
+        }
+        DLOPEN_BASE + slot * DL_SLOT
+    }
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static DL_SO: &[u8] = include_bytes!("dl_module.so");
     // An on-disk `.so` read off the filesystem (vs the embedded `DL_SO`). dlopen
@@ -5928,7 +5956,10 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn dl_load_elf(so: &[u8]) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let base = DLOPEN_BASE;
+        // Code-base ASLR: load at a fresh randomized base (relocations below are all
+        // applied relative to it). dl_resolve reads DL_LOAD_BASE for the same base.
+        let base = dl_aslr_base();
+        DL_LOAD_BASE = base;
         if so.len() < 64 || so[0] != 0x7F || &so[1..4] != b"ELF" || so[4] != 2 {
             return ERR; // not a 64-bit ELF
         }
@@ -5949,6 +5980,15 @@ cfg_r4! {
                 let p_filesz = u64::from_le_bytes(so[ph + 32..ph + 40].try_into().unwrap()) as usize;
                 let p_memsz = u64::from_le_bytes(so[ph + 40..ph + 48].try_into().unwrap());
                 if p_memsz > 0 {
+                    // Bound the segment to this load's ASLR slot (p_memsz is an ELF
+                    // header field independent of the file-size cap, so a crafted .so
+                    // could declare a huge p_memsz). Without this a tiny-p_filesz /
+                    // huge-p_memsz segment would map past DL_SLOT into the next slot
+                    // (clobbering a neighbour object's W^X) or, at the top slot, into
+                    // the per-task demand-stack region. Reject anything that overruns.
+                    if p_vaddr > DL_SLOT || p_memsz > DL_SLOT - p_vaddr {
+                        return ERR;
+                    }
                     let mut va = (base + p_vaddr) & !0xFFF;
                     let end = base + p_vaddr + p_memsz;
                     while va < end {
@@ -6104,7 +6144,8 @@ cfg_r4! {
             }
             // Exact match: the .so name must terminate right after `target`.
             if ok && nm + target.len() < so.len() && so[nm + target.len()] == 0 {
-                return DLOPEN_BASE + st_value;
+                // Resolve against the module's actual (randomized) load base.
+                return DL_LOAD_BASE + st_value;
             }
             s += 1;
         }

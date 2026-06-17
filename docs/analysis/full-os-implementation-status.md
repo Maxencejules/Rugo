@@ -194,7 +194,7 @@ single safe boot-verified slice and several have hard prerequisites.
    `dlsym` resolves a name from the `.dynsym`/`.dynstr` (count via the SysV
    `.hash` `nchain`). `dlprobe` calls `getval()`==42 (RELATIVE), `addtwo(40)`==42,
    `getgvar()`==99 (GLOB_DAT via the GOT) and `callsum()`==42 (JUMP_SLOT via the
-   PLT) in ring 3 (`DLPROBE: dlsym ok`). A second object (`apps/dl/libdl2.asm`)
+   PLT) in ring 3, at a randomized per-load base (`DLPROBE: aslr+dlsym ok`). A second object (`apps/dl/libdl2.asm`)
    supplies the cross-object globals so real symbolic relocs are emitted. The C `.so`
    toolchain blocker (mingw refptr/auto-import + `tools/pe_to_elf_v1.py` break C
    binaries past 2 pages, proved via `page3probe`) is **routed around**: the

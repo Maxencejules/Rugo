@@ -94,24 +94,38 @@ which image (embedded vs on-disk) `dlsym` resolves against. A boot fixture
 `getval()==42` — the latter proving the *on-disk* image's relocation was applied
 (`ONDISKDL: ok`, `make test-dlopen-ondisk-v1`).
 
+## Code-base ASLR (full-os guide Part IV.10)
+
+A dlopen'd object loads at a **randomized base**, not a fixed one. The 1 MiB dlopen
+window is divided into 32 non-overlapping `DL_SLOT` (8 KiB) slots — each larger than
+any shipped `.so`; `dl_aslr_base` picks a fresh random slot, different from the
+previous load's, and `dl_load_elf` applies every relocation (RELATIVE / GLOB_DAT /
+JUMP_SLOT) relative to it (`dl_resolve` adds `st_value` to the live `DL_LOAD_BASE`).
+Because the object is position-independent and fully relocated, it runs correctly
+wherever it lands — so two loads of the same module get **different code bases**.
+`dlprobe` proves this: it `dlopen`s twice and fails unless the two bases differ
+(`cmp r12, rax / je .fail`), then resolves + calls at the current base. Each PT_LOAD
+is bounded to its slot (a crafted huge `p_memsz` is rejected) so a load never spills
+into a neighbour object or the demand-stack region.
+
 ## v1 boundary / carry-forward
 
-- **Embedded *and* on-disk `.so`; one load slot; RELATIVE + GLOB_DAT + JUMP_SLOT.**
-  The loader reads a `.so` off the filesystem and applies relative *and* symbolic
-  (GOT/PLT) relocations, eager-bound. What remains: **lazy** PLT binding (a runtime
-  resolver stub), `DT_NEEDED` dependency chains, multiple simultaneously-loaded
-  objects, `dlclose`, and an allocator-chosen load base — carry-forward.
-- **No on-disk/package `.so` files.** The object is kernel-embedded; loading a
-  `.so` from the filesystem (and authoring C `.so` files) waits on the C `.so`
-  toolchain fix — the documented blocker, now routed around for the assembly
-  object.
-- **Single fixed load address.** A relocating loader that places objects at an
-  allocator-chosen base (and a second slot) is carry-forward.
+- **Embedded *and* on-disk `.so`; randomized load base; RELATIVE + GLOB_DAT +
+  JUMP_SLOT.** The loader reads a `.so` off the filesystem, places it at a randomized
+  slot, and applies relative *and* symbolic (GOT/PLT) relocations, eager-bound. What
+  remains: **lazy** PLT binding (a runtime resolver stub), `DT_NEEDED` dependency
+  chains, multiple simultaneously-loaded objects, and `dlclose` — carry-forward.
+- **C `.so` authoring** waits on the C `.so` toolchain fix — the documented blocker,
+  routed around with the assembly-authored module.
+- **Main-executable ASLR.** Code-base ASLR here is for *dlopen'd* objects; the main
+  ET_EXEC app code base stays fixed (would need PIE main apps, blocked by the same
+  PE→ELF C toolchain limit) — carry-forward.
 
 ## Acceptance
 
 `make test-dynlink-v1`: the go lane runs `probe dlprobe`; the transcript shows
-`DLPROBE: dlsym ok` — dlopen mapped the `.so` and applied RELATIVE + GLOB_DAT +
+`DLPROBE: aslr+dlsym ok` — two dlopens landed at different randomized bases, and
+dlopen mapped the `.so` and applied RELATIVE + GLOB_DAT +
 JUMP_SLOT relocations, dlsym resolved all four symbols from `.dynsym`, and the app
 called each in ring 3 (`getval()==42` RELATIVE, `addtwo(40)==42` resolve+call,
 `getgvar()==99` GLOB_DAT through the GOT, `callsum()==42` JUMP_SLOT through the
