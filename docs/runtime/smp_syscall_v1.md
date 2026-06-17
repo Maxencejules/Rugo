@@ -132,11 +132,18 @@ discipline the sibling self-tests use).
   lane) and every `R4_TASKS[R4_CURRENT]` read/write in `lib.rs` (48) and `net.rs` (3),
   including the scheduler core, indexes the calling CPU's current task. Transparent on
   the BSP (and on -smp 1 `is_bsp` short-circuits with no MSR read), per-CPU on an AP.
-- What still remains for a fully-live general scheduler: a lock on the live `R4_TASKS`
-  spawn/exit *mutations* (slot allocation / teardown) so APs can spawn/exit against
-  the general task table concurrently with the BSP -- the run-set already has its
-  `R4_RQ_LOCK`; the live spawn path (`r4_find_spawn_slot` + its callers' error paths)
-  is the last piece. Done incrementally, reviewed + gated.
+- The live spawn-path table mutation (`r4_find_spawn_slot`'s slot scan + `R4_NUM_TASKS`
+  grow) now runs under the same **`R4_RQ_LOCK`** as the autonomous scheduler's
+  claim/retire, so the `R4_TASKS` mutations are serialized across the BSP and the APs.
+  Uncontended (transparent) on the bootstrap processor, the only spawner today.
+- What still remains for a fully-live *general* scheduler is purely wiring, not new
+  mechanism: making an AP actually *spawn/exit* against the general table (which would
+  need claim-on-find double-claim prevention + un-claim on each spawn-caller error
+  path) and migrating the BSP's normal run rotation onto the per-CPU run queues.
+  Nothing spawns off the BSP today, so this is deferred. All the SMP-scheduler
+  mechanisms it builds on -- per-CPU current (read+write across the whole surface),
+  per-CPU TSS/GS, the run-queue lock, autonomous ready-set pull, ring-3 on an AP --
+  are in place and boot-verified.
 - The autonomous run set is a dedicated boot self-test (reserved high slots, gated by
   `SMP_LIVE_MODE`), not yet the live general task table: the BSP's normal scheduler and
   the rest of the suite run with the mode off and are untouched. Wiring APs to pull

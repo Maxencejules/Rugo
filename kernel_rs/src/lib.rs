@@ -6521,17 +6521,32 @@ cfg_r4! {
     }
 
     unsafe fn r4_find_spawn_slot() -> Option<usize> {
-        for tid in 1..R4_NUM_TASKS {
+        // Allocate the slot (reuse a free one, else grow the table) under the SMP
+        // run-queue lock (full-os guide Part I.3), so this R4_TASKS / R4_NUM_TASKS
+        // mutation is serialized with the autonomous scheduler's claim/retire on the
+        // APs -- they share R4_RQ_LOCK. Uncontended on the bootstrap processor (the
+        // only spawner today), so transparent; the lock makes the table mutation
+        // atomic for when an AP path mutates the table concurrently. (Claim-on-find
+        // double-claim prevention for concurrent SPAWNERS is deferred -- nothing
+        // spawns off the BSP yet; see docs/runtime/smp_syscall_v1.md.)
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        crate::smp::r4_rq_lock();
+        let mut result = None;
+        let mut tid = 1;
+        while tid < R4_NUM_TASKS {
             if R4_TASKS[tid].state == R4State::Dead {
-                return Some(tid);
+                result = Some(tid);
+                break;
             }
+            tid += 1;
         }
-        if R4_NUM_TASKS >= R4_MAX_TASKS {
-            return None;
+        if result.is_none() && R4_NUM_TASKS < R4_MAX_TASKS {
+            result = Some(R4_NUM_TASKS);
+            R4_NUM_TASKS += 1;
         }
-        let tid = R4_NUM_TASKS;
-        R4_NUM_TASKS += 1;
-        Some(tid)
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        crate::smp::r4_rq_unlock();
+        result
     }
 
     /// The current task on the CALLING CPU (full-os guide Part I.3, SMP scheduler).

@@ -893,7 +893,7 @@ static SMP_LIVE_BASE: AtomicU64 = AtomicU64::new(0); // first run-set slot
 static SMP_LIVE_COUNT: AtomicU64 = AtomicU64::new(0); // run-set slot count
 
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn r4_rq_lock() {
+pub(crate) unsafe fn r4_rq_lock() {
     while R4_RQ_LOCK
         .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
@@ -902,7 +902,7 @@ unsafe fn r4_rq_lock() {
     }
 }
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn r4_rq_unlock() {
+pub(crate) unsafe fn r4_rq_unlock() {
     R4_RQ_LOCK.store(0, Ordering::Release);
 }
 
