@@ -974,6 +974,9 @@ test-udp-echo-v1: image-go
 test-ndp-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_ndp_v1.py -v --junitxml=$(OUT)/pytest-ndp-v1.xml
 
+test-ndp-dad-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_ndp_dad_v1.py -v --junitxml=$(OUT)/pytest-ndp-dad-v1.xml
+
 test-xhci-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_xhci_v1.py -v --junitxml=$(OUT)/pytest-xhci-v1.xml
 

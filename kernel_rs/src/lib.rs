@@ -4106,6 +4106,7 @@ cfg_r4! {
             17 => netcfg::udp6_echo_selftest(),
             18 => netcfg::tcp6_listen_selftest(),
             19 => tcp::tcp_sndwin_selftest(),
+            20 => netcfg::dad_selftest(), // IPv6 NDP Duplicate Address Detection
             _ => ERR,
         }
     }
@@ -12141,6 +12142,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::udp6_echo_selftest();
         let _ = netcfg::tcp6_listen_selftest();
         let _ = tcp::tcp_sndwin_selftest();
+        let _ = netcfg::dad_selftest(); // full-os Part II.6: IPv6 NDP DAD on our own address
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
         mm::swap_selftest(); // full-os Part I.4: swap / page eviction

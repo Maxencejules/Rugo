@@ -994,6 +994,134 @@ pub(crate) unsafe fn ndp_selftest() -> u64 {
     1
 }
 
+/// Build a Duplicate Address Detection Neighbor Solicitation (RFC 4862 §5.4 /
+/// RFC 4861 §4.3) for our OWN tentative address `target`: IPv6 source = the
+/// unspecified address (`::`), destination = the solicited-node multicast of the
+/// target, ICMPv6 type 135, and -- mandatory when the source is `::` -- NO Source
+/// Link-Layer Address option. A defending Neighbor Advertisement in reply would
+/// mean the address is already claimed by another host. Returns the frame length.
+unsafe fn build_dad_solicit(target: &[u8; 16], out: &mut [u8]) -> Option<usize> {
+    let total = 14 + 40 + 24; // NS body = type/code/csum(4) + reserved(4) + target(16); NO SLLA
+    if out.len() < total {
+        return None;
+    }
+    let mac = net::net_mac();
+    let unspec = [0u8; 16];
+    let mut snm = [0u8; 16]; // solicited-node multicast ff02::1:ffXX:XXXX of the target
+    snm[0] = 0xff;
+    snm[1] = 0x02;
+    snm[11] = 0x01;
+    snm[12] = 0xff;
+    snm[13] = target[13];
+    snm[14] = target[14];
+    snm[15] = target[15];
+    for b in out[..total].iter_mut() {
+        *b = 0;
+    }
+    // Ethernet: dst = solicited-node multicast MAC 33:33:ff:XX:XX:XX, src = guest.
+    out[0] = 0x33;
+    out[1] = 0x33;
+    out[2] = 0xff;
+    out[3] = target[13];
+    out[4] = target[14];
+    out[5] = target[15];
+    out[6..12].copy_from_slice(&mac);
+    out[12] = 0x86;
+    out[13] = 0xDD;
+    {
+        let ip6 = &mut out[14..54];
+        ip6[0] = 0x60; // version 6
+        let plen = (24u16).to_be_bytes();
+        ip6[4] = plen[0];
+        ip6[5] = plen[1];
+        ip6[6] = 58; // ICMPv6
+        ip6[7] = 255; // hop limit (RFC 4861 §7.1.1)
+        ip6[8..24].copy_from_slice(&unspec); // source = ::
+        ip6[24..40].copy_from_slice(&snm);
+    }
+    {
+        let ns = &mut out[54..total];
+        ns[0] = 135; // Neighbor Solicitation
+        // reserved 4..8 stay zero; NO Source Link-Layer Address option (source is ::)
+        ns[8..24].copy_from_slice(target); // tentative target being DAD-probed
+        let ck = icmpv6_checksum(&unspec, &snm, ns);
+        ns[2] = (ck >> 8) as u8;
+        ns[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// DAD self-test (full-os guide Part II.6, IPv6 NDP): the guest runs Duplicate
+/// Address Detection on its OWN link-local address before relying on it -- it builds
+/// and sends a Neighbor Solicitation from the unspecified source for its tentative
+/// address. No defending advertisement (the case over the slirp link) means the
+/// address is unique. Validates the probe is wire-correct (source `::`, solicited-
+/// node multicast destination, NO SLLA option, hop limit 255, checksum folds to
+/// zero) against known values, then transmits it. Reachable via sys_net_query op 20.
+pub(crate) unsafe fn dad_selftest() -> u64 {
+    let g6 = guest_ip6();
+    let mac = net::net_mac();
+    let mut snm = [0u8; 16];
+    snm[0] = 0xff;
+    snm[1] = 0x02;
+    snm[11] = 0x01;
+    snm[12] = 0xff;
+    snm[13] = g6[13];
+    snm[14] = g6[14];
+    snm[15] = g6[15];
+    let mut out = [0u8; 1514];
+    let len = match build_dad_solicit(&g6, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    if len != 14 + 40 + 24 {
+        return 0; // a DAD NS carries no SLLA option
+    }
+    // Ethernet: dst = solicited-node multicast MAC, src = guest, ethertype IPv6.
+    if out[0..6] != [0x33u8, 0x33, 0xff, g6[13], g6[14], g6[15]] {
+        return 0;
+    }
+    if out[6..12] != mac || out[12] != 0x86 || out[13] != 0xDD {
+        return 0;
+    }
+    if out[21] != 255 {
+        return 0; // hop limit MUST be 255
+    }
+    if u16::from_be_bytes([out[18], out[19]]) != 24 {
+        return 0; // IPv6 payload length = NS message length (no SLLA)
+    }
+    if out[22..38] != [0u8; 16] {
+        return 0; // IPv6 source MUST be the unspecified address (::)
+    }
+    if out[38..54] != snm {
+        return 0; // IPv6 dst = solicited-node multicast of the tentative address
+    }
+    let ns = &out[54..len];
+    if ns[0] != 135 || ns[1] != 0 {
+        return 0; // Neighbor Solicitation, code 0
+    }
+    if ns[8..24] != g6 {
+        return 0; // target = our own tentative address
+    }
+    // Checksum folds to zero from the unspecified source + solicited-node multicast
+    // (known-correct values, not bytes read back from the builder).
+    let unspec = [0u8; 16];
+    let mut s = 0u32;
+    csum_words(&mut s, &unspec);
+    csum_words(&mut s, &snm);
+    s += 24;
+    s += 58;
+    csum_words(&mut s, ns);
+    if csum_fold(s) != 0 {
+        return 0;
+    }
+    // Transmit the real DAD probe; no node defends the guest's fe80:: over slirp, so
+    // the address is unique.
+    let _ = net::wire_send(&out[..len]);
+    serial_write(b"NDP: dad probe ok\n");
+    1
+}
+
 // IPv6 neighbor cache / NUD (full-os guide Part II.6): unlike the responder
 // above (which answers a host's Neighbor Solicitation), this is the guest
 // INITIATING resolution — sending its own NS for a target it wants to reach and
