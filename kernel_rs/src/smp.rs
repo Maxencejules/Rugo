@@ -941,13 +941,17 @@ unsafe fn ap_pull_r4_task() {
     if slot == 0 || slot >= crate::arch_x86::MAX_TSS as u64 {
         return; // needs a per-CPU TSS for the ring-3 transition
     }
-    let base = SMP_LIVE_BASE.load(Ordering::Acquire) as usize;
-    let count = SMP_LIVE_COUNT.load(Ordering::Acquire) as usize;
+    // Affinity-based scheduling (full-os Part I.3): scan the WHOLE live task table
+    // for an AP-eligible Ready task and claim it under the run-queue lock. The BSP's
+    // r4_find_ready skips ap_eligible tasks, so this AP and the BSP work disjoint
+    // sets -- the claim (Ready -> Running) is still locked so two APs can't take the
+    // same one. (Replaces the earlier fixed [base,count) run-set scan; the live-sched
+    // self-test now flags its tasks ap_eligible.)
     r4_rq_lock();
     let mut claimed = usize::MAX;
-    let mut i = base;
-    while i < base + count {
-        if crate::R4_TASKS[i].state == crate::R4State::Ready {
+    let mut i = 1usize;
+    while i < crate::R4_MAX_TASKS {
+        if crate::R4_TASKS[i].ap_eligible && crate::R4_TASKS[i].state == crate::R4State::Ready {
             crate::R4_TASKS[i].state = crate::R4State::Running; // claim
             claimed = i;
             break;
@@ -999,6 +1003,7 @@ unsafe fn smp_live_sched_selftest() -> bool {
         crate::r4_init_task(tid, CODE_VA, STACK_TOP, 0);
         crate::R4_TASKS[tid].pml4_phys = ucr3;
         crate::R4_TASKS[tid].yield_count = 0;
+        crate::R4_TASKS[tid].ap_eligible = true; // affinity: only an AP claims it
         crate::R4_TASKS[tid].state = crate::R4State::Ready; // READY: an AP will claim it
         ases[j] = ucr3;
         made += 1;
@@ -1051,6 +1056,7 @@ unsafe fn smp_live_sched_selftest() -> bool {
     let ok = ran == made as u64 && made == K && all_once;
     serial_write(b"SMP: live sched ran=0x");
     serial_write_hex(ran);
+    serial_write(b" ap-affinity");
     if ok {
         serial_write(b" ok\n");
     } else {

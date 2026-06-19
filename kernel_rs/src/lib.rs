@@ -3794,6 +3794,11 @@ cfg_r4! {
         shm_count: usize,
         thread_count: usize,
         can_spawn: bool,
+        // SMP affinity (full-os Part I.3 per-CPU scheduler): when set, this task runs
+        // ONLY on an application processor -- the BSP's r4_find_ready skips it and an
+        // AP claims it from the live table. Default false (BSP-scheduled), so the
+        // normal workload is unaffected.
+        ap_eligible: bool,
         parent_tid: usize,
         exit_status: u64,
         wait_target: i32,
@@ -3851,6 +3856,7 @@ cfg_r4! {
             shm_count: 0,
             thread_count: 0,
             can_spawn: false,
+            ap_eligible: false,
             parent_tid: 0,
             exit_status: 0,
             wait_target: R4_WAIT_NONE,
@@ -3947,6 +3953,9 @@ cfg_r4! {
         R4_TASKS[tid].wait_target = R4_WAIT_NONE;
         R4_TASKS[tid].wait_status_ptr = 0;
         R4_TASKS[tid].sched_class = R4_SCHED_CLASS_BEST_EFFORT;
+        // Slot reuse must not leak SMP affinity: a reused slot defaults to
+        // BSP-scheduled (an AP-eligible task explicitly opts in after init).
+        R4_TASKS[tid].ap_eligible = false;
         // Slot reuse must not leak signal state into the next task.
         R4_TASKS[tid].sig_handler = 0;
         R4_TASKS[tid].sig_pending = 0;
@@ -4014,7 +4023,9 @@ cfg_r4! {
         let mut best_class = R4_SCHED_CLASS_BEST_EFFORT;
         let mut i = (exclude + 1) % R4_NUM_TASKS;
         for _ in 0..R4_NUM_TASKS {
-            if i != exclude && R4_TASKS[i].state == R4State::Ready {
+            // SMP affinity (full-os Part I.3): the BSP skips AP-eligible tasks; they
+            // are reserved for application processors to claim from the live table.
+            if i != exclude && R4_TASKS[i].state == R4State::Ready && !R4_TASKS[i].ap_eligible {
                 let class = R4_TASKS[i].sched_class;
                 if best.is_none() || class > best_class {
                     best = Some(i);
