@@ -4041,7 +4041,9 @@ cfg_r4! {
         for i in 0..22 { *frame.add(i) = R4_TASKS[tid].saved_frame[i]; }
         R4_TASKS[tid].state = R4State::Running;
         R4_TASKS[tid].dispatch_count += 1;
-        R4_CURRENT = tid;
+        // Record the switched-to task as the CALLING CPU's current (per-CPU on an AP,
+        // R4_CURRENT on the BSP) so r4_switch_to is usable from an AP scheduler path.
+        r4_set_current_smp(tid);
         sig_deliver_if_pending(frame, tid);
     }
 
@@ -6661,6 +6663,22 @@ cfg_r4! {
         {
             R4_CURRENT
         }
+    }
+
+    /// Set the current task on the CALLING CPU (full-os Part I.3, SMP scheduler):
+    /// the global `R4_CURRENT` on the bootstrap processor, this CPU's own per-CPU
+    /// `current` (gs:[16]) on an application processor. The dual of `r4_current_smp`,
+    /// so a context switch records the new task against the CPU that ran it. Transparent
+    /// on the BSP (and on -smp 1, where `is_bsp` short-circuits with no MSR read).
+    unsafe fn r4_set_current_smp(tid: usize) {
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if !crate::smp::is_bsp() {
+                core::arch::asm!("mov qword ptr gs:[16], {v}", v = in(reg) tid as u64, options(nostack));
+                return;
+            }
+        }
+        R4_CURRENT = tid;
     }
 
     #[inline(always)]
