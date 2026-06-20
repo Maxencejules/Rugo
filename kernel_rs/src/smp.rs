@@ -1065,6 +1065,105 @@ unsafe fn smp_live_sched_selftest() -> bool {
     ok
 }
 
+/// Affinity invariant proof for the BSP's live rotation (full-os Part I.3, live
+/// per-CPU scheduler slice 3). The live scheduler reserves AP-eligible tasks for
+/// application processors by having the BSP's `r4_find_ready` skip them. The
+/// existing live-sched self-test parks its tasks in RESERVED slots ABOVE
+/// R4_NUM_TASKS (which is 0 at smp_init), so the BSP's scan never even reaches
+/// them and the `!ap_eligible` skip is never exercised in the rotation the BSP
+/// actually runs. This test plants tasks INSIDE a (temporarily extended) live
+/// window [1,R4_NUM_TASKS) and asserts, on the BSP, that:
+///   (1) when a non-eligible task shares the window with eligible ones, the BSP
+///       scheduler only ever returns the non-eligible one -- never an AP task;
+///   (2) when EVERY task in the window is AP-eligible, the BSP has nothing to
+///       run (the whole window is reserved for APs).
+/// Together these prove the BSP and APs partition the SAME live task table into
+/// disjoint sets, so no task is ever dispatched by two CPUs.
+///
+/// Safe to mutate R4_NUM_TASKS/R4_TASKS here: smp_init runs on the BSP with
+/// IF=0 (no PIT preemption -- the PIC/PIT are not yet initialized) and
+/// R4_NUM_TASKS==0, and SMP_LIVE_MODE is 0 (ap_pull_r4_task short-circuits, so no
+/// AP scans the table). The window state is snapshotted and restored, so the
+/// later go-lane boot (which sets R4_NUM_TASKS=1 and inits slot 0) is unaffected.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn r4_affinity_live_skip_selftest() -> bool {
+    const A: usize = 1; // non-AP-eligible: the BSP MUST be able to pick this
+    const B: usize = 2; // AP-eligible: the BSP MUST skip it
+    const C: usize = 3; // AP-eligible: the BSP MUST skip it
+    const WINDOW: usize = 4; // covers slots 0..=3; slot 0 stays Dead (EMPTY)
+    if crate::R4_MAX_TASKS < WINDOW {
+        return false;
+    }
+    // Snapshot what we touch (all Dead/EMPTY at smp_init, but be defensive so a
+    // future reordering can't corrupt a live slot).
+    let saved_num = crate::R4_NUM_TASKS;
+    let (sa, ea, ca) = (
+        crate::R4_TASKS[A].state,
+        crate::R4_TASKS[A].ap_eligible,
+        crate::R4_TASKS[A].sched_class,
+    );
+    let (sb, eb) = (crate::R4_TASKS[B].state, crate::R4_TASKS[B].ap_eligible);
+    let (sc, ec) = (crate::R4_TASKS[C].state, crate::R4_TASKS[C].ap_eligible);
+
+    crate::R4_NUM_TASKS = WINDOW;
+    crate::R4_TASKS[A].state = crate::R4State::Ready;
+    crate::R4_TASKS[A].ap_eligible = false;
+    crate::R4_TASKS[A].sched_class = 0; // best-effort: the sole BSP candidate
+    crate::R4_TASKS[B].state = crate::R4State::Ready;
+    crate::R4_TASKS[B].ap_eligible = true;
+    crate::R4_TASKS[C].state = crate::R4State::Ready;
+    crate::R4_TASKS[C].ap_eligible = true;
+
+    // (1) From every starting point the BSP scan only ever yields A (or nothing,
+    //     when A itself is excluded) -- it must NEVER return an AP-eligible task.
+    let mut bsp_disjoint = true;
+    let mut x = 0usize;
+    while x < WINDOW {
+        if let Some(t) = crate::r4_find_ready(x) {
+            if t != A {
+                bsp_disjoint = false;
+            }
+        }
+        x += 1;
+    }
+    // And the non-eligible task is genuinely runnable on the BSP: excluding an AP
+    // task (or nothing) still finds A. This rules out a vacuous pass where the BSP
+    // skipped EVERYTHING.
+    let finds_a = matches!(crate::r4_find_ready(0), Some(t) if t == A)
+        && matches!(crate::r4_find_ready(B), Some(t) if t == A)
+        && matches!(crate::r4_find_ready(C), Some(t) if t == A);
+
+    // (2) Make the whole window AP-eligible: the BSP now has nothing to run.
+    crate::R4_TASKS[A].ap_eligible = true;
+    let mut bsp_starved = true;
+    let mut y = 0usize;
+    while y < WINDOW {
+        if crate::r4_find_ready(y).is_some() {
+            bsp_starved = false;
+        }
+        y += 1;
+    }
+
+    // Restore the window and the live count exactly as we found them.
+    crate::R4_TASKS[A].state = sa;
+    crate::R4_TASKS[A].ap_eligible = ea;
+    crate::R4_TASKS[A].sched_class = ca;
+    crate::R4_TASKS[B].state = sb;
+    crate::R4_TASKS[B].ap_eligible = eb;
+    crate::R4_TASKS[C].state = sc;
+    crate::R4_TASKS[C].ap_eligible = ec;
+    crate::R4_NUM_TASKS = saved_num;
+
+    let ok = bsp_disjoint && finds_a && bsp_starved;
+    serial_write(b"SMP: affinity live-skip ");
+    if ok {
+        serial_write(b"ok\n");
+    } else {
+        serial_write(b"FAIL\n");
+    }
+    ok
+}
+
 /// AP entry: Limine hands each AP its own stack and the kernel's page
 /// tables. Check in and park - no prints (serial is not multi-CPU
 /// safe), no shared kernel state beyond the atomic.
@@ -1310,6 +1409,10 @@ pub fn smp_init() {
             // ring 3, runs it on its own core, and reports back.
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             {
+                // Affinity invariant: the BSP's scheduler skips AP-eligible tasks
+                // INSIDE its own live rotation (SMP_LIVE_MODE is still 0 here, so no
+                // AP touches the table while we probe r4_find_ready).
+                let _ = r4_affinity_live_skip_selftest();
                 let user_ok = ap_user_selftest();
                 serial_write(b"SMP: ap user task ");
                 if user_ok {

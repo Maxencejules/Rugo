@@ -140,6 +140,12 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: ap work ok",
         # Per-CPU run queues: the AP drained its own queue to the right total.
         "SMP: runqueue ok",
+        # Affinity invariant (live per-CPU scheduler): with AP-eligible tasks
+        # planted INSIDE the BSP's live rotation [1,R4_NUM_TASKS), the BSP's
+        # r4_find_ready only ever returns the non-eligible task and is starved
+        # when the whole window is AP-eligible -- proof the BSP and the APs run
+        # disjoint sets of the same task table, so no task runs on two CPUs.
+        "SMP: affinity live-skip ok",
         # Capstone: a real ring-3 USER task ran on the application processor
         # (not the BSP). The AP entered ring 3 on its own per-CPU TSS rsp0, set
         # its per-CPU `current` task through GS, serviced TWO real syscalls
