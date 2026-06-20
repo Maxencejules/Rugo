@@ -4252,6 +4252,7 @@ cfg_r4! {
             22 => netcfg::icmp_error_selftest(), // ICMPv4 dest-unreachable / time-exceeded
             23 => netcfg::gratuitous_arp_selftest(), // gratuitous ARP announcement
             24 => netcfg::arp_cache_selftest(), // IPv4 ARP cache learn/lookup
+            25 => tcp::tcp_mss_selftest(), // TCP MSS option on the SYN
             _ => ERR,
         }
     }
@@ -12818,6 +12819,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::udp6_echo_selftest();
         let _ = netcfg::tcp6_listen_selftest();
         let _ = tcp::tcp_sndwin_selftest();
+        let _ = tcp::tcp_mss_selftest(); // full-os Part II.6: TCP MSS option on the SYN
         let _ = netcfg::dad_selftest(); // full-os Part II.6: IPv6 NDP DAD on our own address
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache

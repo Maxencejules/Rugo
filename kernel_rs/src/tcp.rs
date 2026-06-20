@@ -189,21 +189,37 @@ fn csum_fold(mut sum: u32) -> u16 {
     !(sum as u16)
 }
 
-/// Compose and transmit one TCP segment with the given flags + payload.
-unsafe fn tcp_tx(flags: u8, seq: u32, ack: u32, payload: &[u8]) -> bool {
-    let tcp_len = 20 + payload.len();
+/// Build a complete Ethernet/IPv4/TCP frame into `out`, returning its total byte
+/// length (or None if it would not fit). A SYN segment (flags bit 1) carries a
+/// 4-byte MSS option (kind 2, len 4, MSS 1460 = 0x05B4), so its data offset is 6
+/// (24-byte TCP header) -- real stacks advertise their MSS on the SYN so the peer
+/// never sends an oversized segment. Non-SYN segments have no options (data offset
+/// 5). Factored out of tcp_tx so a self-test can build and inspect a segment
+/// without putting it on the wire. (full-os guide Part II.6)
+unsafe fn tcp_build_frame(
+    flags: u8,
+    seq: u32,
+    ack: u32,
+    payload: &[u8],
+    out: &mut [u8],
+) -> Option<usize> {
+    let is_syn = flags & 0x02 != 0;
+    let opt_len = if is_syn { 4 } else { 0 };
+    let tcp_len = 20 + opt_len + payload.len();
     let ip_len = 20 + tcp_len;
     let total = 14 + ip_len;
-    if total > 1514 {
-        return false;
+    if total > out.len() || total > 1514 {
+        return None;
     }
-    let mut f = [0u8; 1514];
-    f[0..6].copy_from_slice(&CONN.peer_mac);
-    f[6..12].copy_from_slice(&net::net_mac());
-    f[12] = 0x08;
-    f[13] = 0x00;
+    // Zero the frame first: the urgent-pointer / checksum fields and the MSS option
+    // region must start clear (the original code relied on a zeroed local buffer).
+    out[..total].fill(0);
+    out[0..6].copy_from_slice(&CONN.peer_mac);
+    out[6..12].copy_from_slice(&net::net_mac());
+    out[12] = 0x08;
+    out[13] = 0x00;
 
-    let ip = &mut f[14..];
+    let ip = &mut out[14..];
     ip[0] = 0x45;
     ip[2] = (ip_len >> 8) as u8;
     ip[3] = (ip_len & 0xFF) as u8;
@@ -223,13 +239,21 @@ unsafe fn tcp_tx(flags: u8, seq: u32, ack: u32, payload: &[u8]) -> bool {
     t[2..4].copy_from_slice(&CONN.remote_port.to_be_bytes());
     t[4..8].copy_from_slice(&seq.to_be_bytes());
     t[8..12].copy_from_slice(&ack.to_be_bytes());
-    t[12] = 5 << 4; // data offset
+    t[12] = ((5 + opt_len / 4) as u8) << 4; // data offset: 5 (20B) or 6 (24B w/ MSS)
     t[13] = flags;
     t[14] = 0x10; // window 4096
     t[15] = 0x00;
-    t[20..20 + payload.len()].copy_from_slice(payload);
+    if is_syn {
+        // MSS option: kind=2, length=4, MSS=1460 (0x05B4), at the start of options.
+        t[20] = 0x02;
+        t[21] = 0x04;
+        t[22] = 0x05;
+        t[23] = 0xB4;
+    }
+    let poff = 20 + opt_len;
+    t[poff..poff + payload.len()].copy_from_slice(payload);
 
-    // Pseudo-header checksum.
+    // Pseudo-header checksum over the whole TCP segment (header + options + payload).
     let mut s = 0u32;
     csum_words(&mut s, &GUEST_IP);
     csum_words(&mut s, &CONN.peer_ip);
@@ -240,7 +264,68 @@ unsafe fn tcp_tx(flags: u8, seq: u32, ack: u32, payload: &[u8]) -> bool {
     t[16] = (c >> 8) as u8;
     t[17] = (c & 0xFF) as u8;
 
-    net::wire_send(&f[..total])
+    Some(total)
+}
+
+/// Compose and transmit one TCP segment with the given flags + payload.
+unsafe fn tcp_tx(flags: u8, seq: u32, ack: u32, payload: &[u8]) -> bool {
+    let mut f = [0u8; 1514];
+    match tcp_build_frame(flags, seq, ack, payload, &mut f) {
+        Some(total) => net::wire_send(&f[..total]),
+        None => false,
+    }
+}
+
+/// Self-test the SYN MSS option (full-os guide Part II.6): build a SYN with a
+/// synthetic peer, then confirm its data offset is 6 (a 24-byte header), the MSS
+/// option (kind 2 / len 4 / 1460) is present, and the TCP checksum -- recomputed
+/// over the pseudo-header AND the stored checksum field -- folds to 0 (the segment
+/// is well-formed and would be accepted by the peer). Refuses to run if a live
+/// connection is in flight, and fully resets CONN afterwards (the conn_reset
+/// discipline) so the live outbound client path is unaffected.
+pub(crate) unsafe fn tcp_mss_selftest() -> u64 {
+    if CONN.state != ST_CLOSED {
+        return 0;
+    }
+    CONN.peer_ip = [10, 0, 2, 2];
+    CONN.peer_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x63];
+    CONN.have_mac = true;
+    CONN.local_port = 49152;
+    CONN.remote_port = 80;
+    let mut frame = [0u8; 128];
+    let built = tcp_build_frame(0x02, 0x0000_1000, 0, &[], &mut frame);
+    let ok = (|| -> Option<()> {
+        let total = built?;
+        // Ethernet (14) + IPv4 header (20) => the TCP header starts at offset 34.
+        let t = &frame[34..total];
+        if (t[12] >> 4) != 6 {
+            return None; // data offset must be 6 (24-byte header) for a SYN
+        }
+        if t[20] != 0x02 || t[21] != 0x04 || t[22] != 0x05 || t[23] != 0xB4 {
+            return None; // MSS option kind=2 len=4 value=1460
+        }
+        // Recompute the checksum over the pseudo-header + the full TCP segment
+        // (which includes the stored checksum); a valid checksum folds to 0.
+        let tcp_len = total - 34;
+        let mut s = 0u32;
+        csum_words(&mut s, &GUEST_IP);
+        csum_words(&mut s, &CONN.peer_ip);
+        s += 6;
+        s += tcp_len as u32;
+        csum_words(&mut s, &frame[34..total]);
+        if csum_fold(s) != 0 {
+            return None;
+        }
+        Some(())
+    })();
+    conn_reset();
+    if ok.is_some() {
+        serial_write(b"TCP: mss ok\n");
+        1
+    } else {
+        serial_write(b"TCP: mss fail\n");
+        0
+    }
 }
 
 /// Number of sequence numbers a segment with these flags + payload consumes
