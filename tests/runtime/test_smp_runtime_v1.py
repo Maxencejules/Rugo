@@ -173,6 +173,13 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # live task table for ap_eligible Ready tasks (under the run-queue lock) and
         # runs them in ring 3 -- no per-task dispatch from the BSP, each exactly once.
         "SMP: live sched ran=0x0000000000000003 ap-affinity ok",
+        # Preemptible AP task (live per-CPU scheduler slice 4): an AP runs a
+        # CPU-bound task in ring 3 with IF=1, and its OWN periodic LAPIC timer
+        # fires INSIDE the running task (counted in the hits= field, >0) -- proof
+        # the AP's preemption clock lands mid-task, the precondition for
+        # time-slicing on an application processor. The task's loop counter
+        # survives each interrupt in its saved frame, so it still completes (ran=1).
+        "SMP: ap preempt ok",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

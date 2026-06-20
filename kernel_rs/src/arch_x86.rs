@@ -221,6 +221,29 @@ cfg_user! {
         );
     }
 
+    /// Like `enter_ring3_with_arg` but with RFLAGS.IF SET (0x202): the ring-3
+    /// task is PREEMPTIBLE, so this AP's own periodic LAPIC timer can land
+    /// while the task runs and the kernel can preempt it (full-os Part I.3,
+    /// live per-CPU scheduler). Only safe on an AP whose LAPIC timer vector
+    /// (241) is installed and whose timer-preemption handler is ready to take a
+    /// ring-3 interrupt on this core.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    pub(crate) unsafe fn enter_ring3_with_arg_preempt(code_va: u64, user_sp: u64, arg: u64) -> ! {
+        core::arch::asm!(
+            "push 0x1B",
+            "push {stack}",
+            "push 0x202",
+            "push 0x23",
+            "push {code}",
+            "mov rdi, {arg}",
+            "iretq",
+            stack = in(reg) user_sp,
+            code = in(reg) code_va,
+            arg = in(reg) arg,
+            options(noreturn),
+        );
+    }
+
     // Per-CPU kernel stacks for application processors that run ring-3 tasks
     // (SMP capstone). Each AP's TSS rsp0 points at the top of its own stack, so
     // a ring-3→ring-0 transition (syscall/interrupt) on one AP never collides

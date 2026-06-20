@@ -623,8 +623,18 @@ unsafe fn ap_run_user_task(gen: u64, arg: u64) -> ! {
     let ucr3 = AP_USER_CR3.load(Ordering::Acquire);
     let entry = AP_USER_ENTRY.load(Ordering::Acquire);
     let usp = AP_USER_SP.load(Ordering::Acquire);
+    // Live-scheduler preemption (slice 4): launch the task PREEMPTIBLE (IF=1) so
+    // this AP's periodic LAPIC timer can land mid-task and the kernel can preempt
+    // it. Only when SMP_PREEMPT_MODE is set (the ap_preempt_selftest window); the
+    // capstone / migrate / concurrent / plain-live-sched tasks keep IF=0 (run to
+    // completion, no timer mid-flight), so this is transparent to them.
+    let preempt = SMP_PREEMPT_MODE.load(Ordering::Acquire) != 0;
     core::arch::asm!("mov cr3, {}", in(reg) ucr3, options(nostack));
-    crate::arch_x86::enter_ring3_with_arg(entry, usp, arg);
+    if preempt {
+        crate::arch_x86::enter_ring3_with_arg_preempt(entry, usp, arg);
+    } else {
+        crate::arch_x86::enter_ring3_with_arg(entry, usp, arg);
+    }
 }
 
 /// AP user-task report handler (trap_handler vector 0x81, ring 3 only). Records
@@ -746,12 +756,25 @@ unsafe fn ap_user_selftest() -> bool {
 }
 
 /// LAPIC-timer service routine (from trap_handler vector 241): tick + EOI.
-pub(crate) unsafe fn lapic_timer_handler() {
+pub(crate) unsafe fn lapic_timer_handler(_frame: *mut u64) {
     AP_TICKS.fetch_add(1, Ordering::SeqCst);
     // Bump THIS CPU's per-CPU tick counter through the GS base: no lock and no
     // CPU-id lookup, because each CPU's GS base points at its own slot. This is
     // the exact access pattern a per-CPU scheduler uses for `current`/run-queue.
     core::arch::asm!("add qword ptr gs:[8], 1", options(nostack));
+    // Live per-CPU scheduler slice 4 (preemption): when preempt mode is on and
+    // this timer interrupted a RING-3 task on this AP (CS RPL == 3 in the saved
+    // frame), record it. Until the task ran IF=1 the timer could never land
+    // mid-task, so a non-zero count is proof the AP's own preemption clock fires
+    // inside a running user task -- the foundation of preemptive multitasking on
+    // an application processor. (This runs in an interrupt gate, IF=0, so no
+    // re-entrancy; it takes no lock, so it cannot deadlock against a lock holder.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    {
+        if SMP_PREEMPT_MODE.load(Ordering::Acquire) != 0 && (*_frame.add(18) & 3) == 3 {
+            AP_PREEMPT_HITS.fetch_add(1, Ordering::AcqRel);
+        }
+    }
     x2apic_eoi();
 }
 
@@ -891,6 +914,17 @@ static SMP_LIVE_RAN: AtomicU64 = AtomicU64::new(0); // tasks completed on APs
 static SMP_LIVE_BASE: AtomicU64 = AtomicU64::new(0); // first run-set slot
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 static SMP_LIVE_COUNT: AtomicU64 = AtomicU64::new(0); // run-set slot count
+// Live per-CPU scheduler slice 4: when set, an AP pulls its task PREEMPTIBLY
+// (ring 3 with IF=1) so this CPU's own periodic LAPIC timer can land while the
+// task runs, and the timer handler counts/handles that preemption. 0 = the
+// existing run-to-completion behaviour (the other SMP self-tests are untouched).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static SMP_PREEMPT_MODE: AtomicU64 = AtomicU64::new(0);
+// Times this AP's LAPIC timer interrupted a ring-3 task on its own core (the
+// preemption clock firing during a running user task -- impossible until the
+// task runs IF=1).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_PREEMPT_HITS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) unsafe fn r4_rq_lock() {
@@ -1061,6 +1095,102 @@ unsafe fn smp_live_sched_selftest() -> bool {
         serial_write(b" ok\n");
     } else {
         serial_write(b" FAIL\n");
+    }
+    ok
+}
+
+/// CPU-bound ring-3 payload (live per-CPU scheduler slice 4): spin a bounded loop
+/// -- long enough that this AP's periodic LAPIC timer fires (and preempts it)
+/// several times -- then report via int 0x81 so the AP retires it. The loop
+/// counter lives in RCX, which is saved/restored in the trap frame across each
+/// preemption, so the task makes monotonic progress and always terminates.
+///   48 B9 00 00 00 04 00 00 00 00   mov rcx, 0x04000000   ; ~67M iterations
+///   48 FF C9                        dec rcx
+///   75 FB                           jnz -5                ; back to `dec rcx`
+///   31 FF                           xor edi, edi          ; report 0 (unused)
+///   CD 81                           int 0x81              ; hand back to the kernel
+///   EB FE                           jmp $                 ; (unreached; trampolined away)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_SPIN_CODE: [u8; 21] = [
+    0x48, 0xB9, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x48, 0xFF, 0xC9, 0x75, 0xFB, 0x31,
+    0xFF, 0xCD, 0x81, 0xEB, 0xFE,
+];
+
+/// BSP side of slice 4 (preemptible AP tasks): create one CPU-bound, AP-eligible
+/// R4 task, switch the AP into preempt mode, and let it autonomously pull and run
+/// the task PREEMPTIBLY (ring 3, IF=1). While the task spins, this AP's own
+/// periodic LAPIC timer lands INSIDE it -- something impossible until now, because
+/// every other AP task runs IF=0 (run to completion). The timer handler counts
+/// those mid-task hits (AP_PREEMPT_HITS); the task's loop counter survives each
+/// interrupt in its saved frame, so it still finishes and reports, and the AP
+/// retires it. A non-zero hit count plus a clean completion proves the AP's
+/// preemption clock fires inside a running user task -- the precondition for
+/// time-slicing tasks on an application processor (the reschedule itself is the
+/// next slice). Deadlock-free: the timer handler only COUNTS here (no lock, no
+/// context switch), so it cannot block on any run-queue lock holder.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn ap_preempt_selftest() -> bool {
+    // A reserved slot distinct from migrate (MAX-1) and the live-sched run set
+    // (MAX-2..MAX-4); all of those were retired to Dead before we run.
+    let tid: usize = crate::R4_MAX_TASKS - 5;
+    const CODE_VA: u64 = 0x0140_0000; // exec-app window (loader clears NX)
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let ucr3 = match crate::mm::address_space_create(kcr3) {
+        Some(p) => p,
+        None => return false,
+    };
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_SPIN_CODE)
+        || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+    {
+        crate::mm::address_space_release(ucr3);
+        return false;
+    }
+    crate::r4_init_task(tid, CODE_VA, STACK_TOP, 0);
+    crate::R4_TASKS[tid].pml4_phys = ucr3;
+    crate::R4_TASKS[tid].ap_eligible = true; // only an AP claims it
+    crate::R4_TASKS[tid].state = crate::R4State::Ready; // READY: an AP will pull it
+    AP_PREEMPT_HITS.store(0, Ordering::Release);
+    SMP_LIVE_RAN.store(0, Ordering::Release);
+    SMP_PREEMPT_MODE.store(1, Ordering::Release); // launch IF=1 + count timer hits
+    SMP_LIVE_MODE.store(1, Ordering::Release); // APs may pull
+    // Bounded wait: a CPU-bound spin under TCG runs much longer than the quick
+    // live-sched tasks, so the budget is larger. The wait exits the instant the AP
+    // retires the task (SMP_LIVE_RAN reaches 1); the cap is only a no-progress
+    // backstop (never reached on success).
+    let mut spins = 0u64;
+    while SMP_LIVE_RAN.load(Ordering::Acquire) < 1 && spins < 4_000_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    SMP_LIVE_MODE.store(0, Ordering::Release);
+    SMP_PREEMPT_MODE.store(0, Ordering::Release);
+    let ran = SMP_LIVE_RAN.load(Ordering::Acquire);
+    let hits = AP_PREEMPT_HITS.load(Ordering::Acquire);
+    // Teardown gated on ran>=1 (the task completed -> ap_user_trap restored the
+    // kernel CR3 on the AP before publishing, and we read `ran` with Acquire, so
+    // the AP is provably off ucr3): only then free the page tables + retire the
+    // slot under the run-queue lock. On a timeout, intentionally leak rather than
+    // free a live page tree a claiming AP might still translate through (a
+    // cross-CPU UAF) -- exactly as the sibling self-tests do.
+    if ran >= 1 {
+        r4_rq_lock();
+        crate::R4_TASKS[tid].state = crate::R4State::Dead;
+        r4_rq_unlock();
+        crate::mm::address_space_release(ucr3);
+    }
+    let ok = ran >= 1 && hits > 0;
+    serial_write(b"SMP: ap preempt hits=0x");
+    serial_write_hex(hits);
+    serial_write(b" ran=0x");
+    serial_write_hex(ran);
+    serial_write(b"\n");
+    if ok {
+        serial_write(b"SMP: ap preempt ok\n");
+    } else {
+        serial_write(b"SMP: ap preempt FAIL\n");
     }
     ok
 }
@@ -1427,6 +1557,9 @@ pub fn smp_init() {
                 // Live SMP scheduler: an AP autonomously pulls READY R4 tasks from
                 // the run set (claiming each under the run-queue lock) and runs them.
                 let _ = smp_live_sched_selftest();
+                // Live SMP scheduler slice 4: an AP runs a CPU-bound task PREEMPTIBLY
+                // (IF=1) and its own LAPIC timer fires inside the running ring-3 task.
+                let _ = ap_preempt_selftest();
             }
         }
     }
