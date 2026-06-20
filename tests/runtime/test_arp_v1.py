@@ -15,6 +15,12 @@ def test_arp_responder(qemu_go_c4_runtime, find_in_order):
 
     find_in_order(out, [
         "ARP: reply ok",
+        # Gratuitous ARP: a broadcast announcement of our own IP->MAC binding
+        # (sender IP == target IP == GUEST_IP), sent after address configuration.
+        "ARP: gratuitous ok",
+        # ARP cache: an IPv4->MAC binding is learned, looked up, refreshed in place,
+        # and an unknown address misses (the guest can resolve peers it has seen).
+        "ARP: cache ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])

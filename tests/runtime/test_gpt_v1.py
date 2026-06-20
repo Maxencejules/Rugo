@@ -74,8 +74,13 @@ def test_gpt_partition_parse(qemu_go_c4_runtime, find_in_order):
         "GPT: part first=0x0000000000000022",   # ESP at LBA 34 (0x22)
         "GPT: part first=0x0000000000000822",   # root at LBA 2082 (0x822)
         "GPT: parsed n=0x0000000000000002",
+        # Header CRC-32 validation: a known-answer test proves crc32 is the real
+        # IEEE polynomial, then a synthetic GPT header validates its stamped header
+        # CRC and a one-byte corruption is rejected.
+        "GPT: hdr crc ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "GPT: none" not in out
     assert "GPT: bad header" not in out
+    assert "GPT: hdr crc fail" not in out

@@ -633,6 +633,70 @@ unsafe fn gpt_parse_selftest() {
     serial_write(b"\n");
 }
 
+/// IEEE 802.3 CRC-32 (reflected, polynomial 0xEDB88320) over `data`. Bitwise (no
+/// table) to keep the .text small. The same CRC GPT uses for its header and
+/// partition-array integrity fields. (full-os guide Part II.5, partitions.)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    let mut i = 0;
+    while i < data.len() {
+        crc ^= data[i] as u32;
+        let mut k = 0;
+        while k < 8 {
+            let m = (crc & 1).wrapping_neg(); // 0xFFFFFFFF when the low bit is set
+            crc = (crc >> 1) ^ (0xEDB8_8320 & m);
+            k += 1;
+        }
+        i += 1;
+    }
+    !crc
+}
+
+/// GPT header-CRC validation self-test (full-os guide Part II.5): the existing GPT
+/// parser trusts a signed header without checking its CRC, so a corrupted-but-signed
+/// header is accepted silently. This proves the CRC machinery the validation needs:
+/// (1) a known-answer test that crc32 is the real IEEE CRC-32 (CRC32("123456789") ==
+/// 0xCBF43926); (2) build a synthetic GPT header, stamp its header CRC at offset 16,
+/// and validate it the standard GPT way (zero the CRC field, recompute over
+/// HeaderSize bytes, compare); (3) flip a byte and confirm the recomputed CRC no
+/// longer matches (a corrupted header is rejected). Marker `GPT: hdr crc ok`.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn gpt_crc_selftest() {
+    // (1) Known-answer test: the standard CRC-32 check value.
+    let kat = crc32(b"123456789") == 0xCBF4_3926;
+
+    // (2) Synthesize a minimal GPT header and stamp its header CRC (offset 16..20).
+    const HDR_SIZE: usize = 92;
+    let mut hdr = [0u8; HDR_SIZE];
+    hdr[0..8].copy_from_slice(b"EFI PART");
+    hdr[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes()); // revision 1.0
+    hdr[12..16].copy_from_slice(&(HDR_SIZE as u32).to_le_bytes()); // HeaderSize
+    // offset 16..20 = header CRC, left zero while computing
+    hdr[24..32].copy_from_slice(&1u64.to_le_bytes()); // MyLBA = 1
+    let stored = crc32(&hdr[..HDR_SIZE]);
+    hdr[16..20].copy_from_slice(&stored.to_le_bytes());
+
+    // Validate as a real GPT consumer would: read the stored CRC, zero the field,
+    // recompute over HeaderSize bytes, and compare.
+    let read_crc = u32::from_le_bytes(hdr[16..20].try_into().unwrap());
+    let mut tmp = hdr;
+    tmp[16..20].copy_from_slice(&[0u8; 4]);
+    let valid = crc32(&tmp[..HDR_SIZE]) == read_crc;
+
+    // (3) Corrupt one header byte: the recomputed CRC must no longer match.
+    let mut bad = hdr;
+    bad[24] ^= 0xFF;
+    bad[16..20].copy_from_slice(&[0u8; 4]);
+    let rejects = crc32(&bad[..HDR_SIZE]) != read_crc;
+
+    if kat && valid && rejects {
+        serial_write(b"GPT: hdr crc ok\n");
+    } else {
+        serial_write(b"GPT: hdr crc fail\n");
+    }
+}
+
 /// Write a single-cluster file to the FAT16 root directory (full-os guide Part
 /// II.5, FS maturity): allocate the first free cluster, mark it EOC in every FAT
 /// copy, write the data into that cluster, and fill a free root-dir 8.3 entry.
@@ -4140,6 +4204,8 @@ cfg_r4! {
             20 => netcfg::dad_selftest(), // IPv6 NDP Duplicate Address Detection
             21 => netcfg::icmp_echo_request_selftest(), // ICMPv4 outbound ping builder
             22 => netcfg::icmp_error_selftest(), // ICMPv4 dest-unreachable / time-exceeded
+            23 => netcfg::gratuitous_arp_selftest(), // gratuitous ARP announcement
+            24 => netcfg::arp_cache_selftest(), // IPv4 ARP cache learn/lookup
             _ => ERR,
         }
     }
@@ -12378,6 +12444,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = netcfg::icmp_echo_request_selftest(); // full-os II.6: outbound ping (ICMP echo request)
         let _ = netcfg::icmp_error_selftest(); // full-os II.6: ICMP dest-unreachable / time-exceeded
         let _ = netcfg::arp_selftest();
+        let _ = netcfg::gratuitous_arp_selftest(); // full-os II.6: gratuitous ARP announcement
+        let _ = netcfg::arp_cache_selftest(); // full-os II.6: ARP cache learn/lookup
         let _ = netcfg::icmpv6_selftest();
         let _ = netcfg::udp_echo_selftest();
         let _ = netcfg::ndp_selftest();
@@ -12400,6 +12468,7 @@ pub extern "C" fn kmain() -> ! {
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
         gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
+        gpt_crc_selftest(); // full-os Part II.5: GPT header CRC-32 validation
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         dl_ondisk_seed(); // full-os Part V.11: seed /data/dltest.so for on-disk dlopen
         let _ = kbd::input_event_selftest(); // full-os Part III: input event queue

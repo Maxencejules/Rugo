@@ -401,6 +401,14 @@ unsafe fn build_arp_reply(req: &[u8], out: &mut [u8]) -> Option<usize> {
 /// Live RX responder: answer ARP "who-has GUEST_IP" so the guest is reachable
 /// (full-os guide Part II.6). Called from the RX pump for ARP request frames.
 pub(crate) unsafe fn arp_input(frame: &[u8]) {
+    // Learn the sender's IPv4 -> MAC binding from any well-formed ARP frame (request
+    // or reply), so the guest can resolve peers it has seen (full-os Part II.6).
+    if frame.len() >= 42 && u16::from_be_bytes([frame[12], frame[13]]) == 0x0806 {
+        let arp = &frame[14..];
+        let smac = [arp[8], arp[9], arp[10], arp[11], arp[12], arp[13]];
+        let sip = [arp[14], arp[15], arp[16], arp[17]];
+        arp_cache_learn(sip, smac);
+    }
     let mut out = [0u8; 42];
     if let Some(len) = build_arp_reply(frame, &mut out) {
         let _ = net::wire_send(&out[..len]);
@@ -448,6 +456,119 @@ pub(crate) unsafe fn arp_selftest() -> u64 {
         return 0;
     }
     serial_write(b"ARP: reply ok\n");
+    1
+}
+
+/// Build a gratuitous ARP announcement (full-os Part II.6): a broadcast ARP request
+/// whose sender AND target protocol address are both the guest IP -- the standard
+/// "announce my IP->MAC binding" frame a host sends after configuring an address
+/// (and the basis for address-conflict detection). Writes 42 bytes, returns the len.
+unsafe fn build_gratuitous_arp(out: &mut [u8]) -> Option<usize> {
+    if out.len() < 42 {
+        return None;
+    }
+    for b in out[..42].iter_mut() {
+        *b = 0;
+    }
+    let mac = net::net_mac();
+    out[0..6].copy_from_slice(&[0xFF; 6]); // broadcast
+    out[6..12].copy_from_slice(&mac);
+    out[12] = 0x08;
+    out[13] = 0x06;
+    let a = &mut out[14..42];
+    a[1] = 0x01; // HTYPE ethernet
+    a[2] = 0x08;
+    a[3] = 0x00; // PTYPE IPv4
+    a[4] = 6;
+    a[5] = 4;
+    a[7] = 0x01; // opcode request (gratuitous)
+    a[8..14].copy_from_slice(&mac); // sender MAC = us
+    a[14..18].copy_from_slice(&GUEST_IP); // sender IP = guest
+    // target MAC stays 0; target IP = guest (the gratuitous self-announcement).
+    a[24..28].copy_from_slice(&GUEST_IP);
+    Some(42)
+}
+
+/// Self-test (op 23): build a gratuitous ARP and verify it is a broadcast request
+/// announcing our own IP (sender IP == target IP == GUEST_IP, sender MAC == ours).
+pub(crate) unsafe fn gratuitous_arp_selftest() -> u64 {
+    let mut out = [0u8; 42];
+    if build_gratuitous_arp(&mut out) != Some(42) {
+        return 0;
+    }
+    let mac = net::net_mac();
+    if out[0..6] != [0xFF; 6] || out[6..12] != mac || out[12] != 0x08 || out[13] != 0x06 {
+        return 0;
+    }
+    let a = &out[14..42];
+    if a[7] != 1 || a[8..14] != mac || a[14..18] != GUEST_IP || a[24..28] != GUEST_IP {
+        return 0;
+    }
+    serial_write(b"ARP: gratuitous ok\n");
+    1
+}
+
+// IPv4 ARP cache (full-os Part II.6): IP -> MAC bindings learned from inbound ARP
+// frames so the guest can resolve peers it has seen. A small fixed table; an
+// existing IP is updated in place, otherwise a free slot (or a hash-indexed slot on
+// overflow) is taken.
+const ARP_CACHE_SZ: usize = 8;
+static mut ARP_CACHE: [([u8; 4], [u8; 6], bool); ARP_CACHE_SZ] =
+    [([0; 4], [0; 6], false); ARP_CACHE_SZ];
+
+unsafe fn arp_cache_learn(ip: [u8; 4], mac: [u8; 6]) {
+    if ip == [0, 0, 0, 0] {
+        return;
+    }
+    let mut free = ARP_CACHE_SZ;
+    let mut i = 0;
+    while i < ARP_CACHE_SZ {
+        if ARP_CACHE[i].2 && ARP_CACHE[i].0 == ip {
+            ARP_CACHE[i].1 = mac; // refresh an existing binding
+            return;
+        }
+        if !ARP_CACHE[i].2 && free == ARP_CACHE_SZ {
+            free = i;
+        }
+        i += 1;
+    }
+    let slot = if free < ARP_CACHE_SZ {
+        free
+    } else {
+        (ip[3] as usize) % ARP_CACHE_SZ // evict by a cheap hash on full
+    };
+    ARP_CACHE[slot] = (ip, mac, true);
+}
+
+unsafe fn arp_cache_lookup(ip: [u8; 4]) -> Option<[u8; 6]> {
+    let mut i = 0;
+    while i < ARP_CACHE_SZ {
+        if ARP_CACHE[i].2 && ARP_CACHE[i].0 == ip {
+            return Some(ARP_CACHE[i].1);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Self-test (op 24): learn a binding, look it up, refresh it, and confirm an
+/// unknown address misses. Deterministic; exercises the ARP cache directly.
+pub(crate) unsafe fn arp_cache_selftest() -> u64 {
+    let ip = [10, 0, 2, 99];
+    let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+    arp_cache_learn(ip, mac);
+    if arp_cache_lookup(ip) != Some(mac) {
+        return 0;
+    }
+    let mac2 = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+    arp_cache_learn(ip, mac2); // refresh in place
+    if arp_cache_lookup(ip) != Some(mac2) {
+        return 0;
+    }
+    if arp_cache_lookup([10, 0, 2, 98]).is_some() {
+        return 0; // never learned -> miss
+    }
+    serial_write(b"ARP: cache ok\n");
     1
 }
 
