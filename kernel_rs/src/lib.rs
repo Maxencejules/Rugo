@@ -528,13 +528,18 @@ unsafe fn fat16_read_chain(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
     }
 
     // Walk the chain: copy each cluster's sectors, then follow the FAT16 entry
-    // (2 bytes per cluster) to the next cluster until EOC (>= 0xFFF8). The guard
-    // bounds iterations so a corrupt self-referential chain cannot loop forever.
+    // (2 bytes per cluster) to the next cluster until a terminal value. A valid data
+    // cluster is [2, 0xFFEF]; 0xFFF0..=0xFFF6 are reserved, 0xFFF7 is a bad-cluster
+    // marker, and 0xFFF8..=0xFFFF is end-of-chain. Stopping at `< 0xFFF0` means a
+    // reserved or bad-cluster FAT entry terminates the read instead of being followed
+    // as a (bogus, out-of-range) cluster number -- which would compute a wild
+    // data_lba and read garbage off the disk. The iteration guard additionally bounds
+    // a corrupt self-referential chain so it cannot loop forever.
     let want = core::cmp::min(file_size as usize, out.len());
     let mut written = 0usize;
     let mut guard = 0u64;
     let max_clusters = out.len() as u64 / (spc * 512) + 4;
-    while cluster >= 2 && cluster < 0xFFF8 && written < want {
+    while cluster >= 2 && cluster < 0xFFF0 && written < want {
         guard += 1;
         if guard > max_clusters {
             return None;
@@ -6874,6 +6879,19 @@ cfg_r4! {
                 serial_write(b"FATBIG: chain read ok size=0x");
                 serial_write_hex(n as u64);
                 serial_write(b"\n");
+                // Bad/reserved-cluster guard (full-os Part II.5): BAD.TXT is a
+                // 600-byte file whose first cluster's FAT entry is the bad-cluster
+                // marker 0xFFF7 (not a valid next cluster). The chain walker must
+                // STOP at that terminal value and return only the first cluster's
+                // 512 bytes -- never follow 0xFFF7 as a cluster number (which would
+                // index a wild data_lba and read garbage). (The crafting test is the
+                // only caller of op 12 and supplies BAD.TXT alongside BIG.TXT.)
+                let badname: [u8; 11] = *b"BAD     TXT";
+                let mut bad = [0u8; 1024];
+                match fat16_read_chain(&badname, &mut bad) {
+                    Some(512) => serial_write(b"FATBIG: bad-cluster guarded ok\n"),
+                    _ => serial_write(b"FATBIG: bad-cluster guard FAIL\n"),
+                }
                 1
             }
             // op 13 = online CPU count (the BSP + every checked-in AP). Lets
