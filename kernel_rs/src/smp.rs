@@ -413,10 +413,170 @@ pub unsafe fn storage_smp_selftest() {
     }
 }
 
+// Cross-CPU VFS contention self-test (full-os Part I.3, workload-distribution slice 3).
+// The BSP and an AP each create + write VFS_TEST_N DISTINCT /data files CONCURRENTLY,
+// each file filled with a CPU+index byte. After the join the BSP reads every file back
+// and verifies all bytes match, then unlinks all the test files (net-neutral). A broken
+// FS_LOCK would let two concurrent vfs_open(create) grab the SAME free node slot, or two
+// concurrent vfs_write race the bitmap / clobber the single JTXN snapshot -> a file would
+// read back the wrong content (or create/write would fail). Exercises FS_LOCK AND the
+// FS < STORAGE nesting (each vfs op does block I/O under STORAGE_LOCK inside FS_LOCK).
+// Skips when no AP is online or /data is not mounted. Runs single-threaded on the BSP
+// after the FS is up, before the live scheduler; only the ephemeral -smp2/-smp4 go disks
+// reach it (the files are created + unlinked, so the on-disk FS is left as found).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const VFS_TEST_N: u64 = 4;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const VFS_TEST_LEN: usize = 64;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const VFS_TAG_BSP: u8 = 0xB0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const VFS_TAG_AP: u8 = 0xA0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static VFS_TEST_AP_READY: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static VFS_TEST_GO: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static VFS_TEST_AP_OK: AtomicU64 = AtomicU64::new(0); // 0=running, 1=all ok, 2=create/write failed
+
+// File name "/.v<cpu><i>" (5 bytes, /data-relative, no NUL -- matching the vfs selftest
+// convention vfs_open(b"/.rnsrc", true)). cpu = b'b' (BSP) or b'a' (AP).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+fn vfs_test_name(cpu: u8, i: u64) -> [u8; 5] {
+    [b'/', b'.', b'v', cpu, b'0' + i as u8]
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn vfs_test_write_batch(cpu: u8, tag: u8) -> bool {
+    let mut all = true;
+    let mut i = 0u64;
+    while i < VFS_TEST_N {
+        let name = vfs_test_name(cpu, i);
+        let val = tag ^ (i as u8);
+        let buf = [val; VFS_TEST_LEN];
+        match crate::vfs::vfs_open(&name, true) {
+            Some(idx) => {
+                if crate::vfs::vfs_write(idx, 0, &buf) != VFS_TEST_LEN {
+                    all = false;
+                }
+            }
+            None => all = false,
+        }
+        i += 1;
+    }
+    all
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn vfs_test_verify_batch(cpu: u8, tag: u8) -> bool {
+    let mut ok = true;
+    let mut i = 0u64;
+    while i < VFS_TEST_N {
+        let name = vfs_test_name(cpu, i);
+        let val = tag ^ (i as u8);
+        match crate::vfs::vfs_lookup(&name) {
+            Some(idx) => {
+                let mut buf = [0u8; VFS_TEST_LEN];
+                let n = crate::vfs::vfs_read(idx, 0, &mut buf);
+                if n != VFS_TEST_LEN {
+                    ok = false;
+                }
+                let mut k = 0usize;
+                while k < n {
+                    if buf[k] != val {
+                        ok = false;
+                    }
+                    k += 1;
+                }
+            }
+            None => ok = false,
+        }
+        i += 1;
+    }
+    ok
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn vfs_test_cleanup(cpu: u8) {
+    let mut i = 0u64;
+    while i < VFS_TEST_N {
+        let name = vfs_test_name(cpu, i);
+        let _ = crate::vfs::vfs_unlink(&name);
+        i += 1;
+    }
+}
+
+/// AP side of the VFS contention test (work kind 6): reach the barrier, wait for the
+/// BSP's go, then create + write the AP's files concurrently with the BSP doing its own.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn vfs_test_ap_io() {
+    VFS_TEST_AP_READY.store(1, Ordering::Release);
+    let mut s = 0u64;
+    while VFS_TEST_GO.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    let ok = vfs_test_write_batch(b'a', VFS_TAG_AP);
+    VFS_TEST_AP_OK.store(if ok { 1 } else { 2 }, Ordering::Release);
+}
+
+/// BSP entry: run the cross-CPU VFS contention test. Skips silently (no marker, no FS
+/// changes) when no AP is online or /data is not mounted. Emits "SMP: vfs smp ran=..
+/// contend=.. ok" on the -smp2/-smp4 go lanes. Call after the FS is mounted and before
+/// the live scheduler.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn vfs_smp_selftest() {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 || !crate::vfs::vfs_ready() {
+        return;
+    }
+    VFS_TEST_AP_READY.store(0, Ordering::Release);
+    VFS_TEST_GO.store(0, Ordering::Release);
+    VFS_TEST_AP_OK.store(0, Ordering::Release);
+    let contend0 = FS_CONTENTION.load(Ordering::Relaxed);
+    let gen = smp_dispatch_async(6, 0);
+    if gen == 0 {
+        return;
+    }
+    let mut s = 0u64;
+    while VFS_TEST_AP_READY.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    if VFS_TEST_AP_READY.load(Ordering::Acquire) == 0 {
+        let _ = smp_join(gen);
+        serial_write(b"SMP: vfs smp timeout FAIL\n");
+        return;
+    }
+    // Release both cores, then create + write the BSP files concurrently with the AP's.
+    VFS_TEST_GO.store(1, Ordering::Release);
+    let bsp_ok = vfs_test_write_batch(b'b', VFS_TAG_BSP);
+    let _ = smp_join(gen);
+    let ap_ok = VFS_TEST_AP_OK.load(Ordering::Acquire) == 1;
+    let verify_ok = bsp_ok
+        && ap_ok
+        && vfs_test_verify_batch(b'b', VFS_TAG_BSP)
+        && vfs_test_verify_batch(b'a', VFS_TAG_AP);
+    // Net-neutral: remove every test file so the persisted /data FS is left as found.
+    vfs_test_cleanup(b'b');
+    vfs_test_cleanup(b'a');
+    let contend = FS_CONTENTION.load(Ordering::Relaxed).wrapping_sub(contend0);
+    serial_write(b"SMP: vfs smp ran=0x");
+    serial_write_hex(VFS_TEST_N);
+    serial_write(b" contend=0x");
+    serial_write_hex(contend);
+    if verify_ok {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+}
+
 /// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
 /// iteratively (a real workload the dispatcher can independently check). Kind 3 =
 /// the AP side of the PMM contention self-test; kind 4 = the AP side of the heap
-/// contention self-test; kind 5 = the AP side of the block-I/O contention self-test.
+/// contention self-test; kind 5 = the AP side of the block-I/O contention self-test;
+/// kind 6 = the AP side of the VFS contention self-test.
 unsafe fn run_work(kind: u64, arg: u64) -> u64 {
     match kind {
         1 => {
@@ -441,6 +601,11 @@ unsafe fn run_work(kind: u64, arg: u64) -> u64 {
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         5 => {
             blk_test_ap_io();
+            0
+        }
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        6 => {
+            vfs_test_ap_io();
             0
         }
         _ => 0,

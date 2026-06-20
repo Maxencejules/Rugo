@@ -208,6 +208,13 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # cross-clobber would emit " FAIL" (caught by the assert below). This runs in
         # the kmain go region (after the block device is up), not the smp_init block.
         "SMP: blk smp ran=0x0000000000000008",
+        # Workload-distribution slice 3: the BSP and the AP CONCURRENTLY created +
+        # wrote 4 distinct /data files each, and the BSP read every one back byte-exact
+        # -- FS_LOCK serialized the VFS node/bitmap cache + journal txn across cores
+        # (with STORAGE_LOCK nested inside each block flush) so neither clobbered the
+        # other's free node slot / bitmap / JTXN snapshot. Files are unlinked after
+        # (net-neutral). contend= varies per boot; a failure emits " FAIL".
+        "SMP: vfs smp ran=0x0000000000000004",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

@@ -10634,6 +10634,38 @@ pub(crate) unsafe fn storage_io_enter() -> u64 {
 #[inline]
 pub(crate) unsafe fn storage_io_exit(_saved: u64) {}
 
+// VFS critical-section guard (full-os Part I.3, workload-distribution slice 3). FS_LOCK
+// serializes whole VFS operations across cores: the single-instance VFS.nodes/bitmap
+// cache + the single JTXN journal transaction (a 2nd concurrent txn_begin would clobber
+// the rollback snapshot). It wraps each top-level vfs_* entry so the operation -- begin
+// -> metadata flush -> commit/abort -- is atomic against another CPU. STORAGE_LOCK nests
+// INSIDE it (FS < STORAGE: vfs_write -> jwrite -> write_sector -> storage_io_enter). The
+// user-memory copyin/copyout stay OUTSIDE (in the syscall handler, on kernel buffers),
+// so FS_LOCK never covers a user fault -> alloc (PMM/HEAP are OUTER; that would invert
+// the order). No vfs_* path blocks (block I/O polls), so the lock is never held across a
+// switch. Taken with interrupts masked (leaf discipline). No-op in compat_real_test.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn fs_io_enter() -> u64 {
+    let saved = smp::lock_cli();
+    smp::fs_lock();
+    saved
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn fs_io_exit(saved: u64) {
+    smp::fs_unlock();
+    smp::unlock_sti(saved);
+}
+#[cfg(feature = "compat_real_test")]
+#[inline]
+pub(crate) unsafe fn fs_io_enter() -> u64 {
+    0
+}
+#[cfg(feature = "compat_real_test")]
+#[inline]
+pub(crate) unsafe fn fs_io_exit(_saved: u64) {}
+
 /// Write one 4 KiB page (8 sectors) from the physical frame `src_phys` to the
 /// block device starting at `lba` (full-os guide Part I.4 swap). Copies through
 /// the shared BLK_DATA_PAGE one sector at a time (the block path is 512 B).
@@ -12879,6 +12911,11 @@ pub extern "C" fn kmain() -> ! {
         // the STORAGE_LOCK serializing the shared BLK_DATA_PAGE + virtio ring across
         // cores. Runs only when an AP is online (-smp2/-smp4 go lanes); a no-op on -smp1.
         smp::storage_smp_selftest();
+        // full-os Part I.3 (slice 3): the BSP + an AP create + write distinct /data
+        // files CONCURRENTLY and the BSP proves each read back byte-correct -- FS_LOCK
+        // serializing the VFS node/bitmap cache + journal txn across cores (with
+        // STORAGE_LOCK nested inside the block flushes). No-op on -smp1 / unmounted FS.
+        smp::vfs_smp_selftest();
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline

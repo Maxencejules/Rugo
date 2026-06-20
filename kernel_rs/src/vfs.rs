@@ -364,9 +364,13 @@ pub(crate) unsafe fn set_node_mode(idx: usize, mode: u8) -> bool {
     flush_node_sector(idx)
 }
 
-/// Resolve a path to its node index without creating anything.
+/// Resolve a path to its node index without creating anything. FS_LOCK-guarded
+/// (slice 3); calls the unlocked inner so it does not re-enter vfs_open's lock.
 pub(crate) unsafe fn vfs_lookup(path: &[u8]) -> Option<usize> {
-    vfs_open(path, false)
+    let g = crate::fs_io_enter();
+    let r = vfs_open_inner(path, false);
+    crate::fs_io_exit(g);
+    r
 }
 
 unsafe fn node_start(idx: usize) -> usize {
@@ -600,7 +604,17 @@ fn blocks_for(bytes: usize) -> usize {
 }
 
 /// Look up an existing node; optionally create a missing file leaf.
+/// FS_LOCK-guarded entry (slice 3): serializes the open/create against any other VFS
+/// op on another core. User copyin of `path` happened in the handler (kernel buffer),
+/// so the lock covers no user fault. STORAGE_LOCK nests inside via the flush path.
 pub(crate) unsafe fn vfs_open(path: &[u8], create: bool) -> Option<usize> {
+    let g = crate::fs_io_enter();
+    let r = vfs_open_inner(path, create);
+    crate::fs_io_exit(g);
+    r
+}
+
+unsafe fn vfs_open_inner(path: &[u8], create: bool) -> Option<usize> {
     if !VFS.ready {
         return None;
     }
@@ -635,6 +649,12 @@ pub(crate) unsafe fn vfs_open(path: &[u8], create: bool) -> Option<usize> {
 }
 
 pub(crate) unsafe fn vfs_mkdir(path: &[u8]) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_mkdir_inner(path);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_mkdir_inner(path: &[u8]) -> bool {
     if !VFS.ready {
         return false;
     }
@@ -660,6 +680,12 @@ pub(crate) unsafe fn vfs_mkdir(path: &[u8]) -> bool {
 }
 
 pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_unlink_inner(path);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_unlink_inner(path: &[u8]) -> bool {
     if !VFS.ready {
         return false;
     }
@@ -704,6 +730,12 @@ pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
 /// node-table write is journaled atomically with the superblock, exactly like
 /// vfs_mkdir/vfs_unlink, so a crash never leaves a half-renamed entry.
 pub(crate) unsafe fn vfs_rename(path: &[u8], new_name: &[u8]) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_rename_inner(path, new_name);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_rename_inner(path: &[u8], new_name: &[u8]) -> bool {
     if !VFS.ready || new_name.is_empty() || new_name.len() > NAME_MAX {
         return false;
     }
@@ -782,6 +814,12 @@ pub(crate) unsafe fn vfs_rename_selftest() -> bool {
 /// leaves a block freed while the node still claims it, or vice versa). Fails on a
 /// missing path, a directory, or a grow.
 pub(crate) unsafe fn vfs_truncate(path: &[u8], new_size: usize) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_truncate_inner(path, new_size);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_truncate_inner(path: &[u8], new_size: usize) -> bool {
     if !VFS.ready {
         return false;
     }
@@ -875,6 +913,12 @@ pub(crate) unsafe fn vfs_truncate_selftest() -> bool {
 
 /// stat: returns (kind, size).
 pub(crate) unsafe fn vfs_stat(path: &[u8]) -> Option<(u8, usize)> {
+    let g = crate::fs_io_enter();
+    let r = vfs_stat_inner(path);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_stat_inner(path: &[u8]) -> Option<(u8, usize)> {
     if !VFS.ready {
         return None;
     }
@@ -884,6 +928,12 @@ pub(crate) unsafe fn vfs_stat(path: &[u8]) -> Option<(u8, usize)> {
 }
 
 pub(crate) unsafe fn vfs_read(idx: usize, offset: usize, dst: &mut [u8]) -> usize {
+    let g = crate::fs_io_enter();
+    let r = vfs_read_inner(idx, offset, dst);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_read_inner(idx: usize, offset: usize, dst: &mut [u8]) -> usize {
     if !VFS.ready || node_kind(idx) != KIND_FILE {
         return 0;
     }
@@ -910,6 +960,12 @@ pub(crate) unsafe fn vfs_read(idx: usize, offset: usize, dst: &mut [u8]) -> usiz
 }
 
 pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
+    let g = crate::fs_io_enter();
+    let r = vfs_write_inner(idx, offset, src);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_write_inner(idx: usize, offset: usize, src: &[u8]) -> usize {
     if !VFS.ready || node_kind(idx) != KIND_FILE {
         return 0;
     }
@@ -1001,6 +1057,12 @@ pub(crate) unsafe fn vfs_readdir(
     cursor: usize,
     dst: &mut [u8],
 ) -> (usize, usize) {
+    let g = crate::fs_io_enter();
+    let r = vfs_readdir_inner(dir, cursor, dst);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_readdir_inner(dir: usize, cursor: usize, dst: &mut [u8]) -> (usize, usize) {
     if !VFS.ready {
         return (0, cursor);
     }
