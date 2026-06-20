@@ -96,11 +96,17 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             15 => {
+                // NET_LOCK (slice 4): serialize the net syscall against the BSP PIT
+                // pump + another core's net access (no-op on single-CPU lanes).
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_send(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             16 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_recv(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             42 => {
                 *frame.add(14) = sys_shm_unmap_r4(arg1);
@@ -155,43 +161,65 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             31 => {
+                // NET_LOCK (slice 4): every R4 socket syscall touches the shared
+                // R4_SOCKETS table (+ CONN for the wire path); serialize across cores.
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_open_r4(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             32 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_bind_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             33 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_listen_r4(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             34 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_connect_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             35 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_accept_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             36 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_send_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             37 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_recv_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             38 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_close_r4(arg1);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             39 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_if_config_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             40 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_route_add_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             41 => {
                 *frame.add(14) = sys_isolation_config_r4(arg1, arg2, arg3);
@@ -222,7 +250,9 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             49 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = sys_net_query(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             50 => {

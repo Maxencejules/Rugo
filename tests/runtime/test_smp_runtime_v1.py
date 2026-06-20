@@ -215,6 +215,12 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # other's free node slot / bitmap / JTXN snapshot. Files are unlinked after
         # (net-neutral). contend= varies per boot; a failure emits " FAIL".
         "SMP: vfs smp ran=0x0000000000000004",
+        # Workload-distribution slice 4: the BSP and the AP each did 2000 NET_LOCK-
+        # guarded non-atomic increments of a shared counter CONCURRENTLY, and the total
+        # is EXACTLY 4000 (0xFA0) -- not one update was lost, proving NET_LOCK is a
+        # correct mutex across cores (the lock the BSP PIT net pump + the socket syscalls
+        # take). A broken lock would lose updates -> guarded < 0xFA0 -> " FAIL".
+        "SMP: net smp guarded=0x0000000000000FA0",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

@@ -572,11 +572,106 @@ pub unsafe fn vfs_smp_selftest() {
     }
 }
 
+// Cross-CPU NET_LOCK contention self-test (full-os Part I.3, workload-distribution
+// slice 4). This is the MUTEX-CORRECTNESS proof for NET_LOCK only -- it does NOT issue
+// socket syscalls or run the pump. The BSP and an AP each perform NET_TEST_K NET_LOCK-
+// guarded increments of a NON-ATOMIC shared counter (NET_GUARDED); after the barrier-
+// released concurrent run the BSP verifies NET_GUARDED == 2*K EXACTLY. A broken NET_LOCK
+// loses updates (two CPUs read the same value and both write v+1) -> total < 2*K. Same
+// deterministic technique as the original SMP spinlock hammer. Coverage is layered: this
+// test proves the lock is a correct mutex; the full net suite (tcp/netcfg/icmp/arp, the
+// regression guard) proves the wrapped net syscalls + the NET_LOCK-held PIT pump still
+// work; and the SMP capstone proves a real loopback socket op on an AP concurrent with the
+// BSP. Skips silently when no AP is online (-smp1). Uses the real net_lock()/net_unlock()
+// via net_io_enter/exit, so the contention counter NET_CONTENTION advances under racing.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const NET_TEST_K: u64 = 2000;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut NET_GUARDED: u64 = 0; // non-atomic; correctness depends on NET_LOCK serializing
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static NET_TEST_AP_READY: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static NET_TEST_GO: AtomicU64 = AtomicU64::new(0);
+
+/// Do NET_TEST_K NET_LOCK-guarded non-atomic increments of NET_GUARDED. read/write are
+/// volatile so the RMW is a real load-modify-store the lock must serialize.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn net_test_hammer() {
+    let mut i = 0u64;
+    while i < NET_TEST_K {
+        let g = crate::net_io_enter();
+        let v = core::ptr::read_volatile(core::ptr::addr_of!(NET_GUARDED));
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(NET_GUARDED), v.wrapping_add(1));
+        crate::net_io_exit(g);
+        i += 1;
+    }
+}
+
+/// AP side of the NET contention test (work kind 7): reach the barrier, wait for the
+/// BSP's go, then hammer NET_GUARDED concurrently with the BSP doing the same.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn net_test_ap_io() {
+    NET_TEST_AP_READY.store(1, Ordering::Release);
+    let mut s = 0u64;
+    while NET_TEST_GO.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    net_test_hammer();
+}
+
+/// BSP entry: run the cross-CPU NET_LOCK contention test. Skips silently when no AP is
+/// online. Emits "SMP: net smp guarded=.. contend=.. ok" on the -smp2/-smp4 go lanes;
+/// guarded must equal 2*NET_TEST_K. Call before the live scheduler.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn net_smp_selftest() {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    NET_TEST_AP_READY.store(0, Ordering::Release);
+    NET_TEST_GO.store(0, Ordering::Release);
+    core::ptr::write_volatile(core::ptr::addr_of_mut!(NET_GUARDED), 0);
+    let contend0 = NET_CONTENTION.load(Ordering::Relaxed);
+    let gen = smp_dispatch_async(7, 0);
+    if gen == 0 {
+        return;
+    }
+    let mut s = 0u64;
+    while NET_TEST_AP_READY.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    if NET_TEST_AP_READY.load(Ordering::Acquire) == 0 {
+        let _ = smp_join(gen);
+        serial_write(b"SMP: net smp timeout FAIL\n");
+        return;
+    }
+    // Release both cores, then hammer concurrently with the AP.
+    NET_TEST_GO.store(1, Ordering::Release);
+    net_test_hammer();
+    let _ = smp_join(gen); // AP finished its hammering (happens-before the read below)
+    let total = core::ptr::read_volatile(core::ptr::addr_of!(NET_GUARDED));
+    let want = NET_TEST_K.wrapping_mul(2);
+    let contend = NET_CONTENTION
+        .load(Ordering::Relaxed)
+        .wrapping_sub(contend0);
+    serial_write(b"SMP: net smp guarded=0x");
+    serial_write_hex(total);
+    serial_write(b" contend=0x");
+    serial_write_hex(contend);
+    if total == want {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+}
+
 /// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
 /// iteratively (a real workload the dispatcher can independently check). Kind 3 =
 /// the AP side of the PMM contention self-test; kind 4 = the AP side of the heap
 /// contention self-test; kind 5 = the AP side of the block-I/O contention self-test;
-/// kind 6 = the AP side of the VFS contention self-test.
+/// kind 6 = the AP side of the VFS contention self-test; kind 7 = the AP side of the
+/// NET_LOCK contention self-test.
 unsafe fn run_work(kind: u64, arg: u64) -> u64 {
     match kind {
         1 => {
@@ -606,6 +701,11 @@ unsafe fn run_work(kind: u64, arg: u64) -> u64 {
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         6 => {
             vfs_test_ap_io();
+            0
+        }
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        7 => {
+            net_test_ap_io();
             0
         }
         _ => 0,
@@ -1629,30 +1729,44 @@ pub(crate) unsafe fn r4_rq_unlock() {
 // per-object): the workload is light, the sections short, and one auditable lock per
 // subsystem keeps a single global acquisition order.
 //
-// DEADLOCK-FREE GLOBAL ORDER (acquire left->right = outer->inner, release reverse; a
-// CPU may take a lock only while it holds none to its right). STORAGE is the INNERMOST
-// data lock because both higher layers call DOWN into block I/O:
-//     PMM_LOCK < HEAP_LOCK < FS_LOCK < NET_LOCK < STORAGE_LOCK < R4_RQ_LOCK
-//   - FS < STORAGE: an FS write holds FS_LOCK across its block I/O (vfs_write ->
-//     jwrite -> write_sector -> block_io_dispatch). FS outer, STORAGE inner.
-//   - NET < STORAGE: the package-fetch path holds NET_LOCK across its install write
-//     (the BSP PIT pump's pkg_fetch_tick -> block_io_dispatch, lib.rs r4_timer_preempt
-//     ~4491-4496). NET outer, STORAGE inner. The reverse (disk-then-net) never happens
-//     -- block I/O never takes FS or NET.
-//   - FS and NET are NEVER co-held (vfs.rs has zero net references; the net pump takes
-//     no FS lock), so their relative rank is free -- FS<NET is arbitrary.
-//   - STORAGE/FS/NET > HEAP/PMM: I/O, FS and net never allocate while holding their
-//     lock (any allocation happens before the lock is taken), so PMM/HEAP are never
-//     nested inside them.
-//   - R4_RQ_LOCK is the innermost overall: a disjoint scheduler domain (the AP claim/
-//     retire + the AP LAPIC-timer reschedule) that never nests with FS/NET/STORAGE --
-//     a task is claimed under R4_RQ, which is RELEASED before the task runs its FS/net
+// DEADLOCK-FREE STRUCTURE. Two kinds of lock:
+//   LEAF locks -- PMM_LOCK and HEAP_LOCK (mm.rs). alloc_frame/free_frame/heap_alloc/
+//   heap_dealloc take ONLY their own lock (no nested lock), touch only the static
+//   bitmap/free-list + the always-mapped HHDM, and never fault while held. A leaf has
+//   NO outgoing wait edge, so it can be acquired while holding ANY data lock without
+//   ever closing a cycle (a leaf holder always makes progress and releases). So a data-
+//   lock holder that faults on a user/demand page and allocates -- e.g. a net or FS
+//   syscall's copyin/copyout demand-mapping or cow-breaking a user buffer -- legitimately
+//   nests PMM/HEAP inside its data lock. This is safe precisely because PMM/HEAP are
+//   leaves; it is NOT an order inversion. (FS happens to keep its user copies outside
+//   FS_LOCK as a defensive choice, but that is not required for correctness; NET holds
+//   the lock across the socket-buffer copies because they touch the shared R4_SOCKETS
+//   buffers directly, and the leaf property keeps that deadlock-free.)
+//
+//   DATA locks -- FS_LOCK, NET_LOCK, STORAGE_LOCK, plus the scheduler leaf R4_RQ_LOCK --
+//   form a strict acquire order among THEMSELVES (acquire left->right = outer->inner; a
+//   CPU may take a data lock only while it holds no data lock to its right):
+//       FS_LOCK < NET_LOCK < STORAGE_LOCK < R4_RQ_LOCK
+//   - FS < STORAGE: an FS write holds FS_LOCK across its block I/O (vfs_write -> jwrite
+//     -> write_sector -> storage_io_enter). FS outer, STORAGE inner -- the one REAL
+//     data-lock nesting in the live paths.
+//   - NET < STORAGE is PRECAUTIONARY, not exercised live: the live BSP PIT pump under
+//     NET_LOCK (net_rx_pump + tcp_rt_tick + pkg_fetch_tick -> pkg_fetch_poll) does only
+//     tcp_recv/tcp_close -- NO block_io_dispatch -- so NET and STORAGE never actually
+//     nest. (The pkg_install/manager block_io_dispatch calls run at single-threaded boot,
+//     unlocked, before the live scheduler.) Ranking NET left of STORAGE keeps the order
+//     total and safe IF a future net-then-disk path is ever added; the reverse
+//     (disk-then-net) never happens -- block I/O takes no FS/NET lock.
+//   - FS and NET are NEVER co-held (vfs.rs has zero net refs; the net pump takes no FS
+//     lock), so their relative rank is free -- FS<NET is arbitrary.
+//   - R4_RQ_LOCK is the innermost data lock: a disjoint scheduler domain (the AP claim/
+//     retire + the AP LAPIC-timer reschedule) that never nests with FS/NET/STORAGE -- a
+//     task is claimed under R4_RQ, which is RELEASED before the task runs its FS/net
 //     syscalls. Ranked last so the order is total.
 // INTERRUPT-CONTEXT REACH (drives the leaf discipline): the BSP PIT interrupt gate
-// (r4_timer_preempt, IF=0) takes NET_LOCK (net_rx_pump) and STORAGE_LOCK (pkg_fetch
-// install) in its net-pump section, and R4_RQ_LOCK in a SEPARATE later wake section;
-// the AP LAPIC-timer reschedule takes R4_RQ_LOCK. So NET, STORAGE and R4_RQ are all
-// reachable from an interrupt handler -- NOT just R4_RQ.
+// (r4_timer_preempt, IF=0) takes NET_LOCK in its net-pump section and R4_RQ_LOCK in a
+// SEPARATE later wake section; the AP LAPIC-timer reschedule takes R4_RQ_LOCK. So NET
+// and R4_RQ are reachable from an interrupt handler -- not just R4_RQ.
 // LEAF DISCIPLINE: take FS/NET/STORAGE with interrupts DISABLED on AP-reachable (IF=1)
 // task paths via lock_cli()/unlock_sti(), so this CPU's own timer can't land
 // mid-section and either spin forever on a lock the interrupted task holds (the PIT

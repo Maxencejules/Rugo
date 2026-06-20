@@ -24,9 +24,22 @@ from typing import Dict, List
 # or:                    0  => { *frame.add(14) = sys_debug_write(arg1, arg2); }
 # or (multi-line):       15 => {
 #                            *frame.add(14) = net::sys_net_send(arg1, arg2);
-# Module-qualified handlers (net::...) resolve to the bare function name.
+# or wrapped (a guard / arg prep before the dispatch line):
+#                        15 => {
+#                            // NET_LOCK ...
+#                            let net_g = crate::net_io_enter();
+#                            *frame.add(14) = net::sys_net_send(arg1, arg2);
+#                            crate::net_io_exit(net_g);
+#                        }
+# Leading `// comment` lines and `let X = ...;` guard/arg-prep statements between the
+# arm's `{` and its dispatch call are skipped, so a syscall whose dispatch is wrapped in
+# a lock guard (or preceded by argument extraction, e.g. `let arg4 = *frame.add(5);`)
+# still resolves to the dispatched handler. Module-qualified handlers (net::...) resolve
+# to the bare function name.
 MATCH_ARM_RE = re.compile(
-    r"(\d+)\s*=>\s*\{?\s*(?:\*frame\.add\(\d+\)\s*=\s*)?(?:\w+::)*(\w+)\(",
+    r"(\d+)\s*=>\s*\{?"
+    r"(?:\s*//[^\n]*\n|\s*let\s+\w+[^;]*;)*"
+    r"\s*(?:\*frame\.add\(\d+\)\s*=\s*)?(?:\w+::)*(\w+)\(",
     re.S,
 )
 

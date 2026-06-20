@@ -4486,6 +4486,14 @@ cfg_r4! {
         sched::pic_send_eoi(0);
         #[cfg(not(feature = "compat_real_test"))]
         if tcp::tcp_active() || netcfg::query_active() || net::pkg_fetch_armed() {
+            // NET_LOCK (slice 4): this BSP PIT pump runs in the timer interrupt gate
+            // (IF=0) and mutates CONN / QUERY / the NIC RX ring -- serialize it against
+            // an AP net syscall on NET_LOCK so neither races that shared state. The pump
+            // is the one net path reached from interrupt context; it never takes R4_RQ
+            // (the wake section below is separate, after this lock is released). The live
+            // pump does NO block I/O (pkg_fetch_tick -> pkg_fetch_poll only tcp_recv/
+            // tcp_close), so it never nests STORAGE inside NET.
+            let net_g = crate::net_io_enter();
             // Drive the wire TCP machine / DHCP-DNS query from the tick
             // while one is in flight.
             net::net_rx_pump();
@@ -4494,6 +4502,7 @@ cfg_r4! {
             tcp::tcp_rt_tick();
             // Package manager: start (once the NIC is up) + drive an armed fetch.
             net::pkg_fetch_tick();
+            crate::net_io_exit(net_g);
         }
         // Wake nanosleep tasks whose deadline has passed (wait-queue infra).
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -10640,10 +10649,12 @@ pub(crate) unsafe fn storage_io_exit(_saved: u64) {}
 // the rollback snapshot). It wraps each top-level vfs_* entry so the operation -- begin
 // -> metadata flush -> commit/abort -- is atomic against another CPU. STORAGE_LOCK nests
 // INSIDE it (FS < STORAGE: vfs_write -> jwrite -> write_sector -> storage_io_enter). The
-// user-memory copyin/copyout stay OUTSIDE (in the syscall handler, on kernel buffers),
-// so FS_LOCK never covers a user fault -> alloc (PMM/HEAP are OUTER; that would invert
-// the order). No vfs_* path blocks (block I/O polls), so the lock is never held across a
-// switch. Taken with interrupts masked (leaf discipline). No-op in compat_real_test.
+// user-memory copyin/copyout stay OUTSIDE the lock (in the syscall handler, on kernel
+// buffers) -- a defensive choice keeping the FS critical section to pure node/bitmap
+// cache + block I/O (taking PMM/HEAP under the lock would be safe anyway since they are
+// LEAF locks -- see smp.rs -- but this keeps the FS path simplest). No vfs_* path blocks
+// (block I/O polls), so the lock is never held across a switch. Taken with interrupts
+// masked (leaf discipline). No-op in compat_real_test.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 #[inline]
 pub(crate) unsafe fn fs_io_enter() -> u64 {
@@ -10665,6 +10676,44 @@ pub(crate) unsafe fn fs_io_enter() -> u64 {
 #[cfg(feature = "compat_real_test")]
 #[inline]
 pub(crate) unsafe fn fs_io_exit(_saved: u64) {}
+
+// Network critical-section guard (full-os Part I.3, workload-distribution slice 4).
+// NET_LOCK serializes the single-instance net state across cores: the TCP/DHCP CONN +
+// the DNS/DHCP QUERY + the R4_SOCKETS loopback table + the NIC RX ring. It wraps each
+// net syscall AND the BSP PIT pump (net_rx_pump + tcp_rt_tick + pkg_fetch_tick), which
+// runs in the timer interrupt gate (IF=0) -- so the pump and an AP net syscall contend
+// on NET_LOCK instead of racing CONN/QUERY/the ring. Ranks NET < STORAGE in the data-lock
+// order (precautionary; the live pump does no block I/O) and is independent of FS (they
+// never co-occur). The WHOLE net syscall runs under the lock because the socket copyin/
+// copyout touch the shared R4_SOCKETS buffers directly -- so a copy may fault and demand-
+// map / cow-break a user page, taking PMM_LOCK (and maybe HEAP) under NET_LOCK; that is
+// safe and NOT an inversion because PMM/HEAP are LEAF locks (they take no other lock and
+// never wait on a data lock -- see the order note in smp.rs). None of the net syscalls
+// block (they return EWOULDBLOCK-style errors), so the lock is never held across a switch.
+// Taken with interrupts masked (leaf discipline). Defined in EVERY lane (the net dispatch
+// arms compile under any(net_test, go_test)) -- real only in go-not-compat, no-op elsewhere
+// (single-CPU: net_test/compat/base, where APs park and nothing runs net concurrently).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn net_io_enter() -> u64 {
+    let saved = smp::lock_cli();
+    smp::net_lock();
+    saved
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn net_io_exit(saved: u64) {
+    smp::net_unlock();
+    smp::unlock_sti(saved);
+}
+#[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+#[inline]
+pub(crate) unsafe fn net_io_enter() -> u64 {
+    0
+}
+#[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+#[inline]
+pub(crate) unsafe fn net_io_exit(_saved: u64) {}
 
 /// Write one 4 KiB page (8 sectors) from the physical frame `src_phys` to the
 /// block device starting at `lba` (full-os guide Part I.4 swap). Copies through
@@ -12916,6 +12965,11 @@ pub extern "C" fn kmain() -> ! {
         // serializing the VFS node/bitmap cache + journal txn across cores (with
         // STORAGE_LOCK nested inside the block flushes). No-op on -smp1 / unmounted FS.
         smp::vfs_smp_selftest();
+        // full-os Part I.3 (slice 4): the BSP + an AP hammer a NET_LOCK-guarded
+        // non-atomic counter CONCURRENTLY and the BSP proves no update was lost --
+        // NET_LOCK is a correct mutex across cores (the lock the BSP PIT pump + the
+        // socket syscalls take). No-op on -smp1.
+        smp::net_smp_selftest();
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
