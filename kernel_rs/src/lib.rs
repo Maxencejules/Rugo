@@ -4374,6 +4374,12 @@ cfg_r4! {
                 copyout_user(status_ptr, &st, st.len()).is_ok()
             }
         };
+        // R4_RQ_LOCK (slice 5): commit the waitpid wake atomically -- the result word +
+        // clearing wait_* + parent state=Ready + child Dead -- against the AP scheduler's
+        // concurrent state writes. The user-status copyout above stays OUTSIDE the lock
+        // (it can fault -> demand-map -> PMM, a leaf, but keeping it out keeps this
+        // innermost critical section short and free of user faults).
+        let g = rq_io_enter();
         if ok {
             R4_TASKS[parent_tid].saved_frame[14] = child_tid as u64;
         } else {
@@ -4384,6 +4390,7 @@ cfg_r4! {
         R4_TASKS[parent_tid].state = R4State::Ready;
         R4_TASKS[child_tid].state = R4State::Dead;
         R4_TASKS[child_tid].exit_status = 0;
+        rq_io_exit(g);
     }
 
     unsafe fn r4_yield_and_switch(frame: *mut u64) {
@@ -4429,6 +4436,11 @@ cfg_r4! {
     /// Wake any task whose nanosleep deadline has passed.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn r4_wake_sleepers() {
+        // R4_RQ_LOCK (slice 5): the nanosleep wake clears sleep_until AND sets
+        // state=Ready -- a multi-field RMW that must be atomic against the AP scheduler's
+        // concurrent state writes (this runs in the BSP PIT gate, IF=0). rq_io_enter
+        // masks interrupts; the section is a bounded scan, no block/alloc/switch.
+        let g = rq_io_enter();
         let now = R4_PREEMPT_TICKS;
         let mut t = 0usize;
         while t < R4_NUM_TASKS {
@@ -4441,6 +4453,7 @@ cfg_r4! {
             }
             t += 1;
         }
+        rq_io_exit(g);
     }
 
     /// Called from a block/exit point when no task is currently runnable: if
@@ -5309,11 +5322,33 @@ cfg_r4! {
                 serial_write(b"FUTEX: wait tid=0x");
                 serial_write_hex(cur as u64);
                 serial_write(b"\n");
+                // R4_RQ_LOCK (slice 5): RE-CHECK the futex word and COMMIT the block
+                // (futex_uaddr + state=Blocked) ATOMICALLY against a cross-CPU waker.
+                // The waker writes *uaddr then scans for Blocked tasks under R4_RQ_LOCK;
+                // rechecking + committing under the same lock closes the check-then-block
+                // lost-wakeup (if the waker already changed the word we see it and do not
+                // block; if we commit Blocked first, the waker's scan finds us). The page
+                // is resident from the copyin above, so this recheck does not fault under
+                // the lock. RELEASE before r4_find_ready / r4_switch_to -- never held
+                // across a context switch.
+                let g = rq_io_enter();
+                let mut word2 = [0u8; 4];
+                if copyin_user(&mut word2, uaddr, 4).is_err() {
+                    rq_io_exit(g);
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                if u32::from_le_bytes(word2) as u64 != (val & 0xFFFF_FFFF) {
+                    rq_io_exit(g);
+                    *frame.add(14) = 1; // changed under the lock: do not block
+                    return;
+                }
                 *frame.add(14) = 0; // value seen on resume after a wake
                 r4_save_frame(frame, cur);
                 R4_TASKS[cur].futex_uaddr = uaddr;
                 R4_TASKS[cur].state = R4State::Blocked;
                 R4_TASKS[cur].block_count += 1;
+                rq_io_exit(g);
                 match r4_find_ready(cur) {
                     Some(tid) => {
                         r4_switch_to(frame, tid);
@@ -5333,6 +5368,10 @@ cfg_r4! {
                 }
                 let cur_pml4 = R4_TASKS[r4_current_smp()].pml4_phys;
                 let limit = if val == 0 { u64::MAX } else { val };
+                // R4_RQ_LOCK (slice 5): the wake clears futex_uaddr AND sets state=Ready
+                // per task -- a multi-field RMW that must be atomic against the AP
+                // scheduler's concurrent state writes + a waiter's block-commit.
+                let g = rq_io_enter();
                 let mut woken = 0u64;
                 let mut t = 0usize;
                 while t < R4_NUM_TASKS && woken < limit {
@@ -5347,6 +5386,7 @@ cfg_r4! {
                     }
                     t += 1;
                 }
+                rq_io_exit(g);
                 serial_write(b"FUTEX: wake n=0x");
                 serial_write_hex(woken);
                 serial_write(b"\n");
@@ -7401,6 +7441,10 @@ cfg_r4! {
             let waiter = R4_ENDPOINTS[ep].waiter;
             if waiter >= 0 {
                 let wt = waiter as usize;
+                // R4_RQ_LOCK (slice 5): an endpoint owner dying wakes its blocked
+                // receiver with an error -- a multi-field RMW (clear recv_* + result +
+                // state=Ready) made atomic against the AP scheduler.
+                let g = rq_io_enter();
                 if wt < R4_NUM_TASKS && R4_TASKS[wt].state == R4State::Blocked {
                     R4_TASKS[wt].recv_ep = 0;
                     R4_TASKS[wt].recv_buf = 0;
@@ -7408,6 +7452,7 @@ cfg_r4! {
                     R4_TASKS[wt].saved_frame[14] = 0xFFFF_FFFF_FFFF_FFFF;
                     R4_TASKS[wt].state = R4State::Ready;
                 }
+                rq_io_exit(g);
             }
             R4_ENDPOINTS[ep] = IpcEndpoint::EMPTY;
         }
@@ -7500,10 +7545,16 @@ cfg_r4! {
             if !delivered {
                 return 0xFFFF_FFFF_FFFF_FFFF;
             }
+            // R4_RQ_LOCK (slice 5): commit the IPC receive-wake atomically -- the recv
+            // result word + state=Ready + clearing the endpoint waiter -- against the AP
+            // scheduler's concurrent state writes. The message copyout above stays
+            // OUTSIDE the lock (PMM is a leaf; keeps this innermost section short).
+            let g = rq_io_enter();
             R4_TASKS[wt].saved_frame[14] = n as u64; // return value for recv
             R4_TASKS[wt].state = R4State::Ready;
             R4_TASKS[wt].ipc_recv_count += 1;
             R4_ENDPOINTS[ep].waiter = -1;
+            rq_io_exit(g);
             return 0;
         }
 
@@ -10715,6 +10766,42 @@ pub(crate) unsafe fn net_io_enter() -> u64 {
 #[inline]
 pub(crate) unsafe fn net_io_exit(_saved: u64) {}
 
+// Run-queue critical-section guard (full-os Part I.3, workload-distribution slice 5).
+// R4_RQ_LOCK is the INNERMOST data lock -- it guards R4_TASKS scheduler state. The AP
+// scheduler (ap_preempt_reschedule, ap_pull_r4_task, ap_user_done) already mutates task
+// state under it; the BSP's WAKE paths (futex wake, nanosleep r4_wake_sleepers, waitpid
+// r4_wake_waiter, IPC endpoint wakes) historically did their multi-field RMW (clear
+// futex_uaddr/wait_* AND set state=Ready) WITHOUT it, so a cross-CPU wake of an
+// AP-blocked task could tear against the AP's concurrent state write. rq_io_enter/exit
+// puts those wakes under R4_RQ_LOCK so the multi-field transition is atomic. The block-
+// then-switch path commits state=Blocked UNDER the lock, then RELEASES before
+// r4_find_ready / r4_switch_to -- the lock is NEVER held across a context switch. Taken
+// with interrupts masked (lock_cli): R4_RQ_LOCK is reached from the AP LAPIC-timer
+// reschedule, so an IF=1 holder must mask the timer or it would self-deadlock. Defined
+// in EVERY cfg_r4 lane (the wake paths compile under ipc_test etc.) -- real only in
+// go-not-compat, no-op elsewhere (single-CPU: APs park, no cross-CPU wake).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn rq_io_enter() -> u64 {
+    let saved = smp::lock_cli();
+    smp::r4_rq_lock();
+    saved
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn rq_io_exit(saved: u64) {
+    smp::r4_rq_unlock();
+    smp::unlock_sti(saved);
+}
+#[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+#[inline]
+pub(crate) unsafe fn rq_io_enter() -> u64 {
+    0
+}
+#[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+#[inline]
+pub(crate) unsafe fn rq_io_exit(_saved: u64) {}
+
 /// Write one 4 KiB page (8 sectors) from the physical frame `src_phys` to the
 /// block device starting at `lba` (full-os guide Part I.4 swap). Copies through
 /// the shared BLK_DATA_PAGE one sector at a time (the block path is 512 B).
@@ -12970,6 +13057,11 @@ pub extern "C" fn kmain() -> ! {
         // NET_LOCK is a correct mutex across cores (the lock the BSP PIT pump + the
         // socket syscalls take). No-op on -smp1.
         smp::net_smp_selftest();
+        // full-os Part I.3 (slice 5): the BSP toggles a futex-style WAKE multi-field RMW
+        // on a reserved task slot under R4_RQ_LOCK while an AP reads (state, futex_uaddr)
+        // together under the lock -- proving the wake's multi-field transition is atomic
+        // vs a concurrent scheduler read (no torn pair). No-op on -smp1.
+        smp::crosswake_smp_selftest();
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline

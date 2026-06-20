@@ -666,12 +666,127 @@ pub unsafe fn net_smp_selftest() {
     }
 }
 
+// Cross-CPU WAKE-RACE self-test (full-os Part I.3, workload-distribution slice 5). The
+// BSP repeatedly performs the futex-style WAKE multi-field RMW (clear futex_uaddr AND set
+// state) on a reserved test task slot under R4_RQ_LOCK, toggling it Blocked<->Ready; the
+// AP, also under R4_RQ_LOCK, repeatedly reads (state, futex_uaddr) TOGETHER and checks the
+// invariant Blocked<=>futex_uaddr==SENTINEL / Ready<=>futex_uaddr==0. A broken R4_RQ_LOCK
+// would let the AP read between the BSP's two field writes -> a TORN (Blocked, 0) or
+// (Ready, SENTINEL) pair. TORN must be 0. This proves the lock makes the wake's multi-
+// field transition atomic vs a concurrent scheduler read (the exact "cross-CPU wake of an
+// AP-blocked task = multi-field RMW race" the slice closes). The real wake paths (futex/
+// nanosleep/waitpid/IPC, now rq-locked) are exercised by their own tests (the regression
+// guard). Skips when no AP. Uses a reserved slot above R4_NUM_TASKS (=0 here) so the
+// scheduler never touches it; left Dead afterwards.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const CROSSWAKE_K: u64 = 1000;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const CROSSWAKE_TID: usize = crate::R4_MAX_TASKS - 1;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const CROSSWAKE_SENTINEL: u64 = 0x0000_0000_CAFE_F00D;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CROSSWAKE_AP_READY: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CROSSWAKE_GO: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CROSSWAKE_TORN: AtomicU64 = AtomicU64::new(0);
+
+/// AP side of the cross-wake test (work kind 8): reach the barrier, then under
+/// R4_RQ_LOCK read (state, futex_uaddr) together and count any torn pair.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn crosswake_test_ap() {
+    CROSSWAKE_AP_READY.store(1, Ordering::Release);
+    let mut s = 0u64;
+    while CROSSWAKE_GO.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    let mut i = 0u64;
+    while i < CROSSWAKE_K {
+        let g = crate::rq_io_enter();
+        let blocked = matches!(crate::R4_TASKS[CROSSWAKE_TID].state, crate::R4State::Blocked);
+        let u = crate::R4_TASKS[CROSSWAKE_TID].futex_uaddr;
+        crate::rq_io_exit(g);
+        let torn = if blocked {
+            u != CROSSWAKE_SENTINEL
+        } else {
+            u != 0
+        };
+        if torn {
+            CROSSWAKE_TORN.fetch_add(1, Ordering::Relaxed);
+        }
+        i += 1;
+    }
+}
+
+/// BSP entry: run the cross-CPU wake-race test. Skips silently when no AP is online.
+/// Emits "SMP: crosswake torn=0x0 k=0x3E8 ok" on the -smp2/-smp4 go lanes (torn must be
+/// 0). Call before the live scheduler (R4_NUM_TASKS still 0, so the reserved slot is idle).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn crosswake_smp_selftest() {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    CROSSWAKE_AP_READY.store(0, Ordering::Release);
+    CROSSWAKE_GO.store(0, Ordering::Release);
+    CROSSWAKE_TORN.store(0, Ordering::Release);
+    // Arm the reserved test slot: Blocked, waiting on the sentinel futex address.
+    crate::R4_TASKS[CROSSWAKE_TID].state = crate::R4State::Blocked;
+    crate::R4_TASKS[CROSSWAKE_TID].futex_uaddr = CROSSWAKE_SENTINEL;
+    let gen = smp_dispatch_async(8, 0);
+    if gen == 0 {
+        return;
+    }
+    let mut s = 0u64;
+    while CROSSWAKE_AP_READY.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    if CROSSWAKE_AP_READY.load(Ordering::Acquire) == 0 {
+        let _ = smp_join(gen);
+        serial_write(b"SMP: crosswake timeout FAIL\n");
+        return;
+    }
+    // Release both cores, then toggle the wake/re-arm multi-field RMW under R4_RQ_LOCK
+    // concurrently with the AP's checks.
+    CROSSWAKE_GO.store(1, Ordering::Release);
+    let mut i = 0u64;
+    while i < CROSSWAKE_K {
+        let g = crate::rq_io_enter();
+        if matches!(crate::R4_TASKS[CROSSWAKE_TID].state, crate::R4State::Blocked) {
+            // WAKE: clear the futex addr, then set Ready (the order a real wake uses).
+            crate::R4_TASKS[CROSSWAKE_TID].futex_uaddr = 0;
+            crate::R4_TASKS[CROSSWAKE_TID].state = crate::R4State::Ready;
+        } else {
+            // RE-ARM (block) for the next wake.
+            crate::R4_TASKS[CROSSWAKE_TID].futex_uaddr = CROSSWAKE_SENTINEL;
+            crate::R4_TASKS[CROSSWAKE_TID].state = crate::R4State::Blocked;
+        }
+        crate::rq_io_exit(g);
+        i += 1;
+    }
+    let _ = smp_join(gen);
+    // Leave the slot Dead (idle; nothing schedules it at R4_NUM_TASKS=0).
+    crate::R4_TASKS[CROSSWAKE_TID].state = crate::R4State::Dead;
+    crate::R4_TASKS[CROSSWAKE_TID].futex_uaddr = 0;
+    let torn = CROSSWAKE_TORN.load(Ordering::Acquire);
+    serial_write(b"SMP: crosswake torn=0x");
+    serial_write_hex(torn);
+    serial_write(b" k=0x");
+    serial_write_hex(CROSSWAKE_K);
+    if torn == 0 {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+}
+
 /// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
 /// iteratively (a real workload the dispatcher can independently check). Kind 3 =
 /// the AP side of the PMM contention self-test; kind 4 = the AP side of the heap
 /// contention self-test; kind 5 = the AP side of the block-I/O contention self-test;
 /// kind 6 = the AP side of the VFS contention self-test; kind 7 = the AP side of the
-/// NET_LOCK contention self-test.
+/// NET_LOCK contention self-test; kind 8 = the AP side of the cross-CPU wake-race test.
 unsafe fn run_work(kind: u64, arg: u64) -> u64 {
     match kind {
         1 => {
@@ -706,6 +821,11 @@ unsafe fn run_work(kind: u64, arg: u64) -> u64 {
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         7 => {
             net_test_ap_io();
+            0
+        }
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        8 => {
+            crosswake_test_ap();
             0
         }
         _ => 0,

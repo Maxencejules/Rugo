@@ -221,6 +221,12 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # correct mutex across cores (the lock the BSP PIT net pump + the socket syscalls
         # take). A broken lock would lose updates -> guarded < 0xFA0 -> " FAIL".
         "SMP: net smp guarded=0x0000000000000FA0",
+        # Workload-distribution slice 5: the BSP toggled a futex-style WAKE multi-field
+        # RMW (futex_uaddr + state) on a reserved task slot under R4_RQ_LOCK while the AP
+        # read (state, futex_uaddr) together under the lock 1000x -- ZERO torn pairs, so
+        # R4_RQ_LOCK makes the wake's multi-field transition atomic against a concurrent
+        # scheduler read (the cross-CPU wake-of-an-AP-blocked-task race). torn != 0 -> FAIL.
+        "SMP: crosswake torn=0x0000000000000000 k=0x00000000000003E8 ok",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",
