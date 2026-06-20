@@ -12839,6 +12839,12 @@ pub extern "C" fn kmain() -> ! {
             2 => serial_write(b"FBALPHA: blend skip (no fb)\n"),
             _ => serial_write(b"FBALPHA: blend FAIL\n"),
         }
+        match fb::fb_cursor_selftest() {
+            // full-os Part III: mouse cursor compositing with save-under.
+            1 => serial_write(b"FBCURSOR: save-under ok\n"),
+            2 => serial_write(b"FBCURSOR: save-under skip (no fb)\n"),
+            _ => serial_write(b"FBCURSOR: save-under FAIL\n"),
+        }
         let _ = rng_hwseed_selftest(); // full-os Part IV.10: RDRAND-seeded CSPRNG
         // full-os Part I.3: online CPU count via the real sys_sysinfo op-13 path.
         serial_write(b"CPUS: count=0x");
