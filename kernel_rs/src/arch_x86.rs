@@ -244,6 +244,33 @@ cfg_user! {
         );
     }
 
+    /// Resume a task from a FULL saved interrupt frame (22 qwords in the exact
+    /// `isr_common` layout: r15,r14,r13,r12,r11,r10,r9,r8,rbp,rdi,rsi,rdx,rcx,rbx,
+    /// rax, vector, errcode, RIP,CS,RFLAGS,RSP,SS). Restores every GPR and iretq's
+    /// to the saved RIP/CS/RFLAGS/RSP/SS -- the mirror of the ISR epilogue, used to
+    /// resume a PREEMPTED ring-3 task (live per-CPU scheduler slice 4b): unlike
+    /// `enter_ring3_with_arg` it preserves the full register state, so a task
+    /// resumed mid-computation continues exactly where it was interrupted.
+    ///
+    /// `frame` must point at a 22-qword array whose backing memory is mapped under
+    /// the CURRENT CR3 (the R4 task table lives in the kernel half, mapped in every
+    /// address space). The caller must run with IF=0 (the transient stack switch to
+    /// `frame` must not be interrupted); the restored RFLAGS sets the task's own IF.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    pub(crate) unsafe fn iret_to_saved_frame(frame: *const u64) -> ! {
+        core::arch::asm!(
+            "mov rsp, {f}",
+            "pop r15", "pop r14", "pop r13", "pop r12",
+            "pop r11", "pop r10", "pop r9", "pop r8",
+            "pop rbp", "pop rdi", "pop rsi", "pop rdx",
+            "pop rcx", "pop rbx", "pop rax",
+            "add rsp, 16", // skip the saved vector + error-code words
+            "iretq",
+            f = in(reg) frame,
+            options(noreturn),
+        );
+    }
+
     // Per-CPU kernel stacks for application processors that run ring-3 tasks
     // (SMP capstone). Each AP's TSS rsp0 points at the top of its own stack, so
     // a ring-3→ring-0 transition (syscall/interrupt) on one AP never collides
