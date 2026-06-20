@@ -14,7 +14,12 @@ def test_tty_line_discipline(qemu_go_c4_runtime, find_in_order):
 
     find_in_order(out, [
         "TTY: line discipline ok",
+        # Control characters: Ctrl-U kills the line ("abc\x15x\n" -> "x\n"), Ctrl-W
+        # erases the trailing word ("foo bar\x17\n" -> "foo \n"), Ctrl-C raises the
+        # interrupt flag + flushes the line, Ctrl-D on an empty line signals EOF.
+        "TTY: ctrl-chars ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "TTY: line discipline fail" not in out
+    assert "TTY: ctrl-chars fail" not in out

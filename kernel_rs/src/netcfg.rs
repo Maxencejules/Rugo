@@ -602,6 +602,232 @@ pub(crate) unsafe fn icmp_selftest() -> u64 {
     1
 }
 
+/// Build an ICMPv4 echo *request* frame (the client/ping side, full-os Part II.6):
+/// Ethernet to `dst_mac`, IPv4 from our address to `dst_ip` (TTL 64, proto ICMP),
+/// ICMP type 8 with `ident`/`seq`/`payload`; recomputes both checksums. Returns the
+/// frame length, or None if `out` is too small. The mirror of build_icmp_echo_reply.
+unsafe fn build_icmp_echo_request(
+    dst_ip: &[u8; 4],
+    dst_mac: &[u8; 6],
+    ident: u16,
+    seq: u16,
+    payload: &[u8],
+    out: &mut [u8],
+) -> Option<usize> {
+    let total = 14 + 20 + 8 + payload.len();
+    if out.len() < total {
+        return None;
+    }
+    for b in out[..total].iter_mut() {
+        *b = 0;
+    }
+    out[0..6].copy_from_slice(dst_mac);
+    out[6..12].copy_from_slice(&net::net_mac());
+    out[12] = 0x08;
+    out[13] = 0x00;
+    {
+        let ip = &mut out[14..34];
+        ip[0] = 0x45;
+        let tot = (20 + 8 + payload.len()) as u16;
+        ip[2] = (tot >> 8) as u8;
+        ip[3] = (tot & 0xFF) as u8;
+        ip[8] = 64;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&GUEST_IP);
+        ip[16..20].copy_from_slice(dst_ip);
+        let mut s = 0u32;
+        csum_words(&mut s, ip);
+        let ck = csum_fold(s);
+        ip[10] = (ck >> 8) as u8;
+        ip[11] = (ck & 0xFF) as u8;
+    }
+    {
+        let ic = &mut out[34..total];
+        ic[0] = 8; // echo request
+        ic[4] = (ident >> 8) as u8;
+        ic[5] = (ident & 0xFF) as u8;
+        ic[6] = (seq >> 8) as u8;
+        ic[7] = (seq & 0xFF) as u8;
+        ic[8..8 + payload.len()].copy_from_slice(payload);
+        let mut s = 0u32;
+        csum_words(&mut s, ic);
+        let ck = csum_fold(s);
+        ic[2] = (ck >> 8) as u8;
+        ic[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Self-test (op 21): build an outbound echo request to the gateway and verify it
+/// is a well-formed ICMP echo request (type 8, our ident/seq/payload) whose IP and
+/// ICMP checksums both fold to zero. Deterministic; proves the ping-client builder.
+pub(crate) unsafe fn icmp_echo_request_selftest() -> u64 {
+    const PAYLOAD: &[u8; 8] = b"rugoping";
+    let dst_mac = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x02];
+    let mut out = [0u8; 1514];
+    let len = match build_icmp_echo_request(&GATEWAY_IP, &dst_mac, ICMP_IDENT, 7, PAYLOAD, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    if u16::from_be_bytes([out[12], out[13]]) != 0x0800 {
+        return 0;
+    }
+    let ip = &out[14..34];
+    if ip[9] != 1 || ip[12..16] != GUEST_IP || ip[16..20] != GATEWAY_IP {
+        return 0;
+    }
+    let ic = &out[34..len];
+    if ic[0] != 8
+        || u16::from_be_bytes([ic[4], ic[5]]) != ICMP_IDENT
+        || u16::from_be_bytes([ic[6], ic[7]]) != 7
+        || ic[8..16] != *PAYLOAD
+    {
+        return 0;
+    }
+    let mut v = 0u32;
+    csum_words(&mut v, ic);
+    if csum_fold(v) != 0 {
+        return 0;
+    }
+    let mut v2 = 0u32;
+    csum_words(&mut v2, ip);
+    if csum_fold(v2) != 0 {
+        return 0;
+    }
+    serial_write(b"ICMP: echo req ok\n");
+    1
+}
+
+/// Build an ICMPv4 error message (RFC 792, full-os Part II.6): an 8-byte ICMP
+/// header (type, code, checksum, 4 unused bytes) followed by the offending IP
+/// datagram's header + first 8 payload bytes, sent from us back to its source.
+/// `icmp_type` = 3 (destination unreachable, e.g. code 3 port-unreachable) or 11
+/// (time exceeded, code 0 TTL-expired). Returns the frame length, or None.
+unsafe fn build_icmp_error(orig: &[u8], icmp_type: u8, code: u8, out: &mut [u8]) -> Option<usize> {
+    if orig.len() < 14 + 20 || u16::from_be_bytes([orig[12], orig[13]]) != 0x0800 {
+        return None;
+    }
+    let oip = &orig[14..];
+    let ihl = ((oip[0] & 0x0F) as usize) * 4;
+    if ihl < 20 || orig.len() < 14 + ihl {
+        return None;
+    }
+    // Quote the original IP header plus up to 8 bytes of its payload.
+    let quote_len = core::cmp::min(ihl + 8, orig.len() - 14);
+    let total = 14 + 20 + 8 + quote_len;
+    if out.len() < total {
+        return None;
+    }
+    for b in out[..total].iter_mut() {
+        *b = 0;
+    }
+    out[0..6].copy_from_slice(&orig[6..12]); // dst = original sender
+    out[6..12].copy_from_slice(&net::net_mac());
+    out[12] = 0x08;
+    out[13] = 0x00;
+    let src = [oip[12], oip[13], oip[14], oip[15]];
+    {
+        let ip = &mut out[14..34];
+        ip[0] = 0x45;
+        let tot = (20 + 8 + quote_len) as u16;
+        ip[2] = (tot >> 8) as u8;
+        ip[3] = (tot & 0xFF) as u8;
+        ip[8] = 64;
+        ip[9] = 1;
+        ip[12..16].copy_from_slice(&GUEST_IP);
+        ip[16..20].copy_from_slice(&src);
+        let mut s = 0u32;
+        csum_words(&mut s, ip);
+        let ck = csum_fold(s);
+        ip[10] = (ck >> 8) as u8;
+        ip[11] = (ck & 0xFF) as u8;
+    }
+    {
+        out[34] = icmp_type;
+        out[35] = code;
+        // out[36..38] = checksum (computed below); out[38..42] = unused (0).
+        // The quoted datagram starts at ICMP-offset 8 (out[42]).
+        out[42..42 + quote_len].copy_from_slice(&orig[14..14 + quote_len]);
+        let oic = &mut out[34..total];
+        let mut s = 0u32;
+        csum_words(&mut s, oic);
+        let ck = csum_fold(s);
+        oic[2] = (ck >> 8) as u8;
+        oic[3] = (ck & 0xFF) as u8;
+    }
+    Some(total)
+}
+
+/// Self-test (op 22): synthesize a UDP datagram to a closed port, build a
+/// destination-unreachable (type 3 / code 3) reply, and verify the type/code, that
+/// the quoted IP header matches the original, and that both checksums fold to zero;
+/// also exercises a time-exceeded (type 11 / code 0) reply. Deterministic.
+pub(crate) unsafe fn icmp_error_selftest() -> u64 {
+    // A UDP datagram from the gateway to a (closed) port on the guest.
+    let mut orig = [0u8; 14 + 20 + 8 + 4];
+    orig[0..6].copy_from_slice(&net::net_mac());
+    orig[6..12].copy_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02]);
+    orig[12] = 0x08;
+    orig[13] = 0x00;
+    {
+        let ip = &mut orig[14..34];
+        ip[0] = 0x45;
+        let tot = (20 + 8 + 4) as u16;
+        ip[2] = (tot >> 8) as u8;
+        ip[3] = (tot & 0xFF) as u8;
+        ip[8] = 64;
+        ip[9] = 17; // UDP
+        ip[12..16].copy_from_slice(&GATEWAY_IP);
+        ip[16..20].copy_from_slice(&GUEST_IP);
+    }
+    {
+        let u = &mut orig[34..46];
+        u[0] = 0x04;
+        u[1] = 0xD2; // src port 1234
+        u[2] = 0x00;
+        u[3] = 0x09; // dst port 9 (closed)
+        u[4] = 0x00;
+        u[5] = 0x0C; // length 12
+    }
+    orig[42..46].copy_from_slice(b"xxxx");
+
+    let mut out = [0u8; 1514];
+    let len = match build_icmp_error(&orig, 3, 3, &mut out) {
+        Some(l) => l,
+        None => return 0,
+    };
+    // type 3 / code 3 (port unreachable), the quoted IP header preserved verbatim.
+    if out[34] != 3 || out[35] != 3 || out[42..62] != orig[14..34] {
+        return 0;
+    }
+    let mut v = 0u32;
+    csum_words(&mut v, &out[34..len]);
+    if csum_fold(v) != 0 {
+        return 0;
+    }
+    let mut v2 = 0u32;
+    csum_words(&mut v2, &out[14..34]);
+    if csum_fold(v2) != 0 {
+        return 0;
+    }
+    // Time exceeded (TTL expired) variant.
+    let mut out2 = [0u8; 1514];
+    let len2 = match build_icmp_error(&orig, 11, 0, &mut out2) {
+        Some(l) => l,
+        None => return 0,
+    };
+    if out2[34] != 11 || out2[35] != 0 {
+        return 0;
+    }
+    let mut v3 = 0u32;
+    csum_words(&mut v3, &out2[34..len2]);
+    if csum_fold(v3) != 0 {
+        return 0;
+    }
+    serial_write(b"ICMP: dest-unreach ok\n");
+    1
+}
+
 /// The guest's IPv6 link-local address (fe80::/64 + EUI-64 from the NIC MAC).
 unsafe fn guest_ip6() -> [u8; 16] {
     let mac = net::net_mac();

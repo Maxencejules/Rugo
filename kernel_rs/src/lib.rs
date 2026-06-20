@@ -4138,6 +4138,8 @@ cfg_r4! {
             18 => netcfg::tcp6_listen_selftest(),
             19 => tcp::tcp_sndwin_selftest(),
             20 => netcfg::dad_selftest(), // IPv6 NDP Duplicate Address Detection
+            21 => netcfg::icmp_echo_request_selftest(), // ICMPv4 outbound ping builder
+            22 => netcfg::icmp_error_selftest(), // ICMPv4 dest-unreachable / time-exceeded
             _ => ERR,
         }
     }
@@ -12373,6 +12375,8 @@ pub extern "C" fn kmain() -> ! {
         // Net responder self-tests (full-os guide Part II.6): exercise the same
         // builders the live RX pump uses to answer inbound pings and ARP.
         let _ = netcfg::icmp_selftest();
+        let _ = netcfg::icmp_echo_request_selftest(); // full-os II.6: outbound ping (ICMP echo request)
+        let _ = netcfg::icmp_error_selftest(); // full-os II.6: ICMP dest-unreachable / time-exceeded
         let _ = netcfg::arp_selftest();
         let _ = netcfg::icmpv6_selftest();
         let _ = netcfg::udp_echo_selftest();

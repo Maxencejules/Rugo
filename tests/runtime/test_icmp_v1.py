@@ -14,7 +14,15 @@ def test_icmp_echo_responder(qemu_go_c4_runtime, find_in_order):
 
     find_in_order(out, [
         "ICMP: echo reply ok seq=0x0000000000000001",
+        # Outbound ping: the echo-REQUEST builder produces a well-formed request
+        # (type 8, our ident/seq/payload) with IP+ICMP checksums folding to zero.
+        "ICMP: echo req ok",
+        # ICMP error replies: a UDP-to-closed-port frame yields a destination-
+        # unreachable (type 3/code 3) message quoting the original IP header, with
+        # both checksums folding to zero (a time-exceeded type-11 case is also run).
+        "ICMP: dest-unreach ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "GOINIT: err" not in out
+    assert " fail" not in out
