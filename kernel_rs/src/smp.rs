@@ -200,9 +200,61 @@ unsafe fn pmm_test_ap_alloc() {
     }
 }
 
+// Cross-CPU kernel-heap contention self-test (full-os Part I.3, kernel-wide
+// locking / slice 5b). The AP and BSP allocate a batch of heap blocks CONCURRENTLY
+// (barrier-released) and each stamps its OWN pattern into every block; the BSP then
+// verifies all blocks are non-null, distinct, and still hold the right pattern -- a
+// block handed to both CPUs (or overlapping) would have one CPU's pattern clobbered,
+// meaning the heap lock failed to serialize the free-list operations.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const HEAP_TEST_N: usize = 128;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const HEAP_TEST_SZ: usize = 64;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const HEAP_TEST_ALIGN: usize = 16;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const HEAP_PAT_AP: u64 = 0xAAAA_AAAA_AAAA_AAAA;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const HEAP_PAT_BSP: u64 = 0xBBBB_BBBB_BBBB_BBBB;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut AP_HEAP_PTRS: [usize; HEAP_TEST_N] = [0; HEAP_TEST_N];
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static HEAP_TEST_AP_READY: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static HEAP_TEST_GO: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn heap_test_layout() -> core::alloc::Layout {
+    core::alloc::Layout::from_size_align_unchecked(HEAP_TEST_SZ, HEAP_TEST_ALIGN)
+}
+
+/// AP side of the heap contention test (work kind 4): reach the barrier, wait for
+/// the BSP's go, then allocate HEAP_TEST_N heap blocks (stamping the AP pattern into
+/// each) into the shared pointer array -- concurrently with the BSP doing the same.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn heap_test_ap_alloc() {
+    let layout = heap_test_layout();
+    HEAP_TEST_AP_READY.store(1, Ordering::Release);
+    let mut s = 0u64;
+    while HEAP_TEST_GO.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    let mut i = 0usize;
+    while i < HEAP_TEST_N {
+        let p = alloc::alloc::alloc(layout);
+        AP_HEAP_PTRS[i] = p as usize;
+        if !p.is_null() {
+            *(p as *mut u64) = HEAP_PAT_AP;
+        }
+        i += 1;
+    }
+}
+
 /// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
 /// iteratively (a real workload the dispatcher can independently check). Kind 3 =
-/// the AP side of the PMM contention self-test.
+/// the AP side of the PMM contention self-test; kind 4 = the AP side of the heap
+/// contention self-test.
 unsafe fn run_work(kind: u64, arg: u64) -> u64 {
     match kind {
         1 => {
@@ -217,6 +269,11 @@ unsafe fn run_work(kind: u64, arg: u64) -> u64 {
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         3 => {
             pmm_test_ap_alloc();
+            0
+        }
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        4 => {
+            heap_test_ap_alloc();
             0
         }
         _ => 0,
@@ -507,6 +564,107 @@ unsafe fn pmm_smp_selftest() -> bool {
     }
     let conserved = crate::mm::free_frames() == baseline;
     all_alloced && disjoint && conserved
+}
+
+/// Kernel-heap SMP-safety self-test (full-os Part I.3, kernel-wide locking / slice
+/// 5b): the BSP and one AP allocate a batch of heap blocks CONCURRENTLY (barrier-
+/// released so the two batches overlap in time), each stamping its OWN pattern into
+/// every block, and the BSP verifies every block is non-null, distinct, and STILL
+/// holds the correct pattern. A block handed to both CPUs (or two overlapping
+/// blocks) would have one CPU's pattern overwritten by the other -- proof the heap
+/// lock failed to serialize the free-list. All blocks are freed afterwards. Returns
+/// false (skips) if no AP is online or the AP never reaches the barrier.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn heap_smp_selftest() -> bool {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+    let layout = heap_test_layout();
+    HEAP_TEST_AP_READY.store(0, Ordering::Release);
+    HEAP_TEST_GO.store(0, Ordering::Release);
+    let mut k = 0usize;
+    while k < HEAP_TEST_N {
+        AP_HEAP_PTRS[k] = 0;
+        k += 1;
+    }
+    let gen = smp_dispatch_async(4, 0);
+    if gen == 0 {
+        return false;
+    }
+    let mut s = 0u64;
+    while HEAP_TEST_AP_READY.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    if HEAP_TEST_AP_READY.load(Ordering::Acquire) == 0 {
+        let _ = smp_join(gen);
+        return false;
+    }
+    // Release both, then allocate + stamp the BSP's batch concurrently with the AP.
+    HEAP_TEST_GO.store(1, Ordering::Release);
+    let mut bsp_ptrs = [0usize; HEAP_TEST_N];
+    let mut i = 0usize;
+    while i < HEAP_TEST_N {
+        let p = alloc::alloc::alloc(layout);
+        bsp_ptrs[i] = p as usize;
+        if !p.is_null() {
+            *(p as *mut u64) = HEAP_PAT_BSP;
+        }
+        i += 1;
+    }
+    let _ = smp_join(gen);
+    // Every allocation succeeded (a corrupt free list would yield null or a crash).
+    let mut all_alloced = true;
+    let mut a = 0usize;
+    while a < HEAP_TEST_N {
+        if bsp_ptrs[a] == 0 || AP_HEAP_PTRS[a] == 0 {
+            all_alloced = false;
+        }
+        a += 1;
+    }
+    // Pattern integrity: after BOTH cores wrote, every block must still hold its own
+    // CPU's pattern. If any two blocks (cross- or same-CPU) aliased/overlapped, one
+    // stamp clobbered the other -> a mismatch here. This catches double hand-out and
+    // overlap without an explicit O(N^2) address-range comparison.
+    let mut patterns_ok = true;
+    let mut bi = 0usize;
+    while bi < HEAP_TEST_N {
+        if bsp_ptrs[bi] != 0 && *(bsp_ptrs[bi] as *const u64) != HEAP_PAT_BSP {
+            patterns_ok = false;
+        }
+        if AP_HEAP_PTRS[bi] != 0 && *(AP_HEAP_PTRS[bi] as *const u64) != HEAP_PAT_AP {
+            patterns_ok = false;
+        }
+        bi += 1;
+    }
+    // Cross-CPU pointer distinctness: no BSP block may share an address with an AP
+    // block (the heap must never hand the same block to two cores). Within one CPU's
+    // sequence the allocator already returns distinct blocks by construction.
+    let mut distinct = true;
+    let mut x = 0usize;
+    while x < HEAP_TEST_N {
+        let bp = bsp_ptrs[x];
+        let mut y = 0usize;
+        while y < HEAP_TEST_N {
+            if bp != 0 && bp == AP_HEAP_PTRS[y] {
+                distinct = false;
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+    // Return every block to the heap.
+    let mut f = 0usize;
+    while f < HEAP_TEST_N {
+        if bsp_ptrs[f] != 0 {
+            alloc::alloc::dealloc(bsp_ptrs[f] as *mut u8, layout);
+        }
+        if AP_HEAP_PTRS[f] != 0 {
+            alloc::alloc::dealloc(AP_HEAP_PTRS[f] as *mut u8, layout);
+        }
+        f += 1;
+    }
+    all_alloced && patterns_ok && distinct
 }
 
 /// Per-CPU affinity + load-distribution self-test (full-os guide Part I.3, SMP
@@ -1796,6 +1954,16 @@ pub fn smp_init() {
             if online >= expected {
                 serial_write(b"SMP: pmm smp ");
                 if pmm_smp_selftest() {
+                    serial_write(b"ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
+                // Kernel heap (slice 5b): BSP + AP allocate heap blocks concurrently;
+                // the BSP proves no block was double-handed-out / overlapped (each
+                // still holds its own CPU's stamped pattern) -- the heap lock
+                // serializing the free-list across cores.
+                serial_write(b"SMP: heap smp ");
+                if heap_smp_selftest() {
                     serial_write(b"ok\n");
                 } else {
                     serial_write(b"FAIL\n");

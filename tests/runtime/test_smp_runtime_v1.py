@@ -144,6 +144,11 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # concurrently and the batches were disjoint -- the PMM spinlock serialized
         # the bitmap read-modify-write across cores.
         "SMP: pmm smp ok",
+        # Kernel-wide locking (slice 5b): the BSP and the AP allocated kernel-heap
+        # blocks concurrently, each stamping its own pattern; every block stayed
+        # distinct with its pattern intact -- the heap spinlock serialized the
+        # free-list across cores (no block double-handed-out or overlapped).
+        "SMP: heap smp ok",
         # Affinity invariant (live per-CPU scheduler): with AP-eligible tasks
         # planted INSIDE the BSP's live rotation [1,R4_NUM_TASKS), the BSP's
         # r4_find_ready only ever returns the non-eligible task and is starved

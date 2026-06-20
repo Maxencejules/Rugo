@@ -255,7 +255,40 @@ pub fn heap_init() {
     }
 }
 
+// Kernel heap spinlock (full-os Part I.3, kernel-wide locking / slice 5). The
+// first-fit free list (HEAP.head + the FreeBlock chain) is shared kernel state that
+// every Vec/Box touches through the global allocator; on SMP two CPUs allocating or
+// freeing concurrently would corrupt the list (a lost block, one block handed to two
+// callers, or broken coalescing). This lock serializes the list operations. It is
+// INDEPENDENT of the PMM lock and a LEAF: heap_alloc/heap_dealloc only walk the
+// pre-allocated window's free list -- they never call the PMM (the heap window is
+// reserved once at heap_init), never recurse into the allocator, and never fault
+// while held -- and the AP timer-preemption handler never allocates, so it can never
+// deadlock. Uncontended (one atomic CAS) on -smp 1.
+static HEAP_LOCK: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn heap_lock() {
+    while HEAP_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+#[inline]
+fn heap_unlock() {
+    HEAP_LOCK.store(0, Ordering::Release);
+}
+
 unsafe fn heap_alloc(layout: Layout) -> *mut u8 {
+    heap_lock();
+    let r = heap_alloc_locked(layout);
+    heap_unlock();
+    r
+}
+
+unsafe fn heap_alloc_locked(layout: Layout) -> *mut u8 {
     if !HEAP.ready {
         return core::ptr::null_mut();
     }
@@ -297,6 +330,12 @@ unsafe fn heap_alloc(layout: Layout) -> *mut u8 {
 }
 
 unsafe fn heap_dealloc(ptr: *mut u8) {
+    heap_lock();
+    heap_dealloc_locked(ptr);
+    heap_unlock();
+}
+
+unsafe fn heap_dealloc_locked(ptr: *mut u8) {
     if ptr.is_null() || !HEAP.ready {
         return;
     }
