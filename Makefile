@@ -193,8 +193,11 @@ APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf $(OUT)/a
 $(OUT)/app-base-shell.o: apps/base-shell/base_shell.asm | $(OUT)
 	$(NASM) $(NASMFLAGS) $< -o $@
 
-$(APP_BASE_SHELL_ELF): $(OUT)/app-base-shell.o apps/base-shell/linker.ld | $(OUT)
-	$(LD) -nostdlib -static -T apps/base-shell/linker.ld -o $@ $<
+# base-shell is built as ET_DYN (PIE) for code-base ASLR (full-os Part IV.10): the kernel
+# loads it at a random base each spawn. base_shell.asm is RIP-relative (default rel), so it
+# has no relocations and runs at any base. Coreutils stay ET_EXEC (the rule below).
+$(APP_BASE_SHELL_ELF): $(OUT)/app-base-shell.o apps/base-shell/linker-pie.ld | $(OUT)
+	$(LD) -nostdlib -shared --strip-all -T apps/base-shell/linker-pie.ld -o $@ $<
 
 $(OUT)/app-%.o: apps/coreutils/%.asm | $(OUT)
 	$(NASM) $(NASMFLAGS) $< -o $@

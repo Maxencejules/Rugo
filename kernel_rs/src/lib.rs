@@ -4765,6 +4765,142 @@ cfg_r4! {
         Some(e_entry)
     }
 
+    // Code-base ASLR for main apps (full-os guide Part IV.10). An ET_DYN (PIE) app has
+    // no fixed load address, so the kernel loads it at a RANDOM, page-aligned base each
+    // spawn -- the code lands at a different address every boot. Window: below the args
+    // page (EXEC_ARGS_VA), within the exec app region, with ~9.5 bits of entropy.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_ASLR_LO: u64 = EXEC_APP_BASE; // 0x0140_0000
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_ASLR_HI: u64 = 0x0170_0000; // leaves room below EXEC_ARGS_VA (0x017F_F000)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EXEC_ASLR_SLOT: u64 = 0x1000;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut EXEC_ASLR_PREV: u64 = 0;
+
+    /// Pick a fresh random, page-aligned PIE load base from the CSPRNG, avoiding the
+    /// immediately-previous one so two consecutive spawns differ. (Spawns are BSP-only
+    /// today; with concurrent spawners this should run under R4_RQ_LOCK -- carry-forward.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn exec_aslr_base() -> u64 {
+        let nslots = (EXEC_ASLR_HI - EXEC_ASLR_LO) / EXEC_ASLR_SLOT;
+        let mut slot = rng_next() % nslots;
+        if EXEC_ASLR_PREV != 0 {
+            let prev_slot = (EXEC_ASLR_PREV - EXEC_ASLR_LO) / EXEC_ASLR_SLOT;
+            if slot == prev_slot {
+                slot = (slot + 1) % nslots;
+            }
+        }
+        let base = EXEC_ASLR_LO + slot * EXEC_ASLR_SLOT;
+        EXEC_ASLR_PREV = base;
+        base
+    }
+
+    /// Load an ET_DYN (PIE) app into the child address space `pml4_phys` at a RANDOMIZED
+    /// base (code-base ASLR). Like exec_load_app but: accepts ET_DYN (e_type 3), loads
+    /// each PT_LOAD at base + p_vaddr, applies R_X86_64_RELATIVE relocations relative to
+    /// the base (written into the child AS via as_copyout -- the relocating analogue of
+    /// dl_load_elf, but for a child pml4 rather than the current CR3), and returns base +
+    /// e_entry. Emits "ASLR: dyn base=0x<base>". Bounds every segment + reloc target below
+    /// EXEC_ARGS_VA so a crafted header cannot overrun into the args/stack region.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn exec_load_pie(pml4_phys: u64, image: &[u8]) -> Option<u64> {
+        if image.len() < 64 || &image[0..4] != b"\x7FELF" || image[4] != 2 || image[5] != 1 {
+            return None;
+        }
+        if u16::from_le_bytes([image[16], image[17]]) != 3 {
+            return None; // not ET_DYN
+        }
+        let base = exec_aslr_base();
+        let e_entry = u64::from_le_bytes(image[24..32].try_into().ok()?);
+        let e_phoff = u64::from_le_bytes(image[32..40].try_into().ok()?) as usize;
+        let e_phentsize = u16::from_le_bytes([image[54], image[55]]) as usize;
+        let e_phnum = u16::from_le_bytes([image[56], image[57]]) as usize;
+        if e_phentsize < 56 || e_phnum == 0 || e_phnum > 8 {
+            return None;
+        }
+        // Pass 1: load each PT_LOAD at base + p_vaddr. All index arithmetic on image
+        // fields uses checked_add so a crafted header cannot wrap a bound and panic.
+        let mut i = 0usize;
+        while i < e_phnum {
+            let ph = e_phoff.checked_add(i.checked_mul(e_phentsize)?)?;
+            if ph.checked_add(56)? > image.len() {
+                return None;
+            }
+            if u32::from_le_bytes(image[ph..ph + 4].try_into().ok()?) == 1 {
+                let p_offset = u64::from_le_bytes(image[ph + 8..ph + 16].try_into().ok()?) as usize;
+                let p_vaddr = u64::from_le_bytes(image[ph + 16..ph + 24].try_into().ok()?);
+                let p_filesz = u64::from_le_bytes(image[ph + 32..ph + 40].try_into().ok()?) as usize;
+                let p_memsz = u64::from_le_bytes(image[ph + 40..ph + 48].try_into().ok()?) as usize;
+                let seg_end = base.checked_add(p_vaddr)?.checked_add(p_memsz as u64)?;
+                if p_filesz > p_memsz
+                    || p_offset.checked_add(p_filesz)? > image.len()
+                    || seg_end > EXEC_ARGS_VA
+                {
+                    return None;
+                }
+                if p_filesz > 0
+                    && !mm::as_copyout(
+                        pml4_phys,
+                        base + p_vaddr,
+                        &image[p_offset..p_offset + p_filesz],
+                    )
+                {
+                    return None;
+                }
+                if p_memsz > p_filesz
+                    && !mm::as_map_zeroed(
+                        pml4_phys,
+                        base + p_vaddr + p_filesz as u64,
+                        p_memsz - p_filesz,
+                    )
+                {
+                    return None;
+                }
+            }
+            i += 1;
+        }
+        // Pass 2: apply DT_RELA R_X86_64_RELATIVE (8) relocations into the child AS:
+        // *(base + r_offset) = base + r_addend. (GLOB_DAT/JUMP_SLOT need a symbol table;
+        // PIE main apps use only RELATIVE, so reject any other reloc type by ignoring it
+        // -- a self-contained PIE has none of the others.)
+        if let (Some(rela_va), Some(rela_sz)) = (dl_dyn(image, 7), dl_dyn(image, 8)) {
+            if let Some(rela_off) = dl_vaddr_to_off(image, rela_va) {
+                let rela_sz = rela_sz as usize;
+                if rela_off.checked_add(rela_sz).map_or(false, |s| s <= image.len()) {
+                    let mut r = 0usize;
+                    while r + 24 <= rela_sz {
+                        let o = rela_off + r;
+                        let r_offset = u64::from_le_bytes(image[o..o + 8].try_into().ok()?);
+                        let r_info = u64::from_le_bytes(image[o + 8..o + 16].try_into().ok()?);
+                        let r_addend = u64::from_le_bytes(image[o + 16..o + 24].try_into().ok()?);
+                        if r_info & 0xFFFF_FFFF == 8 {
+                            let dst = base.checked_add(r_offset)?;
+                            if dst.checked_add(8)? > EXEC_ARGS_VA {
+                                return None;
+                            }
+                            let val = base.wrapping_add(r_addend);
+                            if !mm::as_copyout(pml4_phys, dst, &val.to_le_bytes()) {
+                                return None;
+                            }
+                        }
+                        r += 24;
+                    }
+                }
+            }
+        }
+        // Bound the entry point (parity with exec_load_app, which rejects an
+        // out-of-window e_entry): a crafted PIE must not set an arbitrary child RIP.
+        let entry = base.checked_add(e_entry)?;
+        if entry < base || entry >= EXEC_ARGS_VA {
+            return None;
+        }
+        serial_write(b"ASLR: dyn base=0x");
+        serial_write_hex(base);
+        serial_write(b"\n");
+        Some(entry)
+    }
+
     // Args page: the kernel copies the spawn argument string (NUL
     // terminated) into the last page of the app window; the child gets
     // its address in RDI and length in RSI.
@@ -4943,7 +5079,20 @@ cfg_r4! {
                 return ERR;
             }
         };
-        let entry = match exec_load_app(child_pml4, elf) {
+        // Dispatch by ELF type: ET_DYN (PIE) apps load at a randomized base via the
+        // relocating loader (code-base ASLR, full-os Part IV.10); ET_EXEC apps keep the
+        // fixed-base memcpy path. The package store carries either.
+        let et = if elf.len() >= 18 {
+            u16::from_le_bytes([elf[16], elf[17]])
+        } else {
+            0
+        };
+        let loaded = if et == 3 {
+            exec_load_pie(child_pml4, elf)
+        } else {
+            exec_load_app(child_pml4, elf)
+        };
+        let entry = match loaded {
             Some(e) => e,
             None => {
                 mm::address_space_release(child_pml4);
