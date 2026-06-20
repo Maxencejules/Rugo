@@ -6969,6 +6969,13 @@ cfg_r4! {
                 R4_TASKS[t].yield_count = R4_TASKS[t].yield_count.wrapping_add(1);
                 R4_TASKS[t].yield_count
             }
+            // op 17 = SMP workload-distribution CAPSTONE work (full-os Part I.3): one real
+            // FS round-trip (vfs open/write/read/verify, under FS_LOCK -> STORAGE_LOCK) +
+            // one R4_SOCKETS loopback (under NET_LOCK) done ON THE AP that runs the
+            // capstone task, concurrently with the BSP -- the proof a real task distributes
+            // a real FS+net workload onto an application processor. See smp_capstone_work.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            17 => smp::smp_capstone_work(),
             _ => 0xFFFF_FFFF_FFFF_FFFF,
         }
     }
@@ -13062,6 +13069,13 @@ pub extern "C" fn kmain() -> ! {
         // together under the lock -- proving the wake's multi-field transition is atomic
         // vs a concurrent scheduler read (no torn pair). No-op on -smp1.
         smp::crosswake_smp_selftest();
+        // full-os Part I.3 (slice 6 -- the CAPSTONE): a REAL ring-3 task is scheduled onto
+        // an application processor and runs a loop of REAL FS (vfs write/read/verify) + net
+        // (R4_SOCKETS loopback) work ON THE AP, concurrently with the BSP doing its own
+        // FS+net work on the same locks. The contention counters advancing prove true
+        // concurrency; the byte/echo verification proves the locks kept shared state
+        // consistent across cores. The payoff of slices 2-5. No-op on -smp1 / unmounted FS.
+        smp::smp_capstone_selftest();
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline

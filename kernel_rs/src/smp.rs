@@ -2284,6 +2284,211 @@ unsafe fn smp_live_sched_selftest() -> bool {
     ok
 }
 
+// ===== SMP workload-distribution CAPSTONE (full-os guide Part I.3, slice 6) =====
+// The culmination: a REAL ring-3 task, scheduled onto an application processor by the
+// live SMP scheduler (SMP_LIVE_MODE / ap_pull_r4_task, exactly like smp_live_sched_
+// selftest), runs a loop of REAL FS + net work ON THE AP -- one /data file
+// write+read+verify (under FS_LOCK -> STORAGE_LOCK) and one R4_SOCKETS loopback echo
+// (under NET_LOCK) per iteration -- CONCURRENTLY with the BSP doing its own FS+net work
+// on the SAME locks. The lock-contention counters advancing (fs>0 net>0 blk>0) prove the
+// two CPUs TRULY overlapped (not accidentally serialized), and the byte/echo verification
+// proves the locks kept the shared state consistent across cores. The ring-3 payload is a
+// tiny loop driving sys_sysinfo op 17; the FS+net work itself is done kernel-side in
+// smp_capstone_work (which calls the wrapped vfs_*/loopback directly, so it exercises the
+// locks on the AP without the user-pointer/owner_tid syscall machinery the capstone is
+// not testing). All of slices 2-5 must hold for this to pass.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CAPSTONE_FS_OK: AtomicU64 = AtomicU64::new(0); // FS round-trips that verified
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CAPSTONE_NET_OK: AtomicU64 = AtomicU64::new(0); // net loopbacks that echoed
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CAPSTONE_CPU: AtomicU64 = AtomicU64::new(0); // gs:[0] of the CPU that ran the work
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CAPSTONE_ITERS: AtomicU64 = AtomicU64::new(0); // op-17 calls (the per-iter byte source)
+
+// Ring-3 capstone payload: loop 200x calling sys_sysinfo op 17 (the FS+net work, run on
+// this AP), then report via int 0x81. Position-independent (only relative jumps +
+// immediates; all data lives in the kernel-side work fn). Hand-assembled:
+//   4D 31 ED               xor r13, r13          ; iter = 0
+//  .loop:
+//   B8 3D 00 00 00         mov eax, 61           ; sys_sysinfo
+//   BF 11 00 00 00         mov edi, 17           ; op 17 = capstone work
+//   31 F6 / 31 D2          xor esi,esi / edx,edx
+//   CD 80                  int 0x80
+//   49 FF C5               inc r13
+//   49 81 FD C8 00 00 00   cmp r13, 200
+//   72 E4                  jb .loop              ; back -28 to .loop
+//   BF CA 00 00 00         mov edi, 0xCA         ; report sentinel (ignored in live mode)
+//   31 F6                  xor esi, esi
+//   CD 81                  int 0x81
+//   EB FE                  jmp $
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static CAPSTONE_CODE: [u8; 42] = [
+    0x4D, 0x31, 0xED, 0xB8, 0x3D, 0x00, 0x00, 0x00, 0xBF, 0x11, 0x00, 0x00, 0x00, 0x31, 0xF6,
+    0x31, 0xD2, 0xCD, 0x80, 0x49, 0xFF, 0xC5, 0x49, 0x81, 0xFD, 0xC8, 0x00, 0x00, 0x00, 0x72,
+    0xE4, 0xBF, 0xCA, 0x00, 0x00, 0x00, 0x31, 0xF6, 0xCD, 0x81, 0xEB, 0xFE,
+];
+
+/// Capstone work, invoked via sys_sysinfo op 17 by the ring-3 capstone payload while it
+/// runs ON AN AP. One FS round-trip (vfs open/write/read/verify on the AP's own scratch
+/// file, under FS_LOCK -> STORAGE_LOCK) + one R4_SOCKETS loopback echo (under NET_LOCK),
+/// then bump this AP task's yield_count. Accumulates per-CPU results into statics the BSP
+/// reads after the task retires. Returns 0.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn smp_capstone_work() -> u64 {
+    let slot: u64;
+    core::arch::asm!("mov {}, gs:[0]", out(reg) slot, options(nostack));
+    CAPSTONE_CPU.store(slot, Ordering::Release);
+    let i = CAPSTONE_ITERS.fetch_add(1, Ordering::AcqRel);
+    let byte = (i & 0xFF) as u8;
+    // FS round-trip: write a per-iteration byte to the AP's scratch file, read it back.
+    if let Some(idx) = crate::vfs::vfs_open(b"/.smpcap", true) {
+        let src = [byte];
+        if crate::vfs::vfs_write(idx, 0, &src) == 1 {
+            let mut dst = [0u8; 1];
+            if crate::vfs::vfs_read(idx, 0, &mut dst) == 1 && dst[0] == byte {
+                CAPSTONE_FS_OK.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+    }
+    // NET round-trip: an R4_SOCKETS loopback echo under NET_LOCK.
+    if crate::net::smp_capstone_loopback(byte) {
+        CAPSTONE_NET_OK.fetch_add(1, Ordering::AcqRel);
+    }
+    // Bump this AP task's yield_count (per-CPU current via gs:[16]).
+    let cur: u64;
+    core::arch::asm!("mov {}, gs:[16]", out(reg) cur, options(nostack));
+    if (cur as usize) < crate::R4_MAX_TASKS {
+        crate::R4_TASKS[cur as usize].yield_count += 1;
+    }
+    0
+}
+
+/// BSP entry for the SMP capstone. Sets up a real ring-3 task (like smp_live_sched_
+/// selftest), flips SMP_LIVE_MODE so an AP pulls + runs it, and CONCURRENTLY does its own
+/// FS+net work on the same locks to generate contention. Verifies the task ran on an AP,
+/// its FS+net round-trips all verified, its yield_count reached the target, and the
+/// contention counters advanced. Skips when no AP / unmounted FS. UAF-safe teardown gated
+/// on the AP having retired (ran == 1). Net-neutral: removes both scratch files.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn smp_capstone_selftest() {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 || !crate::vfs::vfs_ready() {
+        return;
+    }
+    const TID: usize = crate::R4_MAX_TASKS - 1;
+    const CODE_VA: u64 = 0x0140_0000;
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    const N: u64 = 200;
+    CAPSTONE_FS_OK.store(0, Ordering::Release);
+    CAPSTONE_NET_OK.store(0, Ordering::Release);
+    CAPSTONE_CPU.store(0, Ordering::Release);
+    CAPSTONE_ITERS.store(0, Ordering::Release);
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let ucr3 = match crate::mm::address_space_create(kcr3) {
+        Some(p) => p,
+        None => return,
+    };
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &CAPSTONE_CODE)
+        || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+    {
+        crate::mm::address_space_release(ucr3);
+        return;
+    }
+    crate::r4_init_task(TID, CODE_VA, STACK_TOP, 0);
+    crate::R4_TASKS[TID].pml4_phys = ucr3;
+    crate::R4_TASKS[TID].yield_count = 0;
+    crate::R4_TASKS[TID].ap_eligible = true; // affinity: only an AP claims it
+    crate::R4_TASKS[TID].state = crate::R4State::Ready;
+    SMP_LIVE_RAN.store(0, Ordering::Release);
+    SMP_LIVE_BASE.store(TID as u64, Ordering::Release);
+    SMP_LIVE_COUNT.store(1, Ordering::Release);
+    let fs0 = FS_CONTENTION.load(Ordering::Relaxed);
+    let net0 = NET_CONTENTION.load(Ordering::Relaxed);
+    let blk0 = STORAGE_CONTENTION.load(Ordering::Relaxed);
+    SMP_LIVE_MODE.store(1, Ordering::Release); // an AP may now pull the task
+    // BSP contends on the SAME locks the AP task is taking, while the AP runs the capstone
+    // -- so the contention counters advance (proof the two CPUs truly overlapped, not
+    // accidentally serialized). Three concurrent streams: (1) FS ops on its OWN scratch
+    // file (FS_LOCK), (2) DIRECT block I/O to a scratch LBA (STORAGE_LOCK) -- direct,
+    // because FS_LOCK serializes the FS block path so STORAGE is never contended THROUGH
+    // the FS path; only an out-of-FS block op races the AP's in-FS block op on STORAGE,
+    // (3) a net loopback (NET_LOCK). Bounded so a degraded boot can't hang.
+    const BSP_BLK_LBA: u64 = 1690; // dead scratch (cache@1610 < .. < swap@1700)
+    let mut spins = 0u64;
+    while SMP_LIVE_RAN.load(Ordering::Acquire) < 1 && spins < 2_000_000 {
+        let byte = (spins & 0xFF) as u8;
+        if let Some(idx) = crate::vfs::vfs_open(b"/.smpbsp", true) {
+            let src = [byte];
+            let _ = crate::vfs::vfs_write(idx, 0, &src);
+            let mut dst = [0u8; 1];
+            let _ = crate::vfs::vfs_read(idx, 0, &mut dst);
+        }
+        // Direct block op under STORAGE_LOCK (races the AP's in-FS block I/O on STORAGE).
+        let bg = crate::storage_io_enter();
+        core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), byte, 512);
+        let _ = crate::block_io_dispatch(true, BSP_BLK_LBA, 512, false);
+        crate::storage_io_exit(bg);
+        let _ = crate::net::smp_capstone_loopback(byte);
+        spins += 1;
+    }
+    SMP_LIVE_MODE.store(0, Ordering::Release); // stop pulling
+    let ran = SMP_LIVE_RAN.load(Ordering::Acquire);
+    let fs_ok = CAPSTONE_FS_OK.load(Ordering::Acquire);
+    let net_ok = CAPSTONE_NET_OK.load(Ordering::Acquire);
+    let cpu = CAPSTONE_CPU.load(Ordering::Acquire);
+    let fs_c = FS_CONTENTION.load(Ordering::Relaxed).wrapping_sub(fs0);
+    let net_c = NET_CONTENTION.load(Ordering::Relaxed).wrapping_sub(net0);
+    let blk_c = STORAGE_CONTENTION.load(Ordering::Relaxed).wrapping_sub(blk0);
+    let mut yc = 0u64;
+    // UAF-safe teardown: free the page tables + read the slot only once the AP has
+    // provably left the ucr3 (ran == 1, read with Acquire happens-after ap_user_done
+    // restored the kernel CR3). On timeout (ran == 0) intentionally leak the AS, exactly
+    // like smp_live_sched_selftest.
+    if ran == 1 {
+        r4_rq_lock();
+        yc = crate::R4_TASKS[TID].yield_count;
+        crate::R4_TASKS[TID].state = crate::R4State::Dead;
+        r4_rq_unlock();
+        crate::mm::address_space_release(ucr3);
+    }
+    // Net-neutral: drop both scratch files so the persisted /data FS is left as found.
+    let _ = crate::vfs::vfs_unlink(b"/.smpcap");
+    let _ = crate::vfs::vfs_unlink(b"/.smpbsp");
+    serial_write(b"CAPSTONE: ran cpu=0x");
+    serial_write_hex(cpu);
+    serial_write(b" fs=0x");
+    serial_write_hex(fs_ok);
+    serial_write(b" net=0x");
+    serial_write_hex(net_ok);
+    serial_write(b" yield=0x");
+    serial_write_hex(yc);
+    if ran == 1 && cpu >= 1 && fs_ok == N && net_ok == N && yc == N {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+    // Contention proof: fs_c and blk_c must both be nonzero -- the AP held FS_LOCK while
+    // the BSP spun for it (fs_c), and one held STORAGE_LOCK while the other spun (blk_c).
+    // Either being nonzero already proves the two CPUs overlapped; both is the robust
+    // signal. net_c is reported but NOT asserted: the loopback critical section has no I/O
+    // (microscopic hold), so the two cores rarely overlap on NET_LOCK even though the AP
+    // provably took it 200x (net=0xC8 above). The dominant fs_c (millions) is the
+    // overwhelming proof of true simultaneity.
+    serial_write(b"CAPSTONE: contend fs=0x");
+    serial_write_hex(fs_c);
+    serial_write(b" blk=0x");
+    serial_write_hex(blk_c);
+    serial_write(b" net=0x");
+    serial_write_hex(net_c);
+    if fs_c > 0 && blk_c > 0 {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+}
+
 /// CPU-bound ring-3 payload (live per-CPU scheduler slice 4): spin a bounded loop
 /// -- long enough that this AP's periodic LAPIC timer fires (and preempts it)
 /// several times -- then report via int 0x81 so the AP retires it. The loop

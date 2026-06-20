@@ -1188,6 +1188,49 @@ unsafe fn r4_net_alloc_socket() -> Option<usize> {
     None
 }
 
+/// SMP capstone (full-os Part I.3): a kernel-side R4_SOCKETS loopback round-trip under
+/// NET_LOCK -- allocate a connected pair, deliver one byte into the peer's rx_buf (the
+/// same slot sys_socket_send_r4 fills on the state-4 loopback path), read it back +
+/// verify, then free the pair. Returns true on a correct echo. Exercises the R4_SOCKETS
+/// table + NET_LOCK on WHATEVER CPU calls it -- the capstone runs it on an AP concurrently
+/// with the BSP, so the contention counter advances and the table stays consistent. Uses
+/// the raw table (not the sys_socket_* wrappers) deliberately: the capstone proves lock
+/// SERIALIZATION across cores, not the user-pointer / owner_tid==R4_CURRENT syscall ABI.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn smp_capstone_loopback(byte: u8) -> bool {
+    let g = crate::net_io_enter();
+    let echoed = (|| {
+        let a = r4_net_alloc_socket()?;
+        let b = match r4_net_alloc_socket() {
+            Some(x) => x,
+            None => {
+                R4_SOCKETS[a] = R4Socket::EMPTY;
+                return None;
+            }
+        };
+        // A connected loopback pair (state 4 = the loopback-established state).
+        R4_SOCKETS[a].state = 4;
+        R4_SOCKETS[a].peer = b as i16;
+        R4_SOCKETS[b].state = 4;
+        R4_SOCKETS[b].peer = a as i16;
+        // send a->b: deliver into b's single rx slot, then recv at b and verify.
+        R4_SOCKETS[b].rx_buf[0] = byte;
+        R4_SOCKETS[b].rx_len = 1;
+        let got = if R4_SOCKETS[b].rx_len == 1 {
+            R4_SOCKETS[b].rx_buf[0]
+        } else {
+            byte ^ 0xFF
+        };
+        R4_SOCKETS[b].rx_len = 0;
+        R4_SOCKETS[a] = R4Socket::EMPTY;
+        R4_SOCKETS[b] = R4Socket::EMPTY;
+        Some(got == byte)
+    })()
+    .unwrap_or(false);
+    crate::net_io_exit(g);
+    echoed
+}
+
 #[cfg(feature = "go_test")]
 #[inline(always)]
 unsafe fn r4_socket_owner_ok(socket_id: usize) -> bool {

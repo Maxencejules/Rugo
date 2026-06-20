@@ -227,6 +227,21 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # R4_RQ_LOCK makes the wake's multi-field transition atomic against a concurrent
         # scheduler read (the cross-CPU wake-of-an-AP-blocked-task race). torn != 0 -> FAIL.
         "SMP: crosswake torn=0x0000000000000000 k=0x00000000000003E8 ok",
+        # Workload-distribution CAPSTONE (slice 6, the payoff of slices 2-5): a REAL
+        # ring-3 task was scheduled onto the application processor (cpu=1) and ran 200
+        # iterations of REAL FS work (vfs write+read, byte-verified -> fs=0xC8) + 200
+        # R4_SOCKETS loopback echoes (net=0xC8) ON THE AP, bumping its yield_count to 200
+        # -- all under FS_LOCK/STORAGE_LOCK/NET_LOCK, concurrently with the BSP doing its
+        # own FS+net+block work on the same locks. Every byte/echo verified, proving the
+        # locks kept shared state consistent across cores.
+        "CAPSTONE: ran cpu=0x0000000000000001 fs=0x00000000000000C8 net=0x00000000000000C8 yield=0x00000000000000C8 ok",
+        # The contention counters advanced -- fs_c (millions: the AP held FS_LOCK while the
+        # BSP spun for it) and blk_c (the BSP's direct block I/O raced the AP's in-FS block
+        # I/O on STORAGE_LOCK) -- overwhelming proof the two CPUs TRULY overlapped (not
+        # accidentally serialized). net_c is reported, not asserted (the loopback section
+        # has no I/O, so the cores rarely overlap on NET_LOCK). Values vary per boot; the
+        # fixed prefix is matched and a contention failure emits " FAIL".
+        "CAPSTONE: contend fs=0x",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",
