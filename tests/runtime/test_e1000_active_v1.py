@@ -96,9 +96,16 @@ def test_e1000_is_the_active_nic(find_in_order):
         "DHCP: request sent",
         "DHCP: ack ip=0x",
         "E1000: active dhcp ok",
+        # Part II.7 stats counters: GPRC/GPTC tracked the DORA's real TX/RX.
+        "E1000: stats gprc=0x",
         # And the system still boots + shuts down cleanly.
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "E1000: active dhcp timeout" not in out
     assert "E1000: none" not in out
+    # The stats line must report success (both counters non-zero), not "fail".
+    assert any(
+        "E1000: stats" in line and line.rstrip().endswith("ok")
+        for line in out.splitlines()
+    )

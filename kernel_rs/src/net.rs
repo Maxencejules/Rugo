@@ -1741,6 +1741,9 @@ unsafe fn e1000_active_dhcp_proof() {
     }
     if crate::netcfg::dhcp_done() {
         serial_write(b"E1000: active dhcp ok\n");
+        // full-os Part II.7: read the on-device GPRC/GPTC stats counters now that
+        // a DORA has driven real TX/RX over the e1000.
+        crate::e1000_active_stats_log();
     } else {
         serial_write(b"E1000: active dhcp timeout\n");
     }

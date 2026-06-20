@@ -8619,7 +8619,9 @@ pub(crate) unsafe fn e1000_active_init() -> bool {
     let bar0 = pci_read32(bdf.bus, bdf.dev, bdf.func, 0x10);
     let base = (bar0 & 0xFFFF_FFF0) as u64;
     // Dedicated persistent window (distinct PDPT subtree from the shared 0xFF10 one).
-    let mmio = match mmio_map_region_at(base, 4, 0xFFFF_FF20_0000_0000) {
+    // 5 pages: the control/ring registers live in [0,0x3818]; the statistics block
+    // (GPRC 0x4074 / GPTC 0x4080, full-os Part II.7) needs the 0x4000 page mapped too.
+    let mmio = match mmio_map_region_at(base, 5, 0xFFFF_FF20_0000_0000) {
         Some(p) => p,
         None => return false,
     };
@@ -8795,6 +8797,30 @@ pub(crate) unsafe fn e1000_active_recv(buf: &mut [u8]) -> usize {
     core::ptr::write_volatile((E1000_MMIO + 0x2818) as *mut u32, i as u32); // RDT = i
     E1000_RXIDX = ((i + 1) % E1000_NRXD) as u32;
     len
+}
+
+/// Read the e1000 statistics counters after traffic has flowed (full-os guide
+/// Part II.7): GPRC (Good Packets Received, 0x4074) and GPTC (Good Packets
+/// Transmitted, 0x4080) are read-to-clear per-frame counters the device
+/// maintains. After the boot DHCP DORA over the e1000 they must both be
+/// non-zero -- proof the on-device stats registers track the real TX/RX the
+/// driver drove (DISCOVER/REQUEST out, OFFER/ACK in). Logs a marker.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn e1000_active_stats_log() {
+    if E1000_MMIO == 0 {
+        return;
+    }
+    let gprc = core::ptr::read_volatile((E1000_MMIO + 0x4074) as *const u32);
+    let gptc = core::ptr::read_volatile((E1000_MMIO + 0x4080) as *const u32);
+    serial_write(b"E1000: stats gprc=0x");
+    serial_write_hex(gprc as u64);
+    serial_write(b" gptc=0x");
+    serial_write_hex(gptc as u64);
+    if gprc > 0 && gptc > 0 {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" fail\n");
+    }
 }
 
 /// Read + report an xHCI controller's capability registers (xHCI spec 5.3).
@@ -9773,6 +9799,55 @@ unsafe fn hda_codec_selftest(mmio: u64) {
         }
         wi += 1;
     }
+
+    // Converter + pin capabilities (full-os guide Part III audio): read the DAC's
+    // PCM_SIZE_RATES (param 0x0A: supported sample rates / bit depths) and
+    // STREAM_FORMATS (param 0x0B: PCM/float/AC3), then find the first output PIN
+    // COMPLEX widget (AUDIO_WIDGET_CAP type bits[23:20] == 4) and read its
+    // PIN_CAPABILITIES (param 0x0C) and CONFIG_DEFAULT (verb 0xF1C: the BIOS pin
+    // configuration -- port connectivity, default device, location). These are the
+    // converter/pin descriptors a driver consults to pick a stream format and route
+    // output. Read-only verbs that continue the CORB/RIRB sequence (vi keeps rising,
+    // staying < RINTCNT = 0xFF); the engines are still running.
+    let pbase = (codec << 28) | 0x000F_0000;
+    vi += 1;
+    let rates = hda_verb(mmio, corb_va, rirb_va, vi, pbase | (dac << 20) | 0x0A).unwrap_or(0);
+    vi += 1;
+    let fmts = hda_verb(mmio, corb_va, rirb_va, vi, pbase | (dac << 20) | 0x0B).unwrap_or(0);
+    let mut pin = 0u32;
+    let mut pj = 0u32;
+    while pj < wmax {
+        let nid = widget_start + pj;
+        vi += 1;
+        let cap = hda_verb(mmio, corb_va, rirb_va, vi, pbase | (nid << 20) | 0x09).unwrap_or(0);
+        if (cap >> 20) & 0xF == 4 {
+            pin = nid;
+            break;
+        }
+        pj += 1;
+    }
+    vi += 1;
+    let pincap = hda_verb(mmio, corb_va, rirb_va, vi, pbase | (pin << 20) | 0x0C).unwrap_or(0);
+    vi += 1;
+    // CONFIG_DEFAULT is a 12-bit "Get" verb (0xF1C), not a parameter: payload 0.
+    let pincfg = hda_verb(mmio, corb_va, rirb_va, vi, (codec << 28) | (pin << 20) | 0x000F_1C00)
+        .unwrap_or(0);
+    serial_write(b"HDA: caps rates=0x");
+    serial_write_hex(rates as u64);
+    serial_write(b" fmts=0x");
+    serial_write_hex(fmts as u64);
+    serial_write(b" pincap=0x");
+    serial_write_hex(pincap as u64);
+    serial_write(b" cfg=0x");
+    serial_write_hex(pincfg as u64);
+    // A real codec reports supported rates on its DAC and capabilities on an output
+    // pin; require both. (pincfg is printed for inspection -- a BIOS may leave it 0.)
+    if rates != 0 && pincap != 0 {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" fail\n");
+    }
+
     hda_pcm_selftest(mmio, corb_va, rirb_va, codec, dac, vi);
 
     // Stop the engines and release the rings.

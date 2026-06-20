@@ -95,6 +95,11 @@ def test_hda_codec_verb_roundtrip(find_in_order):
         # (DAC, output pin, ADC, input pin) -- the topology a PCM driver walks.
         "HDA: codec enum fgs=0x0000000000000001 afgtype=0x0000000000000001 widgets=0x",
         "ok",
+        # Converter + pin capabilities (full-os Part III): the DAC's PCM_SIZE_RATES +
+        # STREAM_FORMATS and an output pin's PIN_CAPABILITIES + CONFIG_DEFAULT -- the
+        # descriptors a driver reads to choose a format and route output.
+        "HDA: caps rates=0x",
+        "ok",
         # PCM playback: the kernel builds a BDL + sample buffer, binds the DAC to
         # output stream SD0, runs it, and watches SDnLPIB advance -- proof the
         # controller is DMAing the buffer to the codec (the real streaming path).
