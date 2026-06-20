@@ -168,8 +168,41 @@ static WORK_ARG: AtomicU64 = AtomicU64::new(0);
 static WORK_RESULT: AtomicU64 = AtomicU64::new(0);
 static WORK_DONE: AtomicU64 = AtomicU64::new(0); // set to the gen when finished
 
+// Cross-CPU PMM contention self-test (full-os Part I.3, kernel-wide locking /
+// slice 5). The AP and BSP allocate a batch of frames CONCURRENTLY (released
+// together by a barrier) and the BSP verifies the two batches are disjoint -- a
+// frame handed to two CPUs would mean the PMM lock failed to serialize the bitmap
+// read-modify-write.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const PMM_TEST_N: usize = 256;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut AP_PMM_FRAMES: [u64; PMM_TEST_N] = [0; PMM_TEST_N];
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static PMM_TEST_AP_READY: AtomicU64 = AtomicU64::new(0); // AP reached the barrier
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static PMM_TEST_GO: AtomicU64 = AtomicU64::new(0); // BSP releases both to allocate
+
+/// AP side of the PMM contention test (work kind 3): announce arrival at the
+/// barrier, wait for the BSP's go, then allocate PMM_TEST_N frames into the shared
+/// array as fast as possible -- concurrently with the BSP doing the same.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pmm_test_ap_alloc() {
+    PMM_TEST_AP_READY.store(1, Ordering::Release);
+    let mut s = 0u64;
+    while PMM_TEST_GO.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    let mut i = 0usize;
+    while i < PMM_TEST_N {
+        AP_PMM_FRAMES[i] = crate::mm::alloc_frame().unwrap_or(0);
+        i += 1;
+    }
+}
+
 /// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
-/// iteratively (a real workload the dispatcher can independently check).
+/// iteratively (a real workload the dispatcher can independently check). Kind 3 =
+/// the AP side of the PMM contention self-test.
 unsafe fn run_work(kind: u64, arg: u64) -> u64 {
     match kind {
         1 => {
@@ -180,6 +213,11 @@ unsafe fn run_work(kind: u64, arg: u64) -> u64 {
                 i += 1;
             }
             sum
+        }
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        3 => {
+            pmm_test_ap_alloc();
+            0
         }
         _ => 0,
     }
@@ -384,6 +422,91 @@ unsafe fn ap_runqueue_selftest() -> bool {
         s += 1;
     }
     ok
+}
+
+/// PMM SMP-safety self-test (full-os Part I.3, kernel-wide locking / slice 5): the
+/// BSP and one AP allocate a batch of physical frames CONCURRENTLY -- released
+/// together by a barrier so the two batches genuinely overlap in time -- and the
+/// BSP verifies they are DISJOINT (no frame handed to both CPUs) and that freeing
+/// everything restores the free-frame count. A frame appearing in both batches, or
+/// a leaked/duplicated count, would mean the PMM lock failed to serialize the
+/// allocator's bitmap read-modify-write across cores. Returns true on success;
+/// returns false (skips) if no AP is online or the AP never reached the barrier.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pmm_smp_selftest() -> bool {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+    PMM_TEST_AP_READY.store(0, Ordering::Release);
+    PMM_TEST_GO.store(0, Ordering::Release);
+    let mut k = 0usize;
+    while k < PMM_TEST_N {
+        AP_PMM_FRAMES[k] = 0;
+        k += 1;
+    }
+    let baseline = crate::mm::free_frames();
+    // Dispatch the AP's batch-alloc (work kind 3); it runs to the barrier and waits.
+    let gen = smp_dispatch_async(3, 0);
+    if gen == 0 {
+        return false; // no AP claimed (none online)
+    }
+    // Wait for the AP to reach the barrier so the release maximizes overlap.
+    let mut s = 0u64;
+    while PMM_TEST_AP_READY.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    if PMM_TEST_AP_READY.load(Ordering::Acquire) == 0 {
+        let _ = smp_join(gen);
+        return false; // AP never arrived (degraded boot)
+    }
+    // Release both cores, then allocate the BSP's batch concurrently with the AP.
+    PMM_TEST_GO.store(1, Ordering::Release);
+    let mut bsp_frames = [0u64; PMM_TEST_N];
+    let mut i = 0usize;
+    while i < PMM_TEST_N {
+        bsp_frames[i] = crate::mm::alloc_frame().unwrap_or(0);
+        i += 1;
+    }
+    let _ = smp_join(gen); // AP finished its batch
+    // Every frame must be a real allocation (alloc never returned 0/None).
+    let mut all_alloced = true;
+    let mut a = 0usize;
+    while a < PMM_TEST_N {
+        if bsp_frames[a] == 0 || AP_PMM_FRAMES[a] == 0 {
+            all_alloced = false;
+        }
+        a += 1;
+    }
+    // Cross-CPU disjointness: alloc_frame returns frames distinct WITHIN one CPU's
+    // sequence by construction, so the lock's job is purely cross-core -- no BSP
+    // frame may equal any AP frame. O(N^2) over N=256 (~65k compares) at boot.
+    let mut disjoint = true;
+    let mut bi = 0usize;
+    while bi < PMM_TEST_N {
+        let bf = bsp_frames[bi];
+        let mut aj = 0usize;
+        while aj < PMM_TEST_N {
+            if bf != 0 && bf == AP_PMM_FRAMES[aj] {
+                disjoint = false;
+            }
+            aj += 1;
+        }
+        bi += 1;
+    }
+    // Return every frame and confirm the pool is conserved (no leak / double-free).
+    let mut f = 0usize;
+    while f < PMM_TEST_N {
+        if bsp_frames[f] != 0 {
+            crate::mm::free_frame(bsp_frames[f]);
+        }
+        if AP_PMM_FRAMES[f] != 0 {
+            crate::mm::free_frame(AP_PMM_FRAMES[f]);
+        }
+        f += 1;
+    }
+    let conserved = crate::mm::free_frames() == baseline;
+    all_alloced && disjoint && conserved
 }
 
 /// Per-CPU affinity + load-distribution self-test (full-os guide Part I.3, SMP
@@ -1659,6 +1782,20 @@ pub fn smp_init() {
             if online >= expected {
                 serial_write(b"SMP: affinity ");
                 if ap_affinity_selftest() {
+                    serial_write(b"ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
+            }
+            // Kernel-wide locking (slice 5): the BSP and an AP allocate physical
+            // frames CONCURRENTLY and the BSP proves the batches are disjoint -- the
+            // PMM lock serializing the bitmap RMW across cores. (Uses the async work
+            // dispatch, which is go-lane only, so this test is gated to the go lane;
+            // the PMM lock itself is compiled into every lane.)
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            if online >= expected {
+                serial_write(b"SMP: pmm smp ");
+                if pmm_smp_selftest() {
                     serial_write(b"ok\n");
                 } else {
                     serial_write(b"FAIL\n");

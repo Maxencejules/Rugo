@@ -6,6 +6,7 @@
 // reached through the Limine HHDM for zeroing.
 
 use crate::{serial_write, serial_write_hex};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const FRAME_SIZE: u64 = 4096;
 const MAX_PHYS: u64 = 4u64 << 30;
@@ -62,6 +63,32 @@ static mut PMM: Pmm = Pmm {
     ready: false,
 };
 
+// PMM spinlock (full-os Part I.3, kernel-wide state locking / slice 5). The
+// physical frame allocator is shared kernel state; on a single CPU every caller
+// runs with IF=0 (faults and syscalls are interrupt gates) so a critical section
+// could never be preempted, but on SMP two CPUs can allocate/free concurrently and
+// race the bitmap read-modify-write -> two CPUs could clear the SAME bit and hand
+// out one frame twice. This lock serializes the leaf allocator operations. It is a
+// LEAF lock (alloc_frame/free_frame/the contig scans never call each other or take
+// any other lock and never fault while held -- they touch only the static bitmap
+// and the always-mapped HHDM), and the AP timer-preemption handler never calls the
+// PMM, so it can never deadlock. Uncontended (one atomic CAS) on -smp 1.
+static PMM_LOCK: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn pmm_lock() {
+    while PMM_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+#[inline]
+fn pmm_unlock() {
+    PMM_LOCK.store(0, Ordering::Release);
+}
+
 pub fn hhdm_offset() -> u64 {
     unsafe { PMM.hhdm }
 }
@@ -72,7 +99,10 @@ pub fn phys_to_virt(phys: u64) -> u64 {
 
 /// Number of physical frames currently free (for sysinfo / metrics).
 pub fn free_frames() -> u64 {
-    unsafe { PMM.free_frames }
+    pmm_lock();
+    let n = unsafe { PMM.free_frames };
+    pmm_unlock();
+    n
 }
 
 /// Populate the PMM from the Limine memmap. Prints `MM: pmm ok frames=0x<n>`
@@ -120,44 +150,53 @@ pub fn pmm_init() {
 }
 
 /// Allocate one zeroed 4 KiB frame. Returns the physical address or None.
+/// SMP-safe: the bitmap read-modify-write runs under the PMM lock.
 pub fn alloc_frame() -> Option<u64> {
-    unsafe {
-        if !PMM.ready {
-            return None;
-        }
-        let mut scanned = 0usize;
-        let mut w = PMM.next_word;
-        while scanned < BITMAP_WORDS {
-            if PMM.bitmap[w] != 0 {
-                let bit = PMM.bitmap[w].trailing_zeros() as u64;
-                PMM.bitmap[w] &= !(1u64 << bit);
-                PMM.free_frames -= 1;
-                PMM.next_word = w;
-                let phys = (w as u64 * 64 + bit) * FRAME_SIZE;
-                core::ptr::write_bytes(
-                    phys_to_virt(phys) as *mut u8, 0, FRAME_SIZE as usize);
-                return Some(phys);
-            }
-            w = (w + 1) % BITMAP_WORDS;
-            scanned += 1;
-        }
-        None
-    }
+    pmm_lock();
+    let r = unsafe { alloc_frame_locked() };
+    pmm_unlock();
+    r
 }
 
-/// Return a frame to the pool. `phys` must come from `alloc_frame`.
+unsafe fn alloc_frame_locked() -> Option<u64> {
+    if !PMM.ready {
+        return None;
+    }
+    let mut scanned = 0usize;
+    let mut w = PMM.next_word;
+    while scanned < BITMAP_WORDS {
+        if PMM.bitmap[w] != 0 {
+            let bit = PMM.bitmap[w].trailing_zeros() as u64;
+            PMM.bitmap[w] &= !(1u64 << bit);
+            PMM.free_frames -= 1;
+            PMM.next_word = w;
+            let phys = (w as u64 * 64 + bit) * FRAME_SIZE;
+            core::ptr::write_bytes(phys_to_virt(phys) as *mut u8, 0, FRAME_SIZE as usize);
+            return Some(phys);
+        }
+        w = (w + 1) % BITMAP_WORDS;
+        scanned += 1;
+    }
+    None
+}
+
+/// Return a frame to the pool. `phys` must come from `alloc_frame`. SMP-safe.
 pub fn free_frame(phys: u64) {
-    unsafe {
-        let frame = phys / FRAME_SIZE;
-        if frame == 0 || frame >= MAX_FRAMES as u64 {
-            return;
-        }
-        let w = (frame / 64) as usize;
-        let bit = frame % 64;
-        if PMM.bitmap[w] & (1u64 << bit) == 0 {
-            PMM.bitmap[w] |= 1u64 << bit;
-            PMM.free_frames += 1;
-        }
+    pmm_lock();
+    unsafe { free_frame_locked(phys) };
+    pmm_unlock();
+}
+
+unsafe fn free_frame_locked(phys: u64) {
+    let frame = phys / FRAME_SIZE;
+    if frame == 0 || frame >= MAX_FRAMES as u64 {
+        return;
+    }
+    let w = (frame / 64) as usize;
+    let bit = frame % 64;
+    if PMM.bitmap[w] & (1u64 << bit) == 0 {
+        PMM.bitmap[w] |= 1u64 << bit;
+        PMM.free_frames += 1;
     }
 }
 
@@ -323,7 +362,14 @@ pub fn heap_selftest() {
 
 /// Allocate `count` physically contiguous frames (used once, by the heap).
 pub fn alloc_frames_contig(count: usize) -> Option<u64> {
-    unsafe {
+    pmm_lock();
+    let r = unsafe { alloc_frames_contig_locked(count) };
+    pmm_unlock();
+    r
+}
+
+unsafe fn alloc_frames_contig_locked(count: usize) -> Option<u64> {
+    {
         if !PMM.ready || count == 0 {
             return None;
         }
@@ -944,7 +990,15 @@ const PTE_PS: u64 = 1 << 7; // page-size bit: a PD entry maps a 2 MiB page
 /// huge page needs `count = align = 512`. Returns the physical base, or None.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub fn alloc_frames_contig_aligned(count: usize, align: usize) -> Option<u64> {
-    unsafe {
+    pmm_lock();
+    let r = unsafe { alloc_frames_contig_aligned_locked(count, align) };
+    pmm_unlock();
+    r
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn alloc_frames_contig_aligned_locked(count: usize, align: usize) -> Option<u64> {
+    {
         if !PMM.ready || count == 0 || align == 0 {
             return None;
         }

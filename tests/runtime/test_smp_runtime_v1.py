@@ -140,6 +140,10 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         "SMP: ap work ok",
         # Per-CPU run queues: the AP drained its own queue to the right total.
         "SMP: runqueue ok",
+        # Kernel-wide locking (slice 5): the BSP and the AP allocated physical frames
+        # concurrently and the batches were disjoint -- the PMM spinlock serialized
+        # the bitmap read-modify-write across cores.
+        "SMP: pmm smp ok",
         # Affinity invariant (live per-CPU scheduler): with AP-eligible tasks
         # planted INSIDE the BSP's live rotation [1,R4_NUM_TASKS), the BSP's
         # r4_find_ready only ever returns the non-eligible task and is starved
