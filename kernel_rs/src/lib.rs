@@ -1709,18 +1709,21 @@ cfg_m3! {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::TimerFd => {
-                // One-shot: 8-byte expiration count when fired, else 0.
+                // 8-byte expiration count when fired, else 0. A periodic timerfd
+                // (op 4) re-arms to its next deadline; a one-shot disarms.
                 if len < 8 {
                     return 0xFFFF_FFFF_FFFF_FFFF;
                 }
-                if (R4_PREEMPT_TICKS as usize) < M8_FD_TABLE[idx].offset {
-                    return 0; // not yet expired
+                let now = R4_PREEMPT_TICKS as usize;
+                let deadline = M8_FD_TABLE[idx].offset;
+                if now < deadline {
+                    return 0; // not yet expired (a disarmed one-shot has deadline = MAX)
                 }
-                let one = 1u64.to_le_bytes();
-                if copyout_user(buf, &one, 8).is_err() {
+                let (count, next) = timerfd_fire(deadline, M8_FD_TIMER_IVL[idx] as usize, now);
+                if copyout_user(buf, &count.to_le_bytes(), 8).is_err() {
                     return 0xFFFF_FFFF_FFFF_FFFF;
                 }
-                M8_FD_TABLE[idx].offset = usize::MAX; // disarm (one-shot)
+                M8_FD_TABLE[idx].offset = next;
                 8
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -2827,6 +2830,43 @@ cfg_m3! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut M8_FD_PTY: [u8; M8_FD_MAX] = [0; M8_FD_MAX];
 
+    // Periodic timerfd interval in PIT ticks, keyed by fd index (0 = one-shot).
+    // Set by sys_time op 3 (one-shot, 0) / op 4 (periodic, > 0); read by the
+    // TimerFd read path to re-arm. (full-os guide Part IV.9)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut M8_FD_TIMER_IVL: [u64; M8_FD_MAX] = [0; M8_FD_MAX];
+
+    /// Given a fired timerfd (`now` >= `deadline`), return (expiration count, next
+    /// deadline). A one-shot (`ivl` == 0) reports 1 and disarms (usize::MAX). A
+    /// periodic timer reports every interval elapsed since `deadline` (>= 1) and
+    /// advances to the next future deadline. (full-os guide Part IV.9)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn timerfd_fire(deadline: usize, ivl: usize, now: usize) -> (u64, usize) {
+        if ivl == 0 {
+            (1, usize::MAX)
+        } else {
+            let count = 1 + ((now - deadline) / ivl) as u64;
+            (count, deadline + count as usize * ivl)
+        }
+    }
+
+    /// Boot self-test for periodic timerfd re-arming (full-os guide Part IV.9): the
+    /// one-shot disarms; a periodic timer reports every interval elapsed since its
+    /// deadline and advances to the next future deadline. Exercises the exact
+    /// `timerfd_fire` logic the TimerFd read path uses.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn timerfd_periodic_selftest() {
+        let ok = timerfd_fire(5, 0, 10) == (1, usize::MAX)   // one-shot disarms
+            && timerfd_fire(5, 5, 5) == (1, 10)              // fires exactly at the deadline
+            && timerfd_fire(5, 5, 12) == (2, 15)             // 2 expirations (t=5,10), next 15
+            && timerfd_fire(5, 5, 22) == (4, 25);            // 4 expirations (t=5,10,15,20)
+        if ok {
+            serial_write(b"TIMERFD: periodic ok\n");
+        } else {
+            serial_write(b"TIMERFD: periodic fail\n");
+        }
+    }
+
     // FAT16 /mnt file cache (full-os guide Part II.5 mounts): one open file at a
     // time; filled on open, served by the FatFile read arm via the fd offset.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -3190,6 +3230,7 @@ cfg_m3! {
                 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
                 {
                     M8_FD_PTY[i] = M8_FD_PTY[idx];
+                    M8_FD_TIMER_IVL[i] = M8_FD_TIMER_IVL[idx];
                 }
                 M8_FD_TABLE[idx] = M8FdEntry::EMPTY;
                 return i as u64;
@@ -5401,10 +5442,51 @@ cfg_r4! {
         (days * 86400 + hour as i64 * 3600 + min as i64 * 60 + sec as i64) as u64
     }
 
+    /// Lazily-calibrated TSC frequency (Hz) for the raw monotonic clock; 0 until
+    /// first use or if calibration is implausible (then we fall back to the PIT).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut CLOCK_TSC_HZ: u64 = 0;
+
+    /// CLOCK_MONOTONIC_RAW nanoseconds (full-os guide Part IV.9): derived from the
+    /// raw CPU timestamp counter (rdtsc), which is unaffected by any clock
+    /// adjustment and ticks far finer than the 10 ms PIT. Calibrated once against
+    /// the PIT and cached; if that calibration is implausible we fall back to the
+    /// PIT-tick monotonic value so the clock is never garbage. u128 intermediate
+    /// math avoids the `tsc * 1e9` overflow a u64 would hit within seconds of boot.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn clock_monotonic_raw_ns() -> u64 {
+        if CLOCK_TSC_HZ == 0 {
+            CLOCK_TSC_HZ = tsc_hz_via_pit();
+        }
+        let hz = CLOCK_TSC_HZ;
+        if hz == 0 {
+            return R4_PREEMPT_TICKS.wrapping_mul(10_000_000);
+        }
+        let tsc = core::arch::x86_64::_rdtsc();
+        ((tsc as u128 * 1_000_000_000u128) / hz as u128) as u64
+    }
+
+    /// Read a POSIX-style clock by id (the value sys_time op 1 returns):
+    /// 0 = MONOTONIC ns (PIT ticks), 1 = REALTIME unix seconds (CMOS RTC),
+    /// 2 = MONOTONIC_RAW ns (raw TSC), 3 = BOOTTIME ns. There is no suspend
+    /// state, so BOOTTIME equals MONOTONIC. -1 (u64::MAX) for an unknown id.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn clock_read(clockid: u64) -> u64 {
+        match clockid {
+            0 => R4_PREEMPT_TICKS.wrapping_mul(10_000_000),
+            1 => cmos_unix_seconds(),
+            2 => clock_monotonic_raw_ns(),
+            3 => R4_PREEMPT_TICKS.wrapping_mul(10_000_000),
+            _ => 0xFFFF_FFFF_FFFF_FFFF,
+        }
+    }
+
     /// sys_time (ABI v3.2 id 53, op-multiplexed): op 1 = clock_gettime
-    /// (a2 = clockid: 0 = MONOTONIC nanoseconds since boot from the PIT
-    /// tick counter, 1 = REALTIME seconds since the Unix epoch from the
-    /// CMOS RTC). -1 on bad op/clockid.
+    /// (a2 = clockid: 0 = MONOTONIC nanoseconds since boot from the PIT tick
+    /// counter, 1 = REALTIME seconds since the Unix epoch from the CMOS RTC,
+    /// 2 = MONOTONIC_RAW nanoseconds from the raw TSC, 3 = BOOTTIME nanoseconds);
+    /// op 2 = nanosleep; op 3 = timerfd_create (one-shot); op 4 = timerfd_create
+    /// (periodic). -1 on bad op/clockid.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_time(frame: *mut u64, op: u64, a2: u64) {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -5413,11 +5495,7 @@ cfg_r4! {
         // afterward or it would clobber the switched-to task's RAX.
         match op {
             1 => {
-                *frame.add(14) = match a2 {
-                    0 => R4_PREEMPT_TICKS.wrapping_mul(10_000_000),
-                    1 => cmos_unix_seconds(),
-                    _ => ERR,
-                };
+                *frame.add(14) = clock_read(a2);
             }
             2 => {
                 // nanosleep(a2 = nanoseconds): block until the deadline (10 ms
@@ -5455,11 +5533,59 @@ cfg_r4! {
                 }
                 M8_FD_TABLE[fd as usize].rights = M10_RIGHT_READ | M10_RIGHT_POLL;
                 M8_FD_TABLE[fd as usize].offset = (R4_PREEMPT_TICKS + ticks) as usize;
+                M8_FD_TIMER_IVL[fd as usize] = 0; // one-shot (no re-arm)
+                *frame.add(14) = fd;
+            }
+            4 => {
+                // timerfd_create periodic(a2 = interval ns): becomes readable
+                // after `interval`, then re-arms every `interval`. A read returns
+                // the number of expirations since the last read (>= 1) and advances
+                // to the next future deadline. (full-os guide Part IV.9)
+                let ticks = (a2 + 9_999_999) / 10_000_000;
+                if ticks == 0 {
+                    *frame.add(14) = ERR; // a zero interval would never advance
+                    return;
+                }
+                let fd = m8_alloc_fd(M8FdKind::TimerFd);
+                if fd == 0xFFFF_FFFF_FFFF_FFFF {
+                    *frame.add(14) = ERR;
+                    return;
+                }
+                M8_FD_TABLE[fd as usize].rights = M10_RIGHT_READ | M10_RIGHT_POLL;
+                M8_FD_TABLE[fd as usize].offset = (R4_PREEMPT_TICKS + ticks) as usize;
+                M8_FD_TIMER_IVL[fd as usize] = ticks;
                 *frame.add(14) = fd;
             }
             _ => {
                 *frame.add(14) = ERR;
             }
+        }
+    }
+
+    /// Boot self-test for the extended clock ids (full-os guide Part IV.9):
+    /// MONOTONIC_RAW must be nonzero and strictly advance across a short busy
+    /// interval (the raw TSC source ticks finer than the 10 ms PIT, so it moves
+    /// even while the PIT-tick MONOTONIC clock is frozen with IF=0), BOOTTIME must
+    /// be a valid monotonic value (>= MONOTONIC; equal here, no suspend), and an
+    /// unknown clock id must report the error sentinel.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn clock_ids_selftest() {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let mono = clock_read(0);
+        let raw1 = clock_read(2);
+        let mut spin = 0u64;
+        while spin < 200_000 {
+            core::hint::spin_loop();
+            spin += 1;
+        }
+        let raw2 = clock_read(2);
+        let boot = clock_read(3);
+        let bad = clock_read(0x55);
+        let ok = raw1 != 0 && raw2 > raw1 && boot >= mono && bad == ERR;
+        if ok {
+            serial_write(b"CLOCK: ext-ids ok\n");
+        } else {
+            serial_write(b"CLOCK: ext-ids fail\n");
         }
     }
 
@@ -5854,6 +5980,13 @@ cfg_r4! {
     const DL_NSLOTS: u64 = 0x10_0000 / DL_SLOT; // 32 slots across [DLOPEN_BASE, +1 MiB)
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut DL_LOAD_BASE: u64 = DLOPEN_BASE;
+    // The page-aligned mapped VA range [lo, hi) of the object currently loaded at
+    // DL_LOAD_BASE, recorded by dl_load_elf so dlclose can unmap exactly its pages
+    // and release their frames. hi == 0 means no live object. (full-os Part V.11)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_MAP_LO: u64 = 0;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_MAP_HI: u64 = 0;
 
     /// Pick a randomized, slot-aligned load base for the next dlopen, different from
     /// the previous load's slot (so the per-load base provably varies and never
@@ -6039,8 +6172,24 @@ cfg_r4! {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         // Code-base ASLR: load at a fresh randomized base (relocations below are all
         // applied relative to it). dl_resolve reads DL_LOAD_BASE for the same base.
+        // Reclaim a previously-loaded object's pages before loading another, so a
+        // dlopen without an intervening dlclose does not orphan the prior object's
+        // frames and W^X mappings (single live object). Uses the OLD DL_MAP range
+        // and runs BEFORE dl_aslr_base (which reads the OLD DL_LOAD_BASE to avoid
+        // reusing the same slot). vm_unmap_current is CR3-relative, matching the
+        // vm_map_current that created the mappings; an already-unmapped VA (e.g. a
+        // stale range from another address space) is a harmless no-op. (full-os V.11)
+        if DL_MAP_HI != 0 && DL_MAP_LO < DL_MAP_HI {
+            let mut va = DL_MAP_LO;
+            while va < DL_MAP_HI {
+                crate::mm::vm_unmap_current(va);
+                va += 0x1000;
+            }
+        }
         let base = dl_aslr_base();
         DL_LOAD_BASE = base;
+        DL_MAP_LO = u64::MAX; // track the mapped page range so dlclose can unmap it
+        DL_MAP_HI = 0;
         if so.len() < 64 || so[0] != 0x7F || &so[1..4] != b"ELF" || so[4] != 2 {
             return ERR; // not a 64-bit ELF
         }
@@ -6070,8 +6219,16 @@ cfg_r4! {
                     if p_vaddr > DL_SLOT || p_memsz > DL_SLOT - p_vaddr {
                         return ERR;
                     }
-                    let mut va = (base + p_vaddr) & !0xFFF;
+                    let seg_lo = (base + p_vaddr) & !0xFFF;
                     let end = base + p_vaddr + p_memsz;
+                    let seg_hi = (end + 0xFFF) & !0xFFF;
+                    if seg_lo < DL_MAP_LO {
+                        DL_MAP_LO = seg_lo;
+                    }
+                    if seg_hi > DL_MAP_HI {
+                        DL_MAP_HI = seg_hi;
+                    }
+                    let mut va = seg_lo;
                     while va < end {
                         if !crate::mm::vm_map_current(va, 2) || !crate::mm::vm_protect_current(va, 2)
                         {
@@ -6276,7 +6433,59 @@ cfg_r4! {
                 }
                 dl_resolve(dl_current(), &nm[..len])
             }
+            3 => {
+                // dlclose(a2 = base): unmap the pages of the object currently loaded
+                // at `base` (the most-recent dlopen) and release their frames.
+                // Returns 0, or ERR if `base` is not the live object / nothing is
+                // loaded. A double-close fails (DL_MAP_HI is cleared). dlsym after a
+                // close is undefined, as in POSIX. (full-os guide Part V.11)
+                if a2 != DL_LOAD_BASE || DL_MAP_HI == 0 || DL_MAP_LO >= DL_MAP_HI {
+                    return ERR;
+                }
+                let mut va = DL_MAP_LO;
+                while va < DL_MAP_HI {
+                    crate::mm::vm_unmap_current(va);
+                    va += 0x1000;
+                }
+                DL_MAP_LO = 0;
+                DL_MAP_HI = 0;
+                DL_LOAD_BASE = DLOPEN_BASE; // no live object; a stale dlclose now fails
+                DL_CUR_ONDISK = false;
+                0
+            }
             _ => ERR,
+        }
+    }
+
+    /// Boot self-test for dlclose (full-os guide Part V.11). dlopen the embedded
+    /// module, confirm its base page is mapped, dlclose it, confirm the page is now
+    /// unmapped (the frames were released) and a double-close is rejected, then
+    /// confirm a fresh dlopen re-maps -- and clean that one up too, so the shared
+    /// boot address space is left with no dlopen mappings. Runs in the shared AS
+    /// (CR3-relative, like dlprobe does in a private AS), in the free DLOPEN window.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dlclose_selftest() {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let base = dl_load_elf(DL_SO);
+        let pg = base & !0xFFF;
+        let mapped_before =
+            base != ERR && check_page_user_perms(pg, HHDM_OFFSET, USER_PERM_READ);
+        let closed = sys_dlctl(3, base, 0);
+        let mapped_after = check_page_user_perms(pg, HHDM_OFFSET, USER_PERM_READ);
+        let double = sys_dlctl(3, base, 0); // nothing live at `base` now -> ERR
+        let base2 = dl_load_elf(DL_SO); // re-open maps fresh
+        let reopened =
+            base2 != ERR && check_page_user_perms(base2 & !0xFFF, HHDM_OFFSET, USER_PERM_READ);
+        let _ = sys_dlctl(3, base2, 0); // clean up the shared-AS mapping
+        let ok = mapped_before
+            && closed == 0
+            && !mapped_after
+            && double == ERR
+            && reopened;
+        if ok {
+            serial_write(b"DLCLOSE: unmap ok\n");
+        } else {
+            serial_write(b"DLCLOSE: unmap fail\n");
         }
     }
 
@@ -6350,6 +6559,55 @@ cfg_r4! {
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         n as u64
+    }
+
+    /// True if `needle` occurs in `hay`.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    fn slice_contains(hay: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        if needle.len() > hay.len() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i + needle.len() <= hay.len() {
+            if &hay[i..i + needle.len()] == needle {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// Boot self-test for the security audit checkpoints (full-os guide Part IV.10).
+    /// The sandbox-deny gate (syscall.rs) and the power path (sys_power) now record
+    /// an audit event; this drives the same `audit_event` calls those sites make and
+    /// confirms each lands in the ring with the expected tag + syscall nr, read back
+    /// exactly the bytes appended (the way sys_sysinfo op 7 exposes them to userspace).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn audit_checkpoint_selftest() {
+        let h0 = AUDIT_HEAD;
+        audit_event(b"sandbox-deny", 0x31); // nr 49 (sys_net_query): a filtered syscall
+        audit_event(b"power-off", 58);
+        let h1 = AUDIT_HEAD;
+        // Linearize exactly the bytes the two calls appended ([h0, h1) over the ring).
+        let mut tmp = [0u8; 256];
+        let mut k = 0usize;
+        let mut i = h0;
+        while i != h1 && k < tmp.len() {
+            tmp[k] = AUDIT[i];
+            i = (i + 1) % AUDIT_CAP;
+            k += 1;
+        }
+        let buf = &tmp[..k];
+        let ok = slice_contains(buf, b"sandbox-deny nr=0x0000000000000031")
+            && slice_contains(buf, b"power-off nr=0x000000000000003A");
+        if ok {
+            serial_write(b"AUDIT: checkpoints ok\n");
+        } else {
+            serial_write(b"AUDIT: checkpoints fail\n");
+        }
     }
 
     /// sys_sysinfo (ABI v3.2 id 61): lightweight /proc-style metrics.
@@ -6666,6 +6924,11 @@ cfg_r4! {
         };
         match op {
             0 => {
+                // Audit the privileged power transition before we halt (full-os
+                // guide Part IV.10): the record lands in the ring even though the
+                // machine stops immediately after.
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                audit_event(b"power-off", 58);
                 serial_write(b"POWER: shutdown\n");
                 drain();
                 arch_x86::outw(0x604, 0x2000); // q35 PM1a_CNT (PMBASE 0x600)
@@ -6676,6 +6939,8 @@ cfg_r4! {
                 }
             }
             1 => {
+                #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                audit_event(b"power-reboot", 58);
                 serial_write(b"POWER: reboot\n");
                 drain();
                 arch_x86::outb(0x64, 0xFE); // 8042 pulse CPU reset
@@ -12471,6 +12736,9 @@ pub extern "C" fn kmain() -> ! {
         gpt_crc_selftest(); // full-os Part II.5: GPT header CRC-32 validation
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         dl_ondisk_seed(); // full-os Part V.11: seed /data/dltest.so for on-disk dlopen
+        clock_ids_selftest(); // full-os Part IV.9: BOOTTIME + MONOTONIC_RAW clock ids
+        timerfd_periodic_selftest(); // full-os Part IV.9: periodic timerfd re-arm
+        audit_checkpoint_selftest(); // full-os Part IV.10: sandbox/power audit checkpoints
         let _ = kbd::input_event_selftest(); // full-os Part III: input event queue
         match fb::fb_alpha_selftest() {
             // full-os Part III: framebuffer alpha blending (src-over).
@@ -12539,6 +12807,11 @@ pub extern "C" fn kmain() -> ! {
             qemu_exit(0x33);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
         }
+        // full-os Part V.11: dlopen/dlclose unmap + frame release. Runs here, AFTER
+        // setup_go_user_pages has loaded CR3 with the shared user PML4 (the demand-
+        // window page tables dl_load_elf's vm_map_current needs are now present), in
+        // the free DLOPEN window; cleans up after itself so the Go image is untouched.
+        dlclose_selftest();
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         // The boot task and its service threads run on the shared table;

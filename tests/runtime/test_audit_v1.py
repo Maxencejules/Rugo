@@ -19,3 +19,17 @@ def test_security_audit_log(qemu_go_c4_runtime, find_in_order):
         "RUGO: halt ok",
     ])
     assert "AUDITPROBE: FAIL" not in out
+
+
+def test_audit_checkpoints(qemu_go_c4_runtime):
+    # Full-OS guide Part IV.10: the audit ring now records additional security
+    # checkpoints -- the sandbox-deny gate (a sandboxed task probing a filtered
+    # syscall) and the power path (privileged shutdown/reboot). The boot self-test
+    # drives the same audit_event calls those sites make and confirms each lands in
+    # the ring with the expected tag + syscall nr, read back the way op 7 exposes it.
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot("shutdown\n").stdout
+
+    assert "AUDIT: checkpoints ok" in out
+    assert "AUDIT: checkpoints fail" not in out

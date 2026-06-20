@@ -20,3 +20,18 @@ def test_clock_monotonic_and_realtime(qemu_go_c4_runtime, find_in_order):
     assert "TIMEPROBE: monotonic FAIL" not in out
     assert "TIMEPROBE: realtime FAIL" not in out
     assert "GOINIT: err" not in out
+
+
+def test_clock_extended_ids(qemu_go_c4_runtime):
+    # Full-OS guide Part IV.9: the kernel also serves CLOCK_MONOTONIC_RAW (id 2,
+    # raw TSC ns -- finer than the 10 ms PIT and unaffected by adjustment) and
+    # CLOCK_BOOTTIME (id 3). The boot self-test reads MONOTONIC_RAW twice across a
+    # busy interval and proves it advanced even while the PIT-tick MONOTONIC clock
+    # is frozen (IF=0), proves BOOTTIME >= MONOTONIC, and proves an unknown clock
+    # id returns the error sentinel.
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot("shutdown\n").stdout
+
+    assert "CLOCK: ext-ids ok" in out
+    assert "CLOCK: ext-ids fail" not in out

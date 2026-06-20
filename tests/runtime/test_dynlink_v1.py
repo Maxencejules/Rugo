@@ -32,3 +32,19 @@ def test_dlopen_dlsym_call_and_code_aslr(qemu_go_c4_runtime, find_in_order):
     ])
     assert "DLPROBE: FAIL" not in out
     assert "USERPF" not in out  # the loaded code ran in ring3 without faulting
+
+
+def test_dlclose_unmaps(qemu_go_c4_runtime):
+    # Full-OS guide Part V.11: sys_dlctl op 3 = dlclose(base) unmaps the pages of the
+    # most-recent dlopen and releases their frames. The boot self-test dlopens the
+    # embedded module, confirms its base page is mapped, dlcloses it, confirms the
+    # page is now unmapped and a double-close is rejected, then confirms a fresh
+    # dlopen re-maps (and cleans that up). Runs in the shared boot address space after
+    # the user page tables are live.
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot("shutdown\n").stdout
+
+    assert "DLCLOSE: unmap ok" in out
+    assert "DLCLOSE: unmap fail" not in out
+    assert "USERPF" not in out

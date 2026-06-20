@@ -16,3 +16,16 @@ def test_timerfd_oneshot(qemu_go_c4_runtime, find_in_order):
     ])
     assert "TIMERFDPROBE: FAIL" not in out
     assert "GOINIT: err" not in out
+
+
+def test_timerfd_periodic(qemu_go_c4_runtime):
+    # Full-OS guide Part IV.9: sys_time op 4 creates a PERIODIC timerfd that
+    # re-arms every interval; a read returns the number of expirations since the
+    # last read and advances to the next future deadline (a one-shot disarms). The
+    # boot self-test exercises the exact re-arm logic the TimerFd read path uses.
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot("shutdown\n").stdout
+
+    assert "TIMERFD: periodic ok" in out
+    assert "TIMERFD: periodic fail" not in out
