@@ -422,6 +422,8 @@ pub(crate) unsafe fn r4_storage_boot_probe() {
             let _ = crate::vfs::vfs_journal_selftest();
             // Prove SimpleFS rename (full-os II.5): net-neutral create+rename+remove.
             let _ = crate::vfs::vfs_rename_selftest();
+            // Prove SimpleFS truncate (full-os II.5): net-neutral grow+shrink+remove.
+            let _ = crate::vfs::vfs_truncate_selftest();
         }
     }
 }

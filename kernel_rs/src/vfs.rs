@@ -571,6 +571,20 @@ unsafe fn free_blocks(start: usize, count: usize) {
     }
 }
 
+/// Count the data blocks currently marked free in the bitmap (used by the
+/// truncate self-test to prove the trailing blocks were released).
+unsafe fn count_free_blocks() -> usize {
+    let mut n = 0;
+    let mut b = 0;
+    while b < MAX_BLOCKS {
+        if VFS.bitmap[b / 8] & (1 << (b % 8)) == 0 {
+            n += 1;
+        }
+        b += 1;
+    }
+    n
+}
+
 fn blocks_for(bytes: usize) -> usize {
     (bytes + BLOCK_SIZE - 1) / BLOCK_SIZE
 }
@@ -747,6 +761,104 @@ pub(crate) unsafe fn vfs_rename_selftest() -> bool {
         true
     } else {
         serial_write(b"VFS: rename fail\n");
+        false
+    }
+}
+
+/// Truncate a file to `new_size` bytes (full-os guide Part II.5): SHRINK only --
+/// release the trailing data blocks no longer covered and update the size. A grow
+/// request (new_size > current) is rejected in v1 (a write is what extends a file).
+/// The freed bitmap + the node entry are journaled atomically (so a crash never
+/// leaves a block freed while the node still claims it, or vice versa). Fails on a
+/// missing path, a directory, or a grow.
+pub(crate) unsafe fn vfs_truncate(path: &[u8], new_size: usize) -> bool {
+    if !VFS.ready {
+        return false;
+    }
+    let Some((_, Some(idx), _)) = resolve(path) else {
+        return false;
+    };
+    if node_kind(idx) != KIND_FILE {
+        return false;
+    }
+    let old_size = node_size(idx);
+    if new_size > old_size {
+        return false; // shrink-only in v1
+    }
+    if new_size == old_size {
+        return true; // nothing to do
+    }
+    let start = node_start(idx);
+    let old_blocks = blocks_for(old_size);
+    let new_blocks = blocks_for(new_size);
+    txn_begin();
+    if new_blocks < old_blocks {
+        free_blocks(start + new_blocks, old_blocks - new_blocks);
+        if !flush_bitmap() {
+            txn_abort();
+            return false;
+        }
+    }
+    set_node_size(idx, new_size as u32);
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
+}
+
+/// Boot self-test for truncate (full-os guide Part II.5): create a 3-block scratch
+/// file with a per-byte pattern, shrink it to one block, and confirm the size, the
+/// surviving first block's bytes, that reads past the new size are empty, AND that
+/// exactly the two trailing blocks were returned to the free bitmap -- then remove
+/// it, leaving the FS net-neutral (safe on the reused persisted-VFS disk).
+pub(crate) unsafe fn vfs_truncate_selftest() -> bool {
+    if !VFS.ready {
+        return false;
+    }
+    let _ = vfs_unlink(b"/.trunc");
+    let pass = (|| -> Option<()> {
+        let idx = vfs_open(b"/.trunc", true)?;
+        let mut data = [0u8; 1536]; // 3 blocks
+        let mut i = 0;
+        while i < data.len() {
+            data[i] = (i & 0xFF) as u8;
+            i += 1;
+        }
+        if vfs_write(idx, 0, &data) != data.len() || node_size(idx) != 1536 {
+            return None;
+        }
+        let free_before = count_free_blocks();
+        if !vfs_truncate(b"/.trunc", 512) || node_size(idx) != 512 {
+            return None;
+        }
+        // blocks_for(1536)=3 -> blocks_for(512)=1, so exactly 2 blocks freed.
+        if count_free_blocks() != free_before + 2 {
+            return None;
+        }
+        let mut buf = [0u8; 600];
+        if vfs_read(idx, 0, &mut buf) != 512 {
+            return None;
+        }
+        let mut k = 0;
+        while k < 512 {
+            if buf[k] != (k & 0xFF) as u8 {
+                return None; // surviving first block content preserved
+            }
+            k += 1;
+        }
+        if vfs_read(idx, 512, &mut buf) != 0 {
+            return None; // the truncated-away region reads empty
+        }
+        Some(())
+    })();
+    let _ = vfs_unlink(b"/.trunc");
+    if pass.is_some() {
+        serial_write(b"VFS: truncate ok\n");
+        true
+    } else {
+        serial_write(b"VFS: truncate fail\n");
         false
     }
 }
