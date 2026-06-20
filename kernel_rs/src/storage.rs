@@ -420,6 +420,8 @@ pub(crate) unsafe fn r4_storage_boot_probe() {
             crate::vfs::vfs_mount();
             // Prove the SimpleFS metadata journal's crash-recovery path (full-os II.5).
             let _ = crate::vfs::vfs_journal_selftest();
+            // Prove SimpleFS rename (full-os II.5): net-neutral create+rename+remove.
+            let _ = crate::vfs::vfs_rename_selftest();
         }
     }
 }

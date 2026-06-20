@@ -394,6 +394,20 @@ unsafe fn set_node_start(idx: usize, start: u32) {
     VFS.nodes[base + 24..base + 28].copy_from_slice(&start.to_le_bytes());
 }
 
+/// Change a node's name in place, preserving its parent, kind, mode, owner,
+/// start and size -- only the name field (bytes [0, NAME_MAX)) is rewritten.
+/// Used by vfs_rename (set_node would zero mode/owner). (full-os Part II.5)
+unsafe fn set_node_name(idx: usize, name: &[u8]) {
+    let base = idx * NODE_SIZE;
+    let mut i = 0;
+    while i < NAME_MAX {
+        VFS.nodes[base + i] = 0;
+        i += 1;
+    }
+    let n = core::cmp::min(name.len(), NAME_MAX);
+    VFS.nodes[base..base + n].copy_from_slice(&name[..n]);
+}
+
 /// Mount the region, formatting it in place when the magic is absent.
 pub(crate) unsafe fn vfs_mount() {
     let mut sb = [0u8; 512];
@@ -655,6 +669,84 @@ pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
         txn_commit()
     } else {
         txn_abort();
+        false
+    }
+}
+
+/// Rename a file or directory to a new name within the SAME parent directory
+/// (full-os guide Part II.5): the node keeps its kind, mode, owner, data blocks
+/// and size -- only its name changes. Fails if the source is missing, or the new
+/// name is empty / too long / slash-bearing / already names a sibling. The
+/// node-table write is journaled atomically with the superblock, exactly like
+/// vfs_mkdir/vfs_unlink, so a crash never leaves a half-renamed entry.
+pub(crate) unsafe fn vfs_rename(path: &[u8], new_name: &[u8]) -> bool {
+    if !VFS.ready || new_name.is_empty() || new_name.len() > NAME_MAX {
+        return false;
+    }
+    if new_name.iter().any(|&c| c == b'/') {
+        return false; // a leaf name only -- rename does not move across directories
+    }
+    let Some((parent, Some(idx), _)) = resolve(path) else {
+        return false;
+    };
+    if find_child(parent, new_name).is_some() {
+        return false; // the target name is already used in this directory
+    }
+    // txn_begin before the mutation so the rollback snapshot is pristine.
+    txn_begin();
+    set_node_name(idx, new_name);
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
+}
+
+/// Boot self-test for rename (full-os guide Part II.5): create a scratch file,
+/// write a marker, rename it within /data, and confirm the NEW name resolves to
+/// the SAME node with the content intact while the OLD name is gone -- then remove
+/// it, so the on-disk FS is left exactly as found (net-neutral: the scratch node
+/// and its block are freed, so the persisted-VFS tests that reuse the disk are
+/// unaffected). The scratch names are used by nothing else.
+pub(crate) unsafe fn vfs_rename_selftest() -> bool {
+    if !VFS.ready {
+        return false;
+    }
+    // Defensive: clear any residue from a crashed prior boot.
+    let _ = vfs_unlink(b"/.rnsrc");
+    let _ = vfs_unlink(b"/.rndst");
+    let payload = b"rename-payload-42";
+    let pass = (|| -> Option<()> {
+        let src = vfs_open(b"/.rnsrc", true)?; // create the scratch file
+        if vfs_write(src, 0, payload) != payload.len() {
+            return None;
+        }
+        if !vfs_rename(b"/.rnsrc", b".rndst") {
+            return None;
+        }
+        if vfs_lookup(b"/.rnsrc").is_some() {
+            return None; // the old name must no longer resolve
+        }
+        let dst = vfs_lookup(b"/.rndst")?; // the new name resolves...
+        if dst != src {
+            return None; // ...to the very same underlying node
+        }
+        let mut buf = [0u8; 32];
+        let n = vfs_read(dst, 0, &mut buf);
+        if &buf[..n] != payload {
+            return None; // content preserved across the rename
+        }
+        Some(())
+    })();
+    // Always clean up so the FS is byte-equivalent to before (net-neutral).
+    let _ = vfs_unlink(b"/.rndst");
+    let _ = vfs_unlink(b"/.rnsrc");
+    if pass.is_some() {
+        serial_write(b"VFS: rename ok\n");
+        true
+    } else {
+        serial_write(b"VFS: rename fail\n");
         false
     }
 }
