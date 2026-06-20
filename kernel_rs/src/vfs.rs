@@ -51,19 +51,29 @@ static mut VFS: VfsState = VfsState {
     bitmap: [0; BLOCK_SIZE],
 };
 
+// The FS block primitives hold STORAGE_LOCK across the BLK_DATA_PAGE fill -> dispatch
+// -> read sequence (full-os Part I.3, workload-distribution slice 2): an AP-migrated
+// go-shell task's FS syscall reaches here under FS_LOCK (slice 3, outer), and its
+// block I/O must not race the BSP's concurrent block I/O on the shared bounce buffer +
+// virtio ring. storage_io_enter/exit is a no-op in the single-CPU lanes.
 unsafe fn read_sector(sector: u64, dst: &mut [u8]) -> bool {
-    if !crate::block_io_dispatch(false, sector, 512, false) {
-        return false;
+    let g = crate::storage_io_enter();
+    let ok = crate::block_io_dispatch(false, sector, 512, false);
+    if ok {
+        dst[..512].copy_from_slice(&crate::BLK_DATA_PAGE.0[..512]);
     }
-    dst[..512].copy_from_slice(&crate::BLK_DATA_PAGE.0[..512]);
-    true
+    crate::storage_io_exit(g);
+    ok
 }
 
 unsafe fn write_sector(sector: u64, src: &[u8]) -> bool {
+    let g = crate::storage_io_enter();
     core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
     crate::BLK_DATA_PAGE.0[..src.len().min(512)]
         .copy_from_slice(&src[..src.len().min(512)]);
-    crate::block_io_dispatch(true, sector, 512, false)
+    let ok = crate::block_io_dispatch(true, sector, 512, false);
+    crate::storage_io_exit(g);
+    ok
 }
 
 unsafe fn flush_node_sector(node_idx: usize) -> bool {

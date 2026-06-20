@@ -251,10 +251,172 @@ unsafe fn heap_test_ap_alloc() {
     }
 }
 
+// Cross-CPU block-I/O contention self-test (full-os Part I.3, workload-distribution
+// slice 2). The BSP and an AP each write a batch of sectors to their OWN distinct
+// scratch LBAs CONCURRENTLY (barrier-released so the batches overlap in time), each
+// sector stamped with a CPU+LBA-specific 64-bit pattern repeated through the whole 512
+// bytes; the BSP then reads every sector back and verifies it STILL holds the exact
+// expected pattern (head AND mid-sector). A broken STORAGE_LOCK would let one CPU
+// clobber the shared BLK_DATA_PAGE / BLK_REQ_PAGE / virtio ring mid-write, so a sector
+// would read back the other CPU's pattern (or a dispatch would fail). Scratch LBAs are
+// dead space between the block cache (1610..) and swap (1700..); only the ephemeral
+// -smp2/-smp4 go disks reach this (an AP must be online), so no persisted disk is
+// touched. Runs single-threaded on the BSP after the block device is up, before the
+// live scheduler.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const BLK_TEST_N: u64 = 8;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const BLK_BSP_LBA0: u64 = 1650;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const BLK_AP_LBA0: u64 = 1670;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const BLK_TAG_BSP: u64 = 0xB;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const BLK_TAG_AP: u64 = 0xA;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static BLK_TEST_AP_READY: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static BLK_TEST_GO: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static BLK_TEST_AP_OK: AtomicU64 = AtomicU64::new(0); // 0=running, 1=all ok, 2=a dispatch failed
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+fn blk_test_pattern(tag: u64, lba: u64) -> u64 {
+    (tag << 56) ^ lba.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+unsafe fn blk_data_u64(off: usize) -> u64 {
+    let b = &crate::BLK_DATA_PAGE.0;
+    u64::from_le_bytes([
+        b[off], b[off + 1], b[off + 2], b[off + 3], b[off + 4], b[off + 5], b[off + 6], b[off + 7],
+    ])
+}
+
+/// Write BLK_TEST_N sectors from `lba0`, each stamped with this CPU's pattern, under
+/// STORAGE_LOCK (so the shared bounce buffer + ring stay consistent vs the other CPU).
+/// Returns true if every sector dispatched ok.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn blk_test_write_batch(tag: u64, lba0: u64) -> bool {
+    let mut all = true;
+    let mut i = 0u64;
+    while i < BLK_TEST_N {
+        let lba = lba0 + i;
+        let pat = blk_test_pattern(tag, lba).to_le_bytes();
+        let g = crate::storage_io_enter();
+        core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+        let mut o = 0usize;
+        while o + 8 <= 512 {
+            crate::BLK_DATA_PAGE.0[o..o + 8].copy_from_slice(&pat);
+            o += 8;
+        }
+        let ok = crate::block_io_dispatch(true, lba, 512, false);
+        crate::storage_io_exit(g);
+        if !ok {
+            all = false;
+        }
+        i += 1;
+    }
+    all
+}
+
+/// Read BLK_TEST_N sectors at `lba0` back and verify each holds `tag`'s pattern (head
+/// + mid-sector). Single-threaded (after the join), still under STORAGE_LOCK.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn blk_test_verify_batch(tag: u64, lba0: u64) -> bool {
+    let mut ok = true;
+    let mut i = 0u64;
+    while i < BLK_TEST_N {
+        let lba = lba0 + i;
+        let want = blk_test_pattern(tag, lba);
+        let g = crate::storage_io_enter();
+        let rok = crate::block_io_dispatch(false, lba, 512, false);
+        let head = if rok { blk_data_u64(0) } else { !want };
+        let mid = if rok { blk_data_u64(256) } else { !want };
+        crate::storage_io_exit(g);
+        if !rok || head != want || mid != want {
+            ok = false;
+        }
+        i += 1;
+    }
+    ok
+}
+
+/// AP side of the block contention test (work kind 5): reach the barrier, wait for the
+/// BSP's go, then write the AP batch concurrently with the BSP writing its own.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn blk_test_ap_io() {
+    BLK_TEST_AP_READY.store(1, Ordering::Release);
+    let mut s = 0u64;
+    while BLK_TEST_GO.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    let ok = blk_test_write_batch(BLK_TAG_AP, BLK_AP_LBA0);
+    BLK_TEST_AP_OK.store(if ok { 1 } else { 2 }, Ordering::Release);
+}
+
+/// BSP entry: run the cross-CPU block-I/O contention test. Skips silently (no marker,
+/// no disk writes) when no AP is online (the -smp1 lanes) so it never perturbs the
+/// single-core go feature tests (which may reuse a persisted disk). Emits
+/// "SMP: blk smp ran=.. contend=.. ok" on the -smp2/-smp4 go lanes. Call after the
+/// block device is initialized and before the live scheduler / PIT preemption.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub unsafe fn storage_smp_selftest() {
+    if SMP_AP_COUNT.load(Ordering::Acquire) == 0 {
+        return; // single-CPU: no concurrent block I/O to serialize
+    }
+    BLK_TEST_AP_READY.store(0, Ordering::Release);
+    BLK_TEST_GO.store(0, Ordering::Release);
+    BLK_TEST_AP_OK.store(0, Ordering::Release);
+    let contend0 = STORAGE_CONTENTION.load(Ordering::Relaxed);
+    let gen = smp_dispatch_async(5, 0);
+    if gen == 0 {
+        return; // no AP available to claim it
+    }
+    // Wait for the AP to reach the barrier (it wakes on its periodic LAPIC timer, so
+    // up to one timer period of latency before it claims the work).
+    let mut s = 0u64;
+    while BLK_TEST_AP_READY.load(Ordering::Acquire) == 0 && s < 500_000_000 {
+        core::hint::spin_loop();
+        s += 1;
+    }
+    if BLK_TEST_AP_READY.load(Ordering::Acquire) == 0 {
+        let _ = smp_join(gen);
+        serial_write(b"SMP: blk smp timeout FAIL\n");
+        return;
+    }
+    // Release both cores, then write the BSP batch concurrently with the AP's.
+    BLK_TEST_GO.store(1, Ordering::Release);
+    let bsp_ok = blk_test_write_batch(BLK_TAG_BSP, BLK_BSP_LBA0);
+    let _ = smp_join(gen);
+    let ap_ok = BLK_TEST_AP_OK.load(Ordering::Acquire) == 1;
+    // Read every sector back and verify the exact per-CPU pattern survived (no cross-
+    // clobber of the shared bounce buffer / ring by the concurrent writes).
+    let verify_ok = bsp_ok
+        && ap_ok
+        && blk_test_verify_batch(BLK_TAG_BSP, BLK_BSP_LBA0)
+        && blk_test_verify_batch(BLK_TAG_AP, BLK_AP_LBA0);
+    let contend = STORAGE_CONTENTION
+        .load(Ordering::Relaxed)
+        .wrapping_sub(contend0);
+    serial_write(b"SMP: blk smp ran=0x");
+    serial_write_hex(BLK_TEST_N);
+    serial_write(b" contend=0x");
+    serial_write_hex(contend);
+    if verify_ok {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+}
+
 /// Run a dispatched work item on the current CPU. Kind 1 = sum 1..=arg, computed
 /// iteratively (a real workload the dispatcher can independently check). Kind 3 =
 /// the AP side of the PMM contention self-test; kind 4 = the AP side of the heap
-/// contention self-test.
+/// contention self-test; kind 5 = the AP side of the block-I/O contention self-test.
 unsafe fn run_work(kind: u64, arg: u64) -> u64 {
     match kind {
         1 => {
@@ -274,6 +436,11 @@ unsafe fn run_work(kind: u64, arg: u64) -> u64 {
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         4 => {
             heap_test_ap_alloc();
+            0
+        }
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        5 => {
+            blk_test_ap_io();
             0
         }
         _ => 0,

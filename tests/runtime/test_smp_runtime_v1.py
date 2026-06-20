@@ -199,6 +199,15 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # correct. Deadlock-safe: the only IF=1 holder of the run-queue lock cli's
         # around its claim, so the timer's reschedule never self-deadlocks.
         "SMP: ap preempt ok",
+        # Workload-distribution slice 2: the BSP and the AP wrote 8 sectors each to
+        # DISTINCT scratch LBAs CONCURRENTLY, and every sector read back its exact
+        # per-CPU pattern (head + mid-sector) -- the STORAGE_LOCK serialized the shared
+        # BLK_DATA_PAGE bounce buffer + virtio ring across cores so neither clobbered
+        # the other mid-write. contend= (the lock-contention spin count) is nonzero and
+        # varies per boot, so only the fixed ran= prefix is matched; a failure or
+        # cross-clobber would emit " FAIL" (caught by the assert below). This runs in
+        # the kmain go region (after the block device is up), not the smp_init block.
+        "SMP: blk smp ran=0x0000000000000008",
         # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
         # real syscall dispatch path, sized from the live SMP state.
         "CPUS: count=0x0000000000000002",

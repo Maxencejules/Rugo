@@ -10595,6 +10595,45 @@ unsafe fn block_io_dispatch(write: bool, sector: u64, len: usize, fua: bool) -> 
     }
 }
 
+// Storage critical-section guard (full-os Part I.3, workload-distribution slice 2).
+// STORAGE_LOCK is the innermost data lock: it serializes the shared single-instance
+// block path -- the BLK_DATA_PAGE bounce buffer, the BLK_REQ_PAGE request header, and
+// the virtio/NVMe ring head/tail -- all of which are touched ONLY across the
+// fill -> block_io_dispatch -> read sequence a caller performs (the ring lives inside
+// virtio_blk_io / nvme_read_write, reached only through block_io_dispatch). Holding
+// the lock from storage_io_enter to storage_io_exit makes that whole sequence atomic
+// against a concurrent CPU. Taken with interrupts masked (lock_cli) so this CPU's own
+// timer cannot land mid-section on a lock it holds (leaf discipline). FS_LOCK (vfs) /
+// NET_LOCK (pkg pump) may be held outside it -- STORAGE is innermost, never nests out.
+// In every non-(go,not-compat) lane the machine is single-CPU (APs park, nothing does
+// concurrent block I/O), so these are no-ops. Wired into the live concurrent-reachable
+// block paths only: vfs read_sector/write_sector (the FS block primitive) and
+// blk_read_page/blk_write_page (swap). The other block_io_dispatch callers (FAT/GPT/
+// installer/crypt/journal/storage boot self-tests + the fs_test M6 path) run only at
+// single-threaded boot, before the live scheduler, so they never race a lock holder.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn storage_io_enter() -> u64 {
+    let saved = smp::lock_cli();
+    smp::storage_lock();
+    saved
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+pub(crate) unsafe fn storage_io_exit(saved: u64) {
+    smp::storage_unlock();
+    smp::unlock_sti(saved);
+}
+// compat_real_test enables go_test (so vfs compiles) but not the SMP locks: no-op there.
+#[cfg(feature = "compat_real_test")]
+#[inline]
+pub(crate) unsafe fn storage_io_enter() -> u64 {
+    0
+}
+#[cfg(feature = "compat_real_test")]
+#[inline]
+pub(crate) unsafe fn storage_io_exit(_saved: u64) {}
+
 /// Write one 4 KiB page (8 sectors) from the physical frame `src_phys` to the
 /// block device starting at `lba` (full-os guide Part I.4 swap). Copies through
 /// the shared BLK_DATA_PAGE one sector at a time (the block path is 512 B).
@@ -10603,12 +10642,18 @@ pub(crate) unsafe fn blk_write_page(lba: u64, src_phys: u64) -> bool {
     let src = mm::phys_to_virt(src_phys) as *const u8;
     let mut s = 0u64;
     while s < 8 {
+        // STORAGE_LOCK per sector (slice 2): keep holds short -- re-acquire each
+        // sector so a concurrent CPU's block op can interleave between sectors
+        // (the bounce buffer + ring are still atomic within one sector's I/O).
+        let g = storage_io_enter();
         core::ptr::copy_nonoverlapping(
             src.add((s * 512) as usize),
             BLK_DATA_PAGE.0.as_mut_ptr(),
             512,
         );
-        if !block_io_dispatch(true, lba + s, 512, false) {
+        let ok = block_io_dispatch(true, lba + s, 512, false);
+        storage_io_exit(g);
+        if !ok {
             return false;
         }
         s += 1;
@@ -10622,14 +10667,19 @@ pub(crate) unsafe fn blk_read_page(lba: u64, dst_phys: u64) -> bool {
     let dst = mm::phys_to_virt(dst_phys) as *mut u8;
     let mut s = 0u64;
     while s < 8 {
-        if !block_io_dispatch(false, lba + s, 512, false) {
+        let g = storage_io_enter();
+        let ok = block_io_dispatch(false, lba + s, 512, false);
+        if ok {
+            core::ptr::copy_nonoverlapping(
+                BLK_DATA_PAGE.0.as_ptr(),
+                dst.add((s * 512) as usize),
+                512,
+            );
+        }
+        storage_io_exit(g);
+        if !ok {
             return false;
         }
-        core::ptr::copy_nonoverlapping(
-            BLK_DATA_PAGE.0.as_ptr(),
-            dst.add((s * 512) as usize),
-            512,
-        );
         s += 1;
     }
     true
@@ -12824,6 +12874,11 @@ pub extern "C" fn kmain() -> ! {
         installer_selftest(); // full-os Part V.11: provision an install target disk
         cache::cache_selftest(); // full-os Part II.5: block buffer cache
         mm::swap_selftest(); // full-os Part I.4: swap / page eviction
+        // full-os Part I.3 (SMP workload-distribution slice 2): the BSP + an AP write
+        // distinct scratch LBAs CONCURRENTLY and the BSP proves no cross-clobber --
+        // the STORAGE_LOCK serializing the shared BLK_DATA_PAGE + virtio ring across
+        // cores. Runs only when an AP is online (-smp2/-smp4 go lanes); a no-op on -smp1.
+        smp::storage_smp_selftest();
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
