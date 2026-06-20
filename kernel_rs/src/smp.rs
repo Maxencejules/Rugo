@@ -1285,6 +1285,231 @@ pub(crate) unsafe fn r4_rq_unlock() {
     R4_RQ_LOCK.store(0, Ordering::Release);
 }
 
+// ---- Workload-distribution coarse leaf locks (full-os guide Part I.3, SMP
+// workload distribution). When an application processor pulls a REAL go-shell task
+// from the BSP's live rotation, that task's FS / network / block syscalls touch
+// shared single-instance kernel state -- the VFS inode+bitmap cache + journal, the
+// TCP/DHCP connection + socket tables, and the single global BLK_DATA_PAGE I/O
+// buffer -- concurrently with the BSP (which is also running tasks and PIT-pumping
+// the network every tick). Today that state is safe ONLY because every caller runs
+// IF=0 on a single core; on SMP two CPUs race the read-modify-writes. These three
+// coarse leaf spinlocks serialize each family. They are COARSE (not per-CPU /
+// per-object): the workload is light, the sections short, and one auditable lock per
+// subsystem keeps a single global acquisition order.
+//
+// DEADLOCK-FREE GLOBAL ORDER (acquire left->right = outer->inner, release reverse; a
+// CPU may take a lock only while it holds none to its right). STORAGE is the INNERMOST
+// data lock because both higher layers call DOWN into block I/O:
+//     PMM_LOCK < HEAP_LOCK < FS_LOCK < NET_LOCK < STORAGE_LOCK < R4_RQ_LOCK
+//   - FS < STORAGE: an FS write holds FS_LOCK across its block I/O (vfs_write ->
+//     jwrite -> write_sector -> block_io_dispatch). FS outer, STORAGE inner.
+//   - NET < STORAGE: the package-fetch path holds NET_LOCK across its install write
+//     (the BSP PIT pump's pkg_fetch_tick -> block_io_dispatch, lib.rs r4_timer_preempt
+//     ~4491-4496). NET outer, STORAGE inner. The reverse (disk-then-net) never happens
+//     -- block I/O never takes FS or NET.
+//   - FS and NET are NEVER co-held (vfs.rs has zero net references; the net pump takes
+//     no FS lock), so their relative rank is free -- FS<NET is arbitrary.
+//   - STORAGE/FS/NET > HEAP/PMM: I/O, FS and net never allocate while holding their
+//     lock (any allocation happens before the lock is taken), so PMM/HEAP are never
+//     nested inside them.
+//   - R4_RQ_LOCK is the innermost overall: a disjoint scheduler domain (the AP claim/
+//     retire + the AP LAPIC-timer reschedule) that never nests with FS/NET/STORAGE --
+//     a task is claimed under R4_RQ, which is RELEASED before the task runs its FS/net
+//     syscalls. Ranked last so the order is total.
+// INTERRUPT-CONTEXT REACH (drives the leaf discipline): the BSP PIT interrupt gate
+// (r4_timer_preempt, IF=0) takes NET_LOCK (net_rx_pump) and STORAGE_LOCK (pkg_fetch
+// install) in its net-pump section, and R4_RQ_LOCK in a SEPARATE later wake section;
+// the AP LAPIC-timer reschedule takes R4_RQ_LOCK. So NET, STORAGE and R4_RQ are all
+// reachable from an interrupt handler -- NOT just R4_RQ.
+// LEAF DISCIPLINE: take FS/NET/STORAGE with interrupts DISABLED on AP-reachable (IF=1)
+// task paths via lock_cli()/unlock_sti(), so this CPU's own timer can't land
+// mid-section and either spin forever on a lock the interrupted task holds (the PIT
+// pump re-entering net_rx_pump on a BSP task that holds NET_LOCK) or violate the
+// order. The interrupt-context holders (the BSP PIT pump, the AP reschedule) already
+// run IF=0 in their gate, auto-satisfying this. NEVER hold one across a blocking switch.
+//
+// Slice 1 defines them UNWIRED (lock_infra_selftest is the only caller); slices 2-5
+// wire each into the block / VFS / net / wake paths.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static FS_LOCK: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static STORAGE_LOCK: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static NET_LOCK: AtomicU32 = AtomicU32::new(0);
+// Contention counters: bumped once per failed acquire (a spin where another CPU held
+// the lock). Stay 0 on -smp 1 (every acquire uncontended). Read by the capstone's
+// "contend fs>0 net>0 blk>0" proof that the tasks were TRULY concurrent.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static FS_CONTENTION: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static STORAGE_CONTENTION: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static NET_CONTENTION: AtomicU64 = AtomicU64::new(0);
+
+// Each lock's inner single attempt: the step its spinning acquire loops on, factored
+// out so the contention bump lives in one place (and so a single-core self-test can
+// drive a failed acquire without an infinite spin). Returns true if it took the lock.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+unsafe fn fs_try_acquire() -> bool {
+    if FS_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        true
+    } else {
+        FS_CONTENTION.fetch_add(1, Ordering::Relaxed);
+        false
+    }
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+unsafe fn storage_try_acquire() -> bool {
+    if STORAGE_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        true
+    } else {
+        STORAGE_CONTENTION.fetch_add(1, Ordering::Relaxed);
+        false
+    }
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[inline]
+unsafe fn net_try_acquire() -> bool {
+    if NET_LOCK
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        true
+    } else {
+        NET_CONTENTION.fetch_add(1, Ordering::Relaxed);
+        false
+    }
+}
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn fs_lock() {
+    while !fs_try_acquire() {
+        core::hint::spin_loop();
+    }
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn fs_unlock() {
+    FS_LOCK.store(0, Ordering::Release);
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn storage_lock() {
+    while !storage_try_acquire() {
+        core::hint::spin_loop();
+    }
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn storage_unlock() {
+    STORAGE_LOCK.store(0, Ordering::Release);
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn net_lock() {
+    while !net_try_acquire() {
+        core::hint::spin_loop();
+    }
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn net_unlock() {
+    NET_LOCK.store(0, Ordering::Release);
+}
+
+/// Disable interrupts for a leaf-lock critical section on an AP-reachable (IF=1)
+/// path, returning the prior RFLAGS so the matching unlock_sti can restore the
+/// caller's interrupt-enable state. Pairs with unlock_sti. Mirrors the
+/// cli/save-RFLAGS pattern already in ap_pull_r4_task. Rationale: the BSP PIT gate
+/// re-enters net_rx_pump (NET_LOCK) + pkg_fetch (STORAGE_LOCK) and the AP LAPIC-timer
+/// reschedule takes R4_RQ_LOCK -- all in interrupt context -- so any IF=1 task path
+/// holding one of these must mask interrupts across the section, or a timer landing
+/// mid-section would spin forever on a lock the interrupted task itself holds.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn lock_cli() -> u64 {
+    let flags: u64;
+    core::arch::asm!("pushfq; pop {}", out(reg) flags, options(nomem));
+    core::arch::asm!("cli", options(nomem, nostack));
+    flags
+}
+/// Restore the interrupt-enable state captured by lock_cli (re-enables ONLY if the
+/// caller had interrupts enabled; leaves them masked otherwise -- so a section that
+/// was already IF=0, e.g. the BSP PIT pump, stays masked).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn unlock_sti(saved_flags: u64) {
+    if saved_flags & 0x200 != 0 {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+}
+
+/// Slice 1 self-test: prove the unwired workload-distribution lock infrastructure is
+/// sound before any path uses it -- each lock acquires (word -> 1) and releases (word
+/// -> 0), the IRQ-save/restore pair round-trips, and each contention counter bumps on
+/// a failed acquire. Runs single-threaded at boot (smp_init, IF=0, APs parked, locks
+/// unwired) so storing a lock word directly to simulate a held lock is race-free.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn lock_infra_selftest() -> bool {
+    // 1. Every lock starts free, acquires, and releases.
+    if FS_LOCK.load(Ordering::Relaxed) != 0
+        || STORAGE_LOCK.load(Ordering::Relaxed) != 0
+        || NET_LOCK.load(Ordering::Relaxed) != 0
+    {
+        return false;
+    }
+    fs_lock();
+    let fs_held = FS_LOCK.load(Ordering::Relaxed) == 1;
+    fs_unlock();
+    storage_lock();
+    let st_held = STORAGE_LOCK.load(Ordering::Relaxed) == 1;
+    storage_unlock();
+    net_lock();
+    let net_held = NET_LOCK.load(Ordering::Relaxed) == 1;
+    net_unlock();
+    if !(fs_held && st_held && net_held) {
+        return false;
+    }
+    if FS_LOCK.load(Ordering::Relaxed) != 0
+        || STORAGE_LOCK.load(Ordering::Relaxed) != 0
+        || NET_LOCK.load(Ordering::Relaxed) != 0
+    {
+        return false;
+    }
+    // 2. IRQ-save/restore round-trips. At this boot point IF=0 (smp_init runs before
+    // the first preemptible ring-3 entry), so the saved flags show IF clear and
+    // unlock_sti must leave interrupts disabled (it only re-enables a caller that had
+    // them on).
+    let saved = lock_cli();
+    let if_was_clear = saved & 0x200 == 0;
+    unlock_sti(saved);
+    let still_clear: u64;
+    core::arch::asm!("pushfq; pop {}", out(reg) still_clear, options(nomem));
+    if !if_was_clear || (still_clear & 0x200 != 0) {
+        return false;
+    }
+    // 3. Each contention counter bumps by exactly one on a single failed acquire.
+    // Simulate another CPU holding the lock (store 1 directly), confirm try_acquire
+    // fails and the counter advances, then release. try_acquire is the production
+    // inner step the spinning lock loops on, so this exercises the real bump path.
+    let pairs: [(&AtomicU32, &AtomicU64, unsafe fn() -> bool); 3] = [
+        (&FS_LOCK, &FS_CONTENTION, fs_try_acquire),
+        (&STORAGE_LOCK, &STORAGE_CONTENTION, storage_try_acquire),
+        (&NET_LOCK, &NET_CONTENTION, net_try_acquire),
+    ];
+    for (lock, counter, try_fn) in pairs.iter() {
+        let before = counter.load(Ordering::Relaxed);
+        lock.store(1, Ordering::Release); // held by a notional other CPU
+        let got = try_fn();
+        lock.store(0, Ordering::Release); // release the notional hold
+        if got || counter.load(Ordering::Relaxed) != before + 1 {
+            return false;
+        }
+    }
+    true
+}
+
 // Ring-3 payload for an autonomously-scheduled task: bump its own yield_count via
 // per-CPU current (sys_sysinfo op 16), then report (int 0x81) so the AP retires it
 // and pulls the next. arg is 0, so the int-0x81 RDI is 1 (unused here).
@@ -1974,6 +2199,17 @@ pub fn smp_init() {
             // ring 3, runs it on its own core, and reports back.
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             {
+                // Workload-distribution lock infrastructure (slice 1): the coarse FS/
+                // STORAGE/NET leaf locks + the IRQ-save/restore pair + contention
+                // counters are sound (acquire/release toggles, counters bump) before
+                // any path wires them. Unwired here; slices 2-5 guard real FS/net/
+                // block state with them.
+                serial_write(b"SMP-LOCKS: ");
+                if lock_infra_selftest() {
+                    serial_write(b"fs/storage/net init ok\n");
+                } else {
+                    serial_write(b"FAIL\n");
+                }
                 // Affinity invariant: the BSP's scheduler skips AP-eligible tasks
                 // INSIDE its own live rotation (SMP_LIVE_MODE is still 0 here, so no
                 // AP touches the table while we probe r4_find_ready).

@@ -149,6 +149,13 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # distinct with its pattern intact -- the heap spinlock serialized the
         # free-list across cores (no block double-handed-out or overlapped).
         "SMP: heap smp ok",
+        # Workload-distribution lock infrastructure (slice 1): the coarse FS/STORAGE/
+        # NET leaf spinlocks + the IRQ-save/restore pair + per-lock contention counters
+        # are sound before any path wires them -- each lock acquires (word->1) and
+        # releases (word->0), the cli/sti pair round-trips at IF=0, and each counter
+        # bumps by one on a failed acquire. These guard the FS/net/block state an
+        # AP-migrated go-shell task touches concurrently (slices 2-5 wire them in).
+        "SMP-LOCKS: fs/storage/net init ok",
         # Affinity invariant (live per-CPU scheduler): with AP-eligible tasks
         # planted INSIDE the BSP's live rotation [1,R4_NUM_TASKS), the BSP's
         # r4_find_ready only ever returns the non-eligible task and is starved
