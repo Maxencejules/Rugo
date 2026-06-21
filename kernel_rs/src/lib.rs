@@ -59,6 +59,8 @@ mod rng;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 mod audit;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod dmesg;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod mount;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tty;
@@ -354,54 +356,13 @@ fn serial_write(s: &[u8]) {
     // audit) so userspace can read the kernel log via sys_sysinfo op 4.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe {
-        klog_append(s);
+        crate::dmesg::klog_append(s);
     }
 }
 
-// dmesg ring buffer: a heap-free fixed ring that captures every serial_write
-// line. Oldest bytes are overwritten once full; reads return the most recent
-// `len` bytes in oldest->newest order (full-os guide Part V.11 / IV.10).
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-const KLOG_CAP: usize = 8192;
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static mut KLOG: [u8; KLOG_CAP] = [0; KLOG_CAP];
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static mut KLOG_HEAD: usize = 0;
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static mut KLOG_LEN: usize = 0;
-
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn klog_append(s: &[u8]) {
-    for &b in s {
-        KLOG[KLOG_HEAD] = b;
-        KLOG_HEAD = (KLOG_HEAD + 1) % KLOG_CAP;
-        if KLOG_LEN < KLOG_CAP {
-            KLOG_LEN += 1;
-        }
-    }
-}
-
-/// Copy the most recent `min(len, valid)` bytes of the dmesg ring into the
-/// user buffer at `ptr`, in oldest->newest order. Returns the count copied,
-/// or u64::MAX if the user buffer is unwritable.
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn klog_read(ptr: u64, len: usize) -> u64 {
-    let n = core::cmp::min(len, KLOG_LEN);
-    if n == 0 {
-        return 0;
-    }
-    let start = (KLOG_HEAD + KLOG_CAP - n) % KLOG_CAP;
-    let first = core::cmp::min(n, KLOG_CAP - start);
-    if copyout_user(ptr, &KLOG[start..start + first], first).is_err() {
-        return 0xFFFF_FFFF_FFFF_FFFF;
-    }
-    if n > first
-        && copyout_user(ptr + first as u64, &KLOG[0..n - first], n - first).is_err()
-    {
-        return 0xFFFF_FFFF_FFFF_FFFF;
-    }
-    n as u64
-}
+// The dmesg ring buffer lives in `crate::dmesg` (gap #9 modularization):
+// `serial_write` above mirrors every line into it via `crate::dmesg::klog_append`,
+// and userspace reads it via sys_sysinfo op 4 (`crate::dmesg::klog_read`).
 
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 fn ascii_upper(b: u8) -> u8 {
@@ -6687,7 +6648,7 @@ cfg_r4! {
             3 => R4_PREEMPT_TICKS,
             // op 4 = dmesg read: copy the kernel log tail (a2 = user buffer,
             // a3 = capacity) -> bytes copied, or u64::MAX on a bad buffer.
-            4 => klog_read(a2, a3 as usize),
+            4 => crate::dmesg::klog_read(a2, a3 as usize),
             // op 5 = MBR partition-table parse (full-os guide Part II.5
             // partitions): read LBA 0, validate the 0x55AA signature, log each
             // non-empty primary entry -> partition count (u64::MAX if no disk
