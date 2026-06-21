@@ -79,9 +79,12 @@ needs an explicit soften-claim-vs-implement choice before work starts.
   - Proof: `errnoprobe` (raw kernel: `ENOENT=2` vs `EBADF=9`, `ERRNO: distinct
     ok`, `test_errno_v1.py`) + `bigprobe` (libc wrappers: `BIGC: errno enoent=1
     ebadf=1 distinct=1`, `test_bigc_v1.py`), both on dedicated disks. Verified +
-    all ABI/contract gates green. Remaining: stamp the rest of the failure paths
-    (others still fall back to `EIO`); negative-return-convention is intentionally
-    NOT adopted (it would break the frozen sentinel).
+    all ABI/contract gates green. Coverage now spans `open` (generic-unmatched +
+    `/data` + `/tmp` → ENOENT/EINVAL/EACCES) and `read`/`write`/`close`
+    (EBADF/EACCES) — `hello.c`'s `open("/no/such/file")` reports the real ENOENT=2
+    (`test_libc` upgraded from the old EIO=5). Remaining: stamp `mkdir`/`unlink`/
+    `stat`/`lseek`/`spawn` (still `EIO`); negative-return-convention is
+    intentionally NOT adopted (it would break the frozen −1 sentinel).
 
 - **#4 dlopen HANDLE TABLE [DONE].** The dynamic linker tracked only ONE live
   object (a single `DL_LOAD_BASE`/`DL_MAP_*`): a second `dlopen` reclaimed the
