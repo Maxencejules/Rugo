@@ -642,6 +642,41 @@ cfg_m3! {
         0
     }
 
+    // Distinct errno codes (full-os guide Part V.11). POSIX-ish error numbers a
+    // failing syscall stamps into the current task's `last_errno` before returning
+    // the −1 sentinel, so `sys_errno` (id 62) lets libc report ENOENT/EBADF/EACCES
+    // instead of collapsing every failure to EIO. Values match Linux/libc.h.
+    const RUGO_ENOENT: i64 = 2; // no such file/directory
+    const RUGO_EBADF: i64 = 9; // bad file descriptor
+    const RUGO_EACCES: i64 = 13; // permission denied
+    const RUGO_EINVAL: i64 = 22; // invalid argument
+
+    /// Stamp the current task's `last_errno` (the cause of the −1 it is about to
+    /// return), read back by `sys_errno`. The shared read/write paths call it in
+    /// every lane, but the per-task table (`R4_TASKS`/`R4_CURRENT`) only exists in
+    /// the go lane, so the non-go definition is a no-op (those lanes never dispatch
+    /// `sys_errno`). (full-os guide Part V.11, distinct errno.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_set_errno(code: i64) {
+        if R4_CURRENT < R4_TASKS.len() {
+            R4_TASKS[R4_CURRENT].last_errno = code;
+        }
+    }
+    #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+    unsafe fn r4_set_errno(_code: i64) {}
+
+    /// sys_errno (ABI v3.2 id 62): return the current task's last error code (0 if
+    /// none). Additive, read-only, per-task; never changes another syscall's
+    /// return convention. (full-os guide Part V.11, distinct errno.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_errno() -> u64 {
+        if R4_CURRENT < R4_TASKS.len() {
+            R4_TASKS[R4_CURRENT].last_errno as u64
+        } else {
+            0
+        }
+    }
+
     unsafe fn sys_open_v1(path_ptr: u64, flags: u64, _mode: u64) -> u64 {
         let path = match copyinstr_user(path_ptr, 128) {
             Ok(v) => v,
@@ -675,6 +710,9 @@ cfg_m3! {
                 let node = match vfs::vfs_open(rel, create) {
                     Some(n) => n,
                     None => {
+                        // No such file (open without create), or the create itself
+                        // failed (table/space) -> distinct errno (Part V.11).
+                        r4_set_errno(if create { RUGO_EINVAL } else { RUGO_ENOENT });
                         return 0xFFFF_FFFF_FFFF_FFFF;
                     }
                 };
@@ -692,6 +730,7 @@ cfg_m3! {
                     if (requested & M10_RIGHT_READ != 0 && !r_ok)
                         || (requested & M10_RIGHT_WRITE != 0 && !w_ok)
                     {
+                        r4_set_errno(RUGO_EACCES); // owner/other mode bits deny it
                         return 0xFFFF_FFFF_FFFF_FFFF;
                     }
                 }
@@ -979,9 +1018,13 @@ cfg_m3! {
         if len == 0 { return 0; }
         if len > 4096 { return 0xFFFF_FFFF_FFFF_FFFF; }
         let idx = fd as usize;
-        if idx >= M8_FD_MAX { return 0xFFFF_FFFF_FFFF_FFFF; }
+        if idx >= M8_FD_MAX {
+            r4_set_errno(RUGO_EBADF); // out-of-range fd (Part V.11, distinct errno)
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         #[cfg(feature = "go_test")]
         if !r4_fd_owner_ok(idx) {
+            r4_set_errno(RUGO_EBADF);
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         if M8_FD_TABLE[idx].rights & M10_RIGHT_READ == 0 {
@@ -1337,12 +1380,17 @@ cfg_m3! {
         if len == 0 { return 0; }
         if len > 256 { return 0xFFFF_FFFF_FFFF_FFFF; }
         let idx = fd as usize;
-        if idx >= M8_FD_MAX { return 0xFFFF_FFFF_FFFF_FFFF; }
+        if idx >= M8_FD_MAX {
+            r4_set_errno(RUGO_EBADF); // out-of-range fd (Part V.11, distinct errno)
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         #[cfg(feature = "go_test")]
         if !r4_fd_owner_ok(idx) {
+            r4_set_errno(RUGO_EBADF);
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         if M8_FD_TABLE[idx].rights & M10_RIGHT_WRITE == 0 {
+            r4_set_errno(RUGO_EACCES); // fd not opened for writing
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
 
@@ -3527,6 +3575,14 @@ cfg_r4! {
         // while the task is Blocked asleep; the PIT handler clears it and
         // makes the task Ready once the deadline passes.
         sleep_until: u64,
+        // Last error code (full-os guide Part V.11, distinct errno). The kernel
+        // ABI still returns the single −1 sentinel on failure, but well-defined
+        // failure paths (open/read/write/...) first stamp a POSIX-ish code here;
+        // `sys_errno` (id 62) returns it so libc `errno` can distinguish causes
+        // (ENOENT vs EBADF vs EACCES ...) instead of collapsing every error to EIO.
+        // Per-task so a preemption between the failing syscall and the errno query
+        // can't leak another task's code. 0 = no error recorded.
+        last_errno: i64,
     }
 
     impl R4Task {
@@ -3566,6 +3622,7 @@ cfg_r4! {
             sec_filter_mask: u64::MAX,
             futex_uaddr: 0,
             sleep_until: 0,
+            last_errno: 0,
         };
     }
 

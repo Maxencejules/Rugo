@@ -83,6 +83,12 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `docs/runtime/partitions_v1.md`, `docs/runtime/fat16_v1.md`,
   `docs/runtime/audit_v1.md`, `docs/runtime/disk_crypt_v1.md`,
   `docs/runtime/journal_v1.md`).
+  `62` = `sys_errno` (→ the current task's last error code; 0 if none). Well-defined
+  failure paths (open → ENOENT/EACCES, read/write → EBADF/EACCES) stamp a per-task
+  POSIX-ish code before returning the −1 sentinel, so libc `errno` can distinguish
+  causes instead of collapsing every failure to EIO. Additive, read-only, per-task;
+  it never changes another syscall's return convention. Contract in
+  `docs/runtime/libc_v1.md`.
 
 Spawned tasks get a copy-on-write-isolated private address space, a random
 page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),
