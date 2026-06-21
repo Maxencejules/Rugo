@@ -273,7 +273,7 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             54 => {
-                *frame.add(14) = sys_getrandom(arg1, arg2);
+                *frame.add(14) = crate::rng::sys_getrandom(arg1, arg2);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             55 => {
