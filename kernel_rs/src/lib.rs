@@ -4127,6 +4127,38 @@ cfg_r4! {
         R4_TASKS[tid].state = R4State::Ready;
     }
 
+    /// Set the program break for the WHOLE address space `me` belongs to: write
+    /// `val` into the heap_brk of every task sharing me's pml4_phys. The break is
+    /// a property of the address space (POSIX brk), so threads created with clone
+    /// (sys_proc_ctl op2, which SHARES the address space) must all observe the
+    /// same boundary -- otherwise one thread's grow/shrink would diverge from a
+    /// sibling's view of the shared heap (a sibling could keep using pages this
+    /// thread just unmapped). A fork child or a freshly-spawned task has a unique
+    /// pml4, so this writes only its own slot. Shared/boot-table tasks (pml4 0 or
+    /// SHARED_PML4_PHYS) keep a per-task break (no real user heap to alias).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn as_set_heap_brk(me: usize, val: u64) {
+        let pml4 = R4_TASKS[me].pml4_phys;
+        if pml4 == 0 || pml4 == SHARED_PML4_PHYS {
+            R4_TASKS[me].heap_brk = val;
+            return;
+        }
+        let mut t = 0usize;
+        while t < R4_NUM_TASKS {
+            // Live sharers only -- mirrors the AS-share scan idiom (~4600). A
+            // Dead/Exited slot's heap_brk is never read (every read is the live
+            // current task) and is reset on reuse, so skipping it is correct and
+            // avoids touching a slot whose pml4 may already be stale. A Blocked
+            // sibling (e.g. one in futex_wait) IS live and must still be updated.
+            if R4_TASKS[t].pml4_phys == pml4
+                && !matches!(R4_TASKS[t].state, R4State::Dead | R4State::Exited)
+            {
+                R4_TASKS[t].heap_brk = val;
+            }
+            t += 1;
+        }
+    }
+
     unsafe fn r4_find_ready(exclude: usize) -> Option<usize> {
         if R4_NUM_TASKS == 0 { return None; }
         let mut best: Option<usize> = None;
@@ -5268,11 +5300,16 @@ cfg_r4! {
                 0
             }
             3 => {
-                // brk(new) - 0 queries
-                if R4_TASKS[r4_current_smp()].heap_brk == 0 {
-                    R4_TASKS[r4_current_smp()].heap_brk = VM_BRK_BASE;
+                // brk(new) - 0 queries. The break is per-ADDRESS-SPACE (POSIX):
+                // the current task's slot stays in sync with every thread sharing
+                // this pml4 (see as_set_heap_brk), so we read it directly and
+                // propagate every change -- both the lazy first-touch init and the
+                // grow/shrink -- to all sharers.
+                let me = r4_current_smp();
+                if R4_TASKS[me].heap_brk == 0 {
+                    as_set_heap_brk(me, VM_BRK_BASE);
                 }
-                let cur = R4_TASKS[r4_current_smp()].heap_brk;
+                let cur = R4_TASKS[me].heap_brk;
                 let new = a2;
                 if new == 0 {
                     return cur;
@@ -5295,7 +5332,7 @@ cfg_r4! {
                         a += 0x1000;
                     }
                 }
-                R4_TASKS[r4_current_smp()].heap_brk = new;
+                as_set_heap_brk(me, new);
                 serial_write(b"MM: brk 0x");
                 serial_write_hex(cur);
                 serial_write(b" -> 0x");
@@ -5335,6 +5372,13 @@ cfg_r4! {
                     }
                 };
                 r4_init_task(tid, entry, r4_stack_top_for_slot(tid), R4_CURRENT);
+                // brk is per-address-space: a cloned thread SHARES the caller's
+                // address space, so it must start at the caller's current break
+                // (r4_init_task reset it to 0) and stays in sync with the caller
+                // via as_set_heap_brk on every later brk. Without this, the
+                // clone's first brk would reset to VM_BRK_BASE over the shared
+                // heap and diverge from the caller's boundary.
+                R4_TASKS[tid].heap_brk = R4_TASKS[R4_CURRENT].heap_brk;
                 R4_TASKS[tid].state = R4State::Ready;
                 R4_THREADS_CREATED += 1;
                 *frame.add(14) = tid as u64;
