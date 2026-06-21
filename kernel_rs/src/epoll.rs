@@ -20,14 +20,20 @@ struct EpollReg {
 struct EpollInst {
     active: bool,
     n: usize,
+    // tid of the task that created this instance (op1). An epoll instance is a
+    // raw global slot, not an owned fd, so task-exit cleanup uses this to
+    // reclaim slots whose creator exited without op4 close (see
+    // `r4_release_owned_epolls`); without it a few early-exiting creators
+    // permanently exhaust the EPOLL_MAX-slot table for the rest of the boot.
+    owner_tid: usize,
     regs: [EpollReg; EPOLL_REG_MAX],
 }
 
 static mut EPOLLS: [EpollInst; EPOLL_MAX] = [
-    EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
-    EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
-    EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
-    EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+    EpollInst { active: false, n: 0, owner_tid: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+    EpollInst { active: false, n: 0, owner_tid: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+    EpollInst { active: false, n: 0, owner_tid: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+    EpollInst { active: false, n: 0, owner_tid: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
 ];
 
 /// op 1 = create (returns an epoll instance id), op 2 = ctl_add(ep, fd, events),
@@ -44,6 +50,7 @@ pub(crate) unsafe fn sys_epoll(op: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                 if !EPOLLS[e].active {
                     EPOLLS[e].active = true;
                     EPOLLS[e].n = 0;
+                    EPOLLS[e].owner_tid = crate::r4_current_smp();
                     return e as u64;
                 }
                 e += 1;
@@ -106,5 +113,23 @@ pub(crate) unsafe fn sys_epoll(op: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             0
         }
         _ => ERR,
+    }
+}
+
+/// Release every epoll instance created by `owner_tid`. Called from task-exit
+/// cleanup (`r4_cleanup_task_resources`) because an epoll instance is a raw
+/// global slot rather than an owned fd: a task that creates one (op1) and exits
+/// without op4 close would otherwise leak its slot for the rest of the boot,
+/// and with only `EPOLL_MAX` slots a handful of early-exiting creators
+/// permanently exhaust `epoll_create`. Mirrors the per-tid release the fd /
+/// socket / endpoint tables already do in `lib.rs`.
+pub(crate) unsafe fn r4_release_owned_epolls(owner_tid: usize) {
+    let mut e = 0usize;
+    while e < EPOLL_MAX {
+        if EPOLLS[e].active && EPOLLS[e].owner_tid == owner_tid {
+            EPOLLS[e].active = false;
+            EPOLLS[e].n = 0;
+        }
+        e += 1;
     }
 }

@@ -6139,6 +6139,13 @@ cfg_r4! {
         hi: u64,
         ondisk: bool,
         used: bool,
+        // tid of the task whose dlopen registered this handle. The pages are
+        // mapped CR3-relative into that task's private address space, but the
+        // handle table is process-global with no fd backing, so this is what
+        // lets task-exit cleanup reclaim slots a task left open (no dlclose) and
+        // lets dlsym_h/dlclose reject a base belonging to a different task --
+        // whose VA is not mapped in the caller's CR3. (full-os Part V.11.)
+        owner_tid: usize,
     }
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     const DL_MAX_HANDLES: usize = 4;
@@ -6149,6 +6156,7 @@ cfg_r4! {
         hi: 0,
         ondisk: false,
         used: false,
+        owner_tid: 0,
     }; DL_MAX_HANDLES];
 
     /// Index of the live handle loaded at `base`, or None.
@@ -6185,12 +6193,41 @@ cfg_r4! {
                     hi,
                     ondisk,
                     used: true,
+                    owner_tid: r4_current_smp(),
                 };
                 return true;
             }
             i += 1;
         }
         false
+    }
+
+    /// Release every dlopen handle registered by `owner_tid`. Called from
+    /// task-exit cleanup (`r4_cleanup_task_resources`): a dlopen handle is a
+    /// process-global slot with no fd backing, so a task that dlopen()s and
+    /// exits without dlclose would otherwise leak its slots for the rest of the
+    /// boot (exhausting the DL_MAX_HANDLES table) and leave a dangling base that
+    /// a later dlsym_h/dlclose could resolve into the dead task's freed address
+    /// space. The task's pages are already reclaimed by `address_space_release`
+    /// on the exit path, so this only frees the table slot -- and resets the
+    /// back-compat single-slot globals if they pointed at a reclaimed object
+    /// (mirroring the same reset in op3 dlclose).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_release_owned_dlhandles(owner_tid: usize) {
+        let mut i = 0usize;
+        while i < DL_MAX_HANDLES {
+            if DL_HANDLES[i].used && DL_HANDLES[i].owner_tid == owner_tid {
+                let base = DL_HANDLES[i].base;
+                DL_HANDLES[i].used = false;
+                if base == DL_LOAD_BASE {
+                    DL_MAP_LO = 0;
+                    DL_MAP_HI = 0;
+                    DL_LOAD_BASE = DLOPEN_BASE;
+                    DL_CUR_ONDISK = false;
+                }
+            }
+            i += 1;
+        }
     }
 
     /// Pick a randomized, slot-aligned load base for the next dlopen: a slot not
@@ -6661,6 +6698,12 @@ cfg_r4! {
                     Some(s) => s,
                     None => return ERR,
                 };
+                // Handles are process-local: only the owner may close one. A
+                // foreign base maps pages in another task's CR3, so closing it
+                // here would unmap the wrong address space.
+                if DL_HANDLES[slot].owner_tid != r4_current_smp() {
+                    return ERR;
+                }
                 let lo = DL_HANDLES[slot].lo;
                 let hi = DL_HANDLES[slot].hi;
                 DL_HANDLES[slot].used = false;
@@ -6690,6 +6733,13 @@ cfg_r4! {
                     Some(s) => s,
                     None => return ERR,
                 };
+                // Handles are process-local: resolving a foreign task's base
+                // would return a VA mapped only in that task's (possibly freed)
+                // CR3, not the caller's -- so reject a handle the caller does
+                // not own.
+                if DL_HANDLES[slot].owner_tid != r4_current_smp() {
+                    return ERR;
+                }
                 let mut nm = [0u8; 16];
                 if copyin_user(&mut nm, a3, 16).is_err() {
                     return ERR;
@@ -7232,6 +7282,15 @@ cfg_r4! {
             net::r4_release_owned_sockets(tid);
             r4_release_owned_endpoints(tid);
             r4_release_stale_services();
+            // epoll instances and dlopen handles are raw global slots (not owned
+            // fds), so reclaim the exiting task's here too -- otherwise a creator
+            // that exits without close/dlclose leaks the slot for the whole boot.
+            // Both subsystems exist only in this lane (cfg below mirrors theirs).
+            #[cfg(not(feature = "compat_real_test"))]
+            {
+                crate::epoll::r4_release_owned_epolls(tid);
+                r4_release_owned_dlhandles(tid);
+            }
         }
     }
 

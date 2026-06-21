@@ -31,7 +31,7 @@ def _build_region(disk_path):
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
-def test_epoll_level_triggered_readiness(find_in_order):
+def _boot(input_text):
     iso = conftest.ISO_GO_PATH
     if not os.path.isfile(iso):
         pytest.skip(f"ISO not built: {iso}")
@@ -52,8 +52,8 @@ def test_epoll_level_triggered_readiness(find_in_order):
             "-netdev", "user,id=n0",
             "-device", "virtio-net-pci,netdev=n0,disable-modern=on",
         ]
-        out = conftest._run_qemu_capture(
-            cmd, conftest.NET_TIMEOUT, input_text="probe epollprobe\nshutdown\n"
+        return conftest._run_qemu_capture(
+            cmd, conftest.NET_TIMEOUT, input_text=input_text
         ).stdout
     finally:
         for _ in range(20):
@@ -66,6 +66,10 @@ def test_epoll_level_triggered_readiness(find_in_order):
 
                 time.sleep(0.25)
 
+
+def test_epoll_level_triggered_readiness(find_in_order):
+    out = _boot("probe epollprobe\nshutdown\n")
+
     find_in_order(out, [
         "SPAWN: epollprobe",
         "EPOLLPROBE: ready ok",
@@ -73,3 +77,22 @@ def test_epoll_level_triggered_readiness(find_in_order):
     ])
     assert "EPOLLPROBE: FAIL" not in out
     assert "EXEC: epollprobe badpkg" not in out
+
+
+def test_epoll_instances_reclaimed_on_task_exit(find_in_order):
+    # Resource-lifecycle: each epollprobe run creates an epoll instance and
+    # exits WITHOUT closing it (op4). EPOLLS is a process-global table of
+    # EPOLL_MAX=4 slots, so unless task-exit cleanup reclaims the creator's
+    # slot, 4 such early-exits permanently exhaust epoll_create for the rest
+    # of the boot and the 5th run fails on create. Running epollprobe 5 times
+    # (> EPOLL_MAX) must therefore succeed every time iff exiting tasks release
+    # their epoll instances.
+    runs = 5
+    out = _boot("probe epollprobe\n" * runs + "shutdown\n")
+
+    assert "EPOLLPROBE: FAIL" not in out
+    assert out.count("EPOLLPROBE: ready ok") == runs, (
+        f"expected {runs} successful epollprobe runs, "
+        f"got {out.count('EPOLLPROBE: ready ok')} "
+        f"(epoll slots leaked on exit -> create exhausted)"
+    )
