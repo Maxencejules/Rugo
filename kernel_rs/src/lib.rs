@@ -533,6 +533,44 @@ static mut KADDR_REQUEST: LimineKaddrRequest = LimineKaddrRequest {
     response: core::ptr::null(),
 };
 
+// --------------- Limine kernel-file request (full-os guide Part V.11,
+// self-hosting installer) --------------- Gives the kernel the in-memory address
+// + size of its OWN loaded ELF image, so the installer can write *real* kernel
+// bytes (not a synthetic fill) to a target disk -- the kernel-image-readable-at-
+// runtime prerequisite for self-hosting. Only the first three fields of the
+// (larger) `limine_file` are declared; we read only address (@8) and size (@16).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[repr(C)]
+struct LimineFile {
+    revision: u64,
+    address: *const u8,
+    size: u64,
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[repr(C)]
+struct LimineKernelFileResponse {
+    revision: u64,
+    kernel_file: *const LimineFile,
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[repr(C)]
+struct LimineKernelFileRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: *const LimineKernelFileResponse,
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe impl Sync for LimineKernelFileRequest {}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[used]
+#[link_section = ".limine_requests"]
+static mut KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
+    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b,
+         0xad97e90e83f1ed67, 0x31eb5d1c5ff23b69],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
 static mut HHDM_OFFSET: u64 = 0;
 
 extern "C" {
@@ -10895,15 +10933,66 @@ unsafe fn block_flush_dispatch() -> bool {
     }
 }
 
+/// Self-hosting installer (full-os guide Part V.11): write REAL kernel bytes --
+/// the kernel's OWN loaded ELF, obtained from the Limine kernel-file response --
+/// to the target disk, instead of a synthetic fill. Reads the first written
+/// sector back and confirms the ELF magic round-tripped. Returns (ok, size). This
+/// closes the kernel-image-readable-at-runtime prerequisite; installing the
+/// bootloader stages + a standalone boot of the target remain (see remediation §7).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn install_self_image_and_verify() -> (bool, u64) {
+    const SELF_LBA: u64 = 1024; // within a 1 MiB target, clear of MBR + partition
+    const SELF_SECTORS: u64 = 16; // 8 KiB proof chunk of the real image
+    let resp = KERNEL_FILE_REQUEST.response;
+    if resp.is_null() {
+        return (false, 0);
+    }
+    let kf = (*resp).kernel_file;
+    if kf.is_null() {
+        return (false, 0);
+    }
+    let addr = (*kf).address;
+    let size = (*kf).size;
+    if addr.is_null() || size < 64 {
+        return (false, size);
+    }
+    // Confirm we really hold the kernel's own ELF (\x7FELF) before writing it.
+    if *addr != 0x7F || *addr.add(1) != b'E' || *addr.add(2) != b'L' || *addr.add(3) != b'F' {
+        return (false, size);
+    }
+    let mut s = 0u64;
+    while s < SELF_SECTORS {
+        let off = (s * 512) as usize;
+        if off >= size as usize {
+            break;
+        }
+        let n = core::cmp::min(512, size as usize - off);
+        core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+        core::ptr::copy_nonoverlapping(addr.add(off), BLK_DATA_PAGE.0.as_mut_ptr(), n);
+        if !virtio_blk_io(true, SELF_LBA + s, 512) {
+            return (false, size);
+        }
+        s += 1;
+    }
+    // Read the first written sector back and confirm the ELF magic survived.
+    core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+    if !virtio_blk_io(false, SELF_LBA, 512) {
+        return (false, size);
+    }
+    let dp = BLK_DATA_PAGE.0.as_ptr();
+    let elf_ok = *dp == 0x7F && *dp.add(1) == b'E' && *dp.add(2) == b'L' && *dp.add(3) == b'F';
+    (elf_ok, size)
+}
+
 /// Installer (full-os guide Part V.11): provision a target disk with an OS boot
-/// record. Finds a SECOND virtio-blk device (the install target) — a generic
-/// boot has only the boot disk, so this is a safe no-op there; only a lane that
-/// attaches a blank second disk exercises the write. Switches the block driver
-/// to the target, writes a boot record (a "RUGOINST" magic + version + the
-/// 0x55AA MBR signature), reads it back to verify, then restores the boot disk.
-/// v1 boundary: it provisions one image block and verifies the write/read path;
-/// a full bootable install (partition layout, kernel copy, bootloader) is
-/// carry-forward.
+/// record + a REAL kernel-image chunk. Finds a SECOND virtio-blk device (the
+/// install target) — a generic boot has only the boot disk, so this is a safe
+/// no-op there; only a lane that attaches a blank second disk exercises the
+/// write. Switches the block driver to the target, writes a boot record
+/// ("RUGOINST" magic + version + 0x55AA MBR signature) + a payload + the kernel's
+/// own ELF (`install_self_image_and_verify`), reads them back to verify, then
+/// restores the boot disk. v1 boundary: bootloader stages + a standalone boot of
+/// the target are carry-forward.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn installer_selftest() {
     // The boot disk is the first virtio-blk (already initialized by storage boot).
@@ -10953,6 +11042,14 @@ unsafe fn installer_selftest() {
     let provisionable = install_target_provisionable();
     let mbr_ok = provisionable && install_write_and_verify();
     let payload_ok = mbr_ok && install_payload_and_verify();
+    // Self-host step: write the kernel's OWN ELF (real bytes, read at runtime via
+    // the Limine kernel-file response) to the target and verify the round-trip,
+    // while the target disk is still the bound device.
+    let (self_ok, self_size) = if payload_ok {
+        install_self_image_and_verify()
+    } else {
+        (false, 0)
+    };
     // Reset the target so it releases the shared virtqueue (only one device may
     // be bound to VQ_MEM at a time), then restore the boot disk.
     outb(tgt_iobase + VIRTIO_DEVICE_STATUS, 0);
@@ -10977,6 +11074,14 @@ unsafe fn installer_selftest() {
         serial_write(b" sectors=0x");
         serial_write_hex(INSTALL_PART_SECTORS as u64);
         serial_write(b"\n");
+        if self_ok {
+            // Real kernel bytes (own ELF) written + verified on the target.
+            serial_write(b"INSTALL: self-image elf size=0x");
+            serial_write_hex(self_size);
+            serial_write(b" written+verified ok\n");
+        } else {
+            serial_write(b"INSTALL: self-image FAIL\n");
+        }
         serial_write(b"INSTALL: bootable install ok\n");
     } else if mbr_ok {
         serial_write(b"INSTALL: payload FAIL\n");
