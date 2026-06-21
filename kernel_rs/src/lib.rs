@@ -679,6 +679,77 @@ cfg_m3! {
         }
     }
 
+    /// Next PID-namespace id to hand out. Starts at 1 (0 is the global namespace)
+    /// and only ever increments, so each `unshare` gets a unique id.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut NS_NEXT_PID: u32 = 1;
+
+    /// sys_nsctl (ABI v3.2 id 57, PID namespaces — full-os guide Part I): isolate a
+    /// task's process view. op 1 = unshare_pid: move the caller into a FRESH PID
+    /// namespace (so it sees only itself + tasks it later clones) and return the new
+    /// ns id. op 2 = ns_task_count: number of live tasks visible in the caller's
+    /// namespace (the whole system in the global ns 0, just the namespace members
+    /// otherwise). op 3 = ns_getpid: the caller's namespace-LOCAL pid (1 for the
+    /// first task in a fresh namespace, i.e. its "init"), vs its global tid.
+    /// Additive; reads/sets only the per-task `pid_ns` tag (no quota interaction).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_nsctl(op: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let me = R4_CURRENT;
+        if me >= R4_TASKS.len() {
+            return ERR;
+        }
+        match op {
+            1 => {
+                if NS_NEXT_PID == u32::MAX {
+                    return ERR; // namespace ids exhausted (unreachable in practice)
+                }
+                let ns = NS_NEXT_PID;
+                NS_NEXT_PID += 1;
+                R4_TASKS[me].pid_ns = ns;
+                ns as u64
+            }
+            2 => {
+                let ns = R4_TASKS[me].pid_ns;
+                let mut count = 0u64;
+                let mut t = 0usize;
+                while t < R4_NUM_TASKS {
+                    let live = !matches!(
+                        R4_TASKS[t].state,
+                        R4State::Dead | R4State::Exited
+                    );
+                    // Global ns (0) sees every live task; a real namespace sees only
+                    // its own members.
+                    if live && (ns == 0 || R4_TASKS[t].pid_ns == ns) {
+                        count += 1;
+                    }
+                    t += 1;
+                }
+                count
+            }
+            3 => {
+                let ns = R4_TASKS[me].pid_ns;
+                if ns == 0 {
+                    return me as u64; // global namespace: the real tid
+                }
+                // Namespace-local pid: rank among same-namespace tasks by tid, so the
+                // first (lowest-tid) member is pid 1 -- the namespace's init.
+                let mut rank = 1u64;
+                let mut t = 0usize;
+                while t < me {
+                    if R4_TASKS[t].pid_ns == ns
+                        && !matches!(R4_TASKS[t].state, R4State::Dead | R4State::Exited)
+                    {
+                        rank += 1;
+                    }
+                    t += 1;
+                }
+                rank
+            }
+            _ => ERR,
+        }
+    }
+
     unsafe fn sys_open_v1(path_ptr: u64, flags: u64, _mode: u64) -> u64 {
         let path = match copyinstr_user(path_ptr, 128) {
             Ok(v) => v,
@@ -3596,6 +3667,13 @@ cfg_r4! {
         // Per-task so a preemption between the failing syscall and the errno query
         // can't leak another task's code. 0 = no error recorded.
         last_errno: i64,
+        // PID namespace id (full-os guide Part I, namespaces). 0 = the global
+        // namespace; a non-zero value (assigned by sys_nsctl unshare) isolates the
+        // task's process view -- it then sees only tasks sharing this id, and reads
+        // a namespace-local pid. Inherited by clone threads (they join the
+        // namespace). Independent of `isolation_domain` (which gates resource
+        // quotas), so unsharing a namespace never perturbs quota grouping.
+        pid_ns: u32,
     }
 
     impl R4Task {
@@ -3636,6 +3714,7 @@ cfg_r4! {
             futex_uaddr: 0,
             sleep_until: 0,
             last_errno: 0,
+            pid_ns: 0,
         };
     }
 
@@ -3744,12 +3823,17 @@ cfg_r4! {
             R4_TASKS[tid].fd_limit = R4_TASK_DEFAULT_FD_LIMIT;
             R4_TASKS[tid].socket_limit = R4_TASK_DEFAULT_SOCKET_LIMIT;
             R4_TASKS[tid].endpoint_limit = R4_TASK_DEFAULT_ENDPOINT_LIMIT;
+            R4_TASKS[tid].pid_ns = 0;
         } else {
             R4_TASKS[tid].isolation_domain = R4_TASKS[parent_tid].isolation_domain;
             R4_TASKS[tid].cap_flags = R4_TASKS[parent_tid].cap_flags;
             R4_TASKS[tid].fd_limit = R4_TASKS[parent_tid].fd_limit;
             R4_TASKS[tid].socket_limit = R4_TASKS[parent_tid].socket_limit;
             R4_TASKS[tid].endpoint_limit = R4_TASKS[parent_tid].endpoint_limit;
+            // Inherit the PID namespace: clone threads join their creator's
+            // namespace (a spawned app inherits the shell's global ns 0 and may
+            // unshare its own later). (full-os guide Part I, namespaces.)
+            R4_TASKS[tid].pid_ns = R4_TASKS[parent_tid].pid_ns;
         }
         R4_TASKS[tid].fd_count = 0;
         R4_TASKS[tid].socket_count = 0;
