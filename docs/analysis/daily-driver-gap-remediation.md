@@ -282,6 +282,21 @@ bit** (line 753) rather than blocking on the interrupt. Flipping that to a
 storage path (the FS reads/writes through it) in the higher-friction native lane,
 so it is a real milestone slice (template-then-widen), not a safe one-pass change.
 
+**ATTEMPTED + reverted this pass — empirical proof it is a milestone, not a slice.**
+The naive fix (replace the submit loop's `pause` busy-spin with `hlt`, guarded by
+`irq_mode != None`, since the `sti` is already issued) was implemented and verified
+against the **live** native NVMe lane (`run_native_storage_live_v1.py`, which boots
+`image-go-native` with `-device nvme`). Result: **the lane HANGS** (QEMU boot
+timeout) — `hlt` during early NVMe *init* (identify / create-queue admin commands)
+blocks with no wake, because the periodic timer is not yet reliably firing at that
+boot stage and a just-missed completion MSI (fired between the CQ check and the
+`hlt`) leaves nothing to wake the core. Reverted; the lane passes again. The
+genuine fix therefore needs an **ISR-driven completion** (`handle_irq` drains the
+CQ and wakes the specific waiter) and/or interrupt-context-aware waiting that only
+sleeps once a guaranteed wake source is live — exactly the careful, full-gate work
+a milestone warrants. (Baseline confirmed runnable: the live lane passes here, so
+the work *can* be verified — it just needs the safe design, not the naive one.)
+
 ---
 
 ## 6. GUI as a standing system  [MILESTONE + DECISION]
