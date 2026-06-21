@@ -39,11 +39,19 @@ needs an explicit soften-claim-vs-implement choice before work starts.
     offline guess cost 4096 HMACs;
   - **lock an account after 3 consecutive failures** (`LOGIN_FAILS`/`LOGIN_LOCKOUT`),
     refusing even the correct password until reset — an online brute-force throttle.
-  - Verified: `test-login-v1` (incl. `LOGINPROBE: lockout ok`) + `test-audit-v1`
-    + `test-users-runtime-v1` + `test-userid-v1` green.
-  - Remaining for #8: move the db to a root-owned `/etc/shadow` VFS file; replace
-    symmetric keyed-hash package signing with public-key (Ed25519/RSA); a real
-    input fuzzer (see §8).
+  - **file-based store**: credentials now live in a root-owned, owner-only
+    `/shadow` VFS file (the `/etc/shadow` analogue; tree rooted at `/data`),
+    provisioned at boot (`cred_store_provision`, alongside `dlclose_selftest`).
+    `login_verify` reads it as the runtime source of truth (fallback to the seed
+    if unreadable). `loginprobe` proves a uid-100 app is denied reading it while
+    root can. (Internal `vfs_*` paths are `/data`-stripped → `/shadow`; the login
+    syscall path can't reliably create VFS files, so it provisions at boot.)
+  - Verified: `test-login-v1` (`lockout ok` + `shadow protected ok`) +
+    `test-audit-v1` + `test-users-runtime-v1` + `test-userid-v1` +
+    `test-vfs-runtime-v1` (node count 2→3) green.
+  - Remaining for #8: replace symmetric keyed-hash package signing with public-key
+    (Ed25519/RSA); a real input fuzzer (see §8). The store is now a file, so a
+    `passwd`-style tool to mutate it is a natural follow-up.
 
 - **#4 libc real `free()` + buffered `FILE*` stdio [DONE].** `rlibc.c`:
   - `malloc`/`free` replaced the v1 no-op `free` with a free-list allocator (each
