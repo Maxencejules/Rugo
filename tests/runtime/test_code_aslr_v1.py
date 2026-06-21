@@ -39,3 +39,47 @@ def test_code_base_aslr_distinct_bases(qemu_go_c4_runtime, find_in_order):
     assert "BASESH: hello from disk" in out
     assert "EXEC: base-shell badhash" not in out
     assert "GOINIT: err" not in out
+
+
+def test_code_base_aslr_c_app_relocations(qemu_go_c4_runtime, find_in_order):
+    # ASLR slice 2: a C program (hello) is now ET_DYN too. Unlike base-shell it has
+    # ABSOLUTE relocations -- gcc's .refptr.<global> pointers for rugo_args etc. -- which
+    # pe_to_elf synthesizes as R_X86_64_RELATIVE from the PE .reloc DIR64 directory and
+    # the kernel (exec_load_pie) applies at the random base. Running hello TWICE must give
+    # TWO DIFFERENT bases AND, at EACH, the .refptr pointer must resolve correctly so the
+    # program reads its args ("HELLOC: args=...") -- a wrong relocation would crash or read
+    # garbage. This proves code-base ASLR works for relocating C apps, not just RIP-relative
+    # asm.
+    boot, _disk_path = qemu_go_c4_runtime
+
+    out = boot(
+        "fsmk /data/etc\n"
+        "fswrite /data/etc/motd from-c-with-love\n"
+        "hello /data/etc/motd\n"
+        "hello /data/etc/motd\n"
+        "shutdown\n"
+    ).stdout
+
+    find_in_order(out, [
+        "FSH: write ok",
+        "ASLR: dyn base=0x",
+        "HELLOC: args=/data/etc/motd",
+        "HELLOC: done",
+        "ASLR: dyn base=0x",
+        "HELLOC: args=/data/etc/motd",
+        "HELLOC: done",
+        "RUGO: halt ok",
+    ])
+
+    bases = [int(h, 16) for h in re.findall(r"ASLR: dyn base=0x([0-9A-Fa-f]+)", out)]
+    assert len(bases) >= 2, f"expected >=2 PIE load bases for the C app, got {bases}"
+    assert bases[0] != bases[1], f"C-app ASLR load bases identical: {[hex(b) for b in bases]}"
+    for b in bases[:2]:
+        assert b % 0x1000 == 0, f"C-app PIE base not page-aligned: {b:#x}"
+        assert 0x0140_0000 <= b < 0x0170_0000, f"C-app PIE base out of window: {b:#x}"
+
+    # The refptr->rugo_args relocation resolved correctly at BOTH random bases.
+    assert out.count("HELLOC: args=/data/etc/motd") >= 2
+    assert out.count("HELLOC: done") >= 2
+    assert "HELLOC: open err" not in out
+    assert "HELLOC: read err" not in out

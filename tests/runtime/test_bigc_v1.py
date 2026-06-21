@@ -1,7 +1,9 @@
 # Toolchain + exec-loader acceptance: a C program that spans MORE THAN TWO pages.
 #
-# The host gcc/ld only target PE-COFF, so C apps compile -mabi=sysv, link in PE,
-# then get rewrapped to ET_EXEC ELF by tools/pe_to_elf_v1.py. page3probe proves
+# The host gcc/ld only target PE-COFF, so C apps compile -mabi=sysv, link in PE
+# (--dynamicbase --image-base 0x0), then get rewrapped to an ET_DYN (PIE) ELF by
+# tools/pe_to_elf_v1.py (which synthesizes R_X86_64_RELATIVE relocs from the PE .reloc
+# DIR64 directory) so the kernel loads them at a random base. page3probe proves
 # the *kernel* loader maps a 3-page image; this proves the *C toolchain* path end
 # to end: bigcprobe carries a ~8 KiB initialized const table (laid into .rdata so
 # the image spans ~6 pages) plus an 8 KiB array. At runtime it checksums the

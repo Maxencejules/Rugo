@@ -240,7 +240,7 @@ $(OUT)/app-hello-main-pe.o: apps/hello-c/hello.c libc/include/rugo/libc.h | $(OU
 	$(CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
-	$(MINGW_LD) -m i386pep --gc-sections --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
+	$(MINGW_LD) -m i386pep --gc-sections --dynamicbase --image-base 0x0 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
 	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-hello.pe $@
 
 # bigcprobe: a C program that spans MORE THAN TWO pages (a ~8 KiB const table
@@ -250,7 +250,7 @@ $(OUT)/app-bigcprobe-main-pe.o: apps/c-bigprobe/bigprobe.c libc/include/rugo/lib
 	$(CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-bigcprobe.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
-	$(MINGW_LD) -m i386pep --gc-sections --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-bigcprobe.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o
+	$(MINGW_LD) -m i386pep --gc-sections --dynamicbase --image-base 0x0 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-bigcprobe.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o
 	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-bigcprobe.pe $@
 
 # --- Rust kernel --------------------------------------------------------------
