@@ -187,7 +187,7 @@ $(X1_PROC_SOCK_ELF): $(OUT)/x1-proc-sock.o services/compat/linker.ld | $(OUT)
 	$(LD) -nostdlib -static -T services/compat/linker.ld -o $@ $<
 
 APP_BASE_SHELL_ELF = $(OUT)/app-base-shell.elf
-COREUTILS_ELFS = $(OUT)/app-echo.elf $(OUT)/app-cat.elf $(OUT)/app-ls.elf $(OUT)/app-ps.elf $(OUT)/app-wc.elf $(OUT)/app-nxprobe.elf $(OUT)/app-sigprobe.elf $(OUT)/app-fsperm.elf $(OUT)/app-asprobe.elf $(OUT)/app-forkprobe.elf $(OUT)/app-vmprobe.elf $(OUT)/app-timeprobe.elf $(OUT)/app-rngprobe.elf $(OUT)/app-sandboxprobe.elf $(OUT)/app-devprobe.elf $(OUT)/app-sysinfoprobe.elf $(OUT)/app-futexprobe.elf $(OUT)/app-lseekprobe.elf $(OUT)/app-sleepprobe.elf $(OUT)/app-gfxprobe.elf $(OUT)/app-waitprobe.elf $(OUT)/app-timerfdprobe.elf $(OUT)/app-dmesgprobe.elf $(OUT)/app-ptyprobe.elf $(OUT)/app-partprobe.elf $(OUT)/app-fatprobe.elf $(OUT)/app-page3probe.elf $(OUT)/app-beepprobe.elf $(OUT)/app-auditprobe.elf $(OUT)/app-fatlsprobe.elf $(OUT)/app-cryptprobe.elf $(OUT)/app-journalprobe.elf $(OUT)/app-userprobe.elf $(OUT)/app-compositorprobe.elf $(OUT)/app-dlprobe.elf $(OUT)/app-fatwrprobe.elf $(OUT)/app-fatbigprobe.elf $(OUT)/app-loginprobe.elf $(OUT)/app-cowfixprobe.elf $(OUT)/app-clonebrkprobe.elf $(OUT)/app-ondlprobe.elf $(OUT)/app-surfprobe.elf $(OUT)/app-epollprobe.elf $(OUT)/app-multidlprobe.elf $(OUT)/app-errnoprobe.elf $(OUT)/app-pqsigprobe.elf $(OUT)/app-wmprobe.elf $(OUT)/app-wmcheck.elf $(OUT)/app-nsprobe.elf
+COREUTILS_ELFS = $(OUT)/app-echo.elf $(OUT)/app-cat.elf $(OUT)/app-ls.elf $(OUT)/app-ps.elf $(OUT)/app-wc.elf $(OUT)/app-nxprobe.elf $(OUT)/app-sigprobe.elf $(OUT)/app-fsperm.elf $(OUT)/app-asprobe.elf $(OUT)/app-forkprobe.elf $(OUT)/app-vmprobe.elf $(OUT)/app-timeprobe.elf $(OUT)/app-rngprobe.elf $(OUT)/app-sandboxprobe.elf $(OUT)/app-devprobe.elf $(OUT)/app-sysinfoprobe.elf $(OUT)/app-futexprobe.elf $(OUT)/app-lseekprobe.elf $(OUT)/app-sleepprobe.elf $(OUT)/app-gfxprobe.elf $(OUT)/app-waitprobe.elf $(OUT)/app-timerfdprobe.elf $(OUT)/app-dmesgprobe.elf $(OUT)/app-ptyprobe.elf $(OUT)/app-partprobe.elf $(OUT)/app-fatprobe.elf $(OUT)/app-page3probe.elf $(OUT)/app-beepprobe.elf $(OUT)/app-auditprobe.elf $(OUT)/app-fatlsprobe.elf $(OUT)/app-cryptprobe.elf $(OUT)/app-journalprobe.elf $(OUT)/app-userprobe.elf $(OUT)/app-compositorprobe.elf $(OUT)/app-dlprobe.elf $(OUT)/app-fatwrprobe.elf $(OUT)/app-fatbigprobe.elf $(OUT)/app-loginprobe.elf $(OUT)/app-cowfixprobe.elf $(OUT)/app-clonebrkprobe.elf $(OUT)/app-ondlprobe.elf $(OUT)/app-surfprobe.elf $(OUT)/app-epollprobe.elf $(OUT)/app-multidlprobe.elf $(OUT)/app-errnoprobe.elf $(OUT)/app-pqsigprobe.elf $(OUT)/app-wmprobe.elf $(OUT)/app-wmcheck.elf $(OUT)/app-nsprobe.elf $(OUT)/app-tlsprobe.elf
 APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf $(OUT)/app-bigcprobe.elf
 
 $(OUT)/app-base-shell.o: apps/base-shell/base_shell.asm | $(OUT)
@@ -1027,6 +1027,9 @@ test-winsrv-v1: image-go
 
 test-pidns-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_pidns_v1.py -v --junitxml=$(OUT)/pytest-pidns-v1.xml
+
+test-tls-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tls_v1.py -v --junitxml=$(OUT)/pytest-tls-v1.xml
 
 test-fatwrite-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_fatwrite_v1.py -v --junitxml=$(OUT)/pytest-fatwrite-v1.xml

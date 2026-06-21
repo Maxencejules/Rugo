@@ -33,8 +33,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `docs/runtime/arp_v1.md`, `docs/runtime/tcp_listen_v1.md`,
   `docs/runtime/icmpv6_v1.md`, `docs/runtime/udp_echo_v1.md`);
   `50` = `sys_vm_ctl` (op 1 = mmap(va, sz, prot) → va, op 2 = munmap(va,
-  sz) → 0, op 3 = brk(new) → old break, op 4 = mprotect(va, sz, prot) → 0;
-  contract in `docs/runtime/mmap_v1.md`);
+  sz) → 0, op 3 = brk(new) → old break, op 4 = mprotect(va, sz, prot) → 0,
+  op 5 = set_tls(`rsi`=base) → 0 — set the task's `%fs` base for thread-local
+  storage (per-task, restored on context switch; base must be canonical lower-half);
+  contract in `docs/runtime/mmap_v1.md`, `docs/runtime/tls_v1.md`);
   `51` = `sys_proc_ctl` (op 1 = fork — copy-on-write duplicate of the
   caller, returns child tid to the parent and 0 to the child; op 2 = clone
   — new thread sharing the caller's address space, `rsi` = entry

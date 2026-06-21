@@ -3746,6 +3746,12 @@ cfg_r4! {
         // namespace). Independent of `isolation_domain` (which gates resource
         // quotas), so unsharing a namespace never perturbs quota grouping.
         pid_ns: u32,
+        // Thread-local storage base (full-os guide Part I, TLS): the %fs segment
+        // base for this task, set via sys_vm_ctl op 5 and restored on every resume
+        // by r4_switch_to, so each task (each clone thread) has its own isolated
+        // TLS. 0 = no TLS. Kept canonical at the syscall so the restore wrmsr never
+        // faults.
+        fs_base: u64,
     }
 
     impl R4Task {
@@ -3787,6 +3793,7 @@ cfg_r4! {
             sleep_until: 0,
             last_errno: 0,
             pid_ns: 0,
+            fs_base: 0,
         };
     }
 
@@ -3907,6 +3914,9 @@ cfg_r4! {
             // unshare its own later). (full-os guide Part I, namespaces.)
             R4_TASKS[tid].pid_ns = R4_TASKS[parent_tid].pid_ns;
         }
+        // TLS base is NOT inherited: each task/thread sets up its own %fs base
+        // (POSIX thread-local storage is per-thread). Starts at 0 (no TLS).
+        R4_TASKS[tid].fs_base = 0;
         R4_TASKS[tid].fd_count = 0;
         R4_TASKS[tid].socket_count = 0;
         R4_TASKS[tid].dispatch_count = 0;
@@ -3990,6 +4000,22 @@ cfg_r4! {
             }
         }
         for i in 0..22 { *frame.add(i) = R4_TASKS[tid].saved_frame[i]; }
+        // Restore the task's TLS base (full-os Part I, TLS): each task gets its own
+        // %fs base, so a clone thread's thread-local storage is isolated. Written
+        // on EVERY resume (0 for non-TLS tasks) so an earlier task's fs.base never
+        // leaks into this one. fs_base is kept canonical at the syscall, so the
+        // wrmsr cannot #GP. IA32_FS_BASE = 0xC000_0100.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            let fsb = R4_TASKS[tid].fs_base;
+            core::arch::asm!(
+                "wrmsr",
+                in("ecx") 0xC000_0100u32,
+                in("eax") (fsb & 0xFFFF_FFFF) as u32,
+                in("edx") (fsb >> 32) as u32,
+                options(nostack, nomem, preserves_flags),
+            );
+        }
         R4_TASKS[tid].state = R4State::Running;
         R4_TASKS[tid].dispatch_count += 1;
         // Record the switched-to task as the CALLING CPU's current (per-CPU on an AP,
@@ -5140,6 +5166,26 @@ cfg_r4! {
                 serial_write_hex(new);
                 serial_write(b"\n");
                 cur
+            }
+            // op 5 = set_tls(a2 = %fs base) (full-os guide Part I, thread-local
+            // storage): set this task's TLS base so `%fs:offset` addresses its
+            // per-thread block. Stored in the task and restored on every resume by
+            // r4_switch_to, so clone threads keep isolated TLS. Applied immediately
+            // (wrmsr) for the current task. a2 must be canonical lower-half (a user
+            // address) so the restore wrmsr can never #GP. Returns 0.
+            5 => {
+                if a2 >= 0x0000_8000_0000_0000 {
+                    return ERR; // non-canonical / kernel-half -> would #GP on wrmsr
+                }
+                R4_TASKS[r4_current_smp()].fs_base = a2;
+                core::arch::asm!(
+                    "wrmsr",
+                    in("ecx") 0xC000_0100u32, // IA32_FS_BASE
+                    in("eax") (a2 & 0xFFFF_FFFF) as u32,
+                    in("edx") (a2 >> 32) as u32,
+                    options(nostack, nomem, preserves_flags),
+                );
+                0
             }
             _ => ERR,
         }
