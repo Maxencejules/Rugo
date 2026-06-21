@@ -122,7 +122,25 @@ needs an explicit soften-claim-vs-implement choice before work starts.
 
 ---
 
-## 1. SMP — live per-CPU scheduler  [MILESTONE — highest leverage]
+## 1. SMP — live per-CPU scheduler  [AP general exit/reschedule DONE; load-balancing policy carry-forward]
+
+**[DONE] AP-side general-app exit/reschedule.** The residual below (a general app
+exiting *on an AP* through `r4_exit_and_switch`, which was BSP-centric) is now
+implemented. `r4_exit_and_switch` is per-CPU (`on_ap = !is_bsp()`, so the BSP path
+is byte-for-byte unchanged — verified by login/signals/dynamic-tasks/waitpid/fork/
+concurrent-exec all green); on an AP it retires THIS CPU's current
+(`r4_current_smp`) and returns to the pull-loop (`ap_exit_park`) instead of the BSP
+`r4_find_ready` reschedule. The fix that took three tries (two reverts pinned it):
+the exit cleanup steps CR3 off the task's address space before freeing it, and an
+AP's per-CPU kernel stack is **not** mapped in `SHARED_PML4_PHYS` (the BSP's table),
+so it must step to `ap_saved_cr3()` (its own saved kernel CR3). Proof
+(`test_smp_runtime_v1.py`): an `ap_eligible` task whose ring-3 code is a bare
+`sys_exit` is claimed + run by an AP, exits through the per-CPU AP branch, and the
+BSP observes completion — `SMP: ap general-exit ran=0x1 ok`. So a task now runs
+AND exits/reschedules on an AP via the **general** syscall path. Carry-forward:
+marking *production* apps `ap_eligible` + load-balancing the general workload is a
+scheduler-policy choice; the mechanism is in place.
+
 
 Current (`kernel_rs/src/smp.rs`, `lib.rs`): cross-CPU data locks
 (`FS<NET<STORAGE<R4_RQ`, `smp.rs:1869`) are real and wired into production
