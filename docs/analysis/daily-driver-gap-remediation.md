@@ -62,7 +62,22 @@ needs an explicit soften-claim-vs-implement choice before work starts.
     `HELLOC: stdio fread[16]=from-c-with-love eof=1` and
     `HELLOC: stdio rw[11]=hello-stdio` (write a file, read it back).
   - Verified: `test-libc-v1` (all proofs).
-  - Remaining for #4: TLS, a real editor + package installer.
+  - Remaining for #4: a real editor + package installer (TLS is now DONE — see
+    below).
+
+- **#4 thread-local storage [DONE — kernel mechanism].** libc had no TLS. Added a
+  per-task `%fs` base (`R4Task.fs_base`, MSR `IA32_FS_BASE`): `sys_vm_ctl op 5 =
+  set_tls(base)` validates the base canonical (so the restore `wrmsr` can't `#GP`),
+  stores + applies it; `r4_switch_to` restores `IA32_FS_BASE = task.fs_base` on
+  every resume (0 for non-TLS tasks), so each task's `%fs` base is isolated and a
+  clone thread's TLS is never clobbered; `r4_init_task` resets it (TLS is
+  per-thread, not inherited). Proof: `tlsprobe` sets `fs.base` to a block, writes a
+  magic via `[fs:0]`, confirms it aliases the block, then YIELDS and re-reads
+  `[fs:0]` — still the magic, so the kernel restored this task's base on resume
+  (`TLS: fs-base tls ok`, `test_tls_v1.py`). The `wrmsr`-on-every-switch verified
+  safe (switch-heavy login/signals/dynamic-tasks/concurrent-exec/futex green).
+  Carry-forward (`tls_v1.md`): rlibc `__thread`/per-thread errno wiring (gated on
+  the PE→ELF `.tdata/.tbss` toolchain) and a `%gs` TCB / `fs:0` self-pointer.
 
 - **#4 distinct errno [DONE].** The syscall ABI returned a single −1 sentinel, so
   rlibc collapsed every failure to `EIO`. Added a per-task `last_errno` (R4Task
