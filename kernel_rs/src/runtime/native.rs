@@ -222,6 +222,13 @@ static mut LAPIC_READY: bool = false;
 static mut LAPIC_X2_MODE: bool = false;
 #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
 static mut NATIVE_IRQ_COUNT: u64 = 0;
+// How many times an NVMe I/O command slept on its completion interrupt (`sti;
+// hlt`) instead of busy-spinning the CQ -- the interrupt-driven data path. A
+// one-shot marker announces the first such wait.
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+static mut NVME_IRQ_WAITS: u64 = 0;
+#[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
+static mut NVME_IO_IRQ_ANNOUNCED: bool = false;
 #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
 static mut NATIVE_SPURIOUS_COUNT: u64 = 0;
 #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
@@ -728,10 +735,21 @@ unsafe fn nvme_submit_command(admin: bool, mut command: NvmeCommand) -> Option<u
     nvme_mmio_write32(nvme_sq_doorbell(sq_qid), *sq_tail as u32);
 
     let mut timeout = NVME_TIMEOUT_LOOPS;
-    if NVME_INFO.irq_mode != IrqMode::None {
-        core::arch::asm!("sti", options(nostack));
-    }
+    let irq = NVME_INFO.irq_mode != IrqMode::None;
+    // Interrupt-driven completion on the I/O data path (full-os Part III, drivers).
+    // Wait with interrupts DISABLED around the CQ check, then for an I/O command
+    // re-enable + halt ATOMICALLY (`sti; hlt`): a completion MSI delivered after
+    // the check is still pending and wakes the halt -- closing the missed-wakeup
+    // race a plain enabled-throughout `hlt` hit during early-boot I/O (the timer
+    // is not yet firing then; see remediation §5). The CQ check stays the
+    // authoritative completion test, and every return path leaves interrupts
+    // disabled (the loop's original exit contract). Admin/init commands keep the
+    // busy-poll -- no `hlt` before a wake source is guaranteed -- briefly enabling
+    // interrupts so the MSI is still serviced/EOI'd.
     loop {
+        if irq {
+            core::arch::asm!("cli", options(nostack));
+        }
         let (cq_page, cq_head, cq_phase, cq_depth, cq_qid) = if admin {
             (
                 NVME_ADMIN_CQ.0.as_ptr() as *const NvmeCompletion,
@@ -752,9 +770,8 @@ unsafe fn nvme_submit_command(admin: bool, mut command: NvmeCommand) -> Option<u
         let cqe = read_volatile(cq_page.add(*cq_head as usize));
         let phase = cqe.status & 1;
         if phase == *cq_phase && cqe.cid == cid {
-            if NVME_INFO.irq_mode != IrqMode::None {
-                core::arch::asm!("cli", options(nostack));
-            }
+            // Interrupts are already disabled (cli above, or never enabled) --
+            // matches the original cli-on-completion return contract.
             let status_code = cqe.status >> 1;
             *cq_head += 1;
             if *cq_head == cq_depth {
@@ -768,15 +785,30 @@ unsafe fn nvme_submit_command(admin: bool, mut command: NvmeCommand) -> Option<u
             return Some(cqe.result);
         }
         if timeout == 0 {
-            if NVME_INFO.irq_mode != IrqMode::None {
-                core::arch::asm!("cli", options(nostack));
-            }
+            // Interrupts already disabled -> return matches the original contract.
             NVME_TIMEOUT_COUNT = NVME_TIMEOUT_COUNT.wrapping_add(1);
             serial_write(b"BLK: flush timeout\n");
             return None;
         }
         timeout -= 1;
-        core::arch::asm!("pause", options(nomem, nostack));
+        if irq && !admin {
+            NVME_IRQ_WAITS = NVME_IRQ_WAITS.wrapping_add(1);
+            if !NVME_IO_IRQ_ANNOUNCED {
+                NVME_IO_IRQ_ANNOUNCED = true;
+                serial_write(b"NVME: io irq-driven completion ok\n");
+            }
+            // Atomic enable-and-halt: the sti delay-slot guarantees hlt executes
+            // before a pending completion MSI is serviced, so the IRQ wakes it.
+            // The next iteration's cli re-disables for the race-free re-check.
+            core::arch::asm!("sti; hlt", options(nomem, nostack));
+        } else if irq {
+            // Admin/init: poll, but briefly enable interrupts so the MSI is
+            // serviced/EOI'd (the next iteration's cli re-disables for the check).
+            core::arch::asm!("sti", options(nostack));
+            core::arch::asm!("pause", options(nomem, nostack));
+        } else {
+            core::arch::asm!("pause", options(nomem, nostack));
+        }
     }
 }
 

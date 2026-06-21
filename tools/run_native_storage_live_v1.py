@@ -24,6 +24,9 @@ COLD_BOOT_MARKERS = [
     "NETC4: nic ready",
     "GOSH: diag ok",
     "STORC4: journal staged",
+    # The NVMe I/O data path sleeps on its completion MSI (race-free sti;hlt),
+    # not a busy-spin -- interrupt-driven completion (remediation §5).
+    "NVME: io irq-driven completion ok",
     "GOINIT: ready",
 ]
 
