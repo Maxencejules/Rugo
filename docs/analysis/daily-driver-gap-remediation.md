@@ -169,6 +169,18 @@ is not handled. So the first *real* slice is: implement AP-side exit/block/resch
 selftest path, **not** a real app's path, so a new spawn-an-app-on-an-AP gate is
 also required. This is genuine capstone work, not a flag flip.
 
+**Re-confirmed (this pass):** the exact blocker is that `r4_exit_and_switch`
+([lib.rs](../../kernel_rs/src/lib.rs)) reads the BSP global `R4_CURRENT` (not the
+per-CPU `r4_current_smp()`), so a general app exiting *on an AP* would retire the
+wrong task — and nothing marks a production app `ap_eligible`, so this is latent,
+not a live bug. The slice is therefore a real scheduler feature: make
+`r4_exit_and_switch` per-CPU-aware (retire *this CPU's* current and, on an AP,
+return to the pull-loop instead of a BSP `r4_switch_to`), mark a spawned app
+`ap_eligible`, and add a spawn-app-on-an-AP gate. Unlike #5/#4/#7 (targeted
+mechanisms landed this pass), #1 is a feature on the exit path — every task exit
+flows through it, so a regression breaks all lanes; it warrants its own focused,
+full-gate session, not a 15th change at the tail of a large pass.
+
 ---
 
 ## 2. POSIX/runtime surface  [epoll DONE; rest MILESTONE]
