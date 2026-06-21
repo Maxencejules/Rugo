@@ -290,12 +290,25 @@ against the **live** native NVMe lane (`run_native_storage_live_v1.py`, which bo
 timeout) — `hlt` during early NVMe *init* (identify / create-queue admin commands)
 blocks with no wake, because the periodic timer is not yet reliably firing at that
 boot stage and a just-missed completion MSI (fired between the CQ check and the
-`hlt`) leaves nothing to wake the core. Reverted; the lane passes again. The
-genuine fix therefore needs an **ISR-driven completion** (`handle_irq` drains the
-CQ and wakes the specific waiter) and/or interrupt-context-aware waiting that only
-sleeps once a guaranteed wake source is live — exactly the careful, full-gate work
-a milestone warrants. (Baseline confirmed runnable: the live lane passes here, so
-the work *can* be verified — it just needs the safe design, not the naive one.)
+`hlt`) leaves nothing to wake the core. Reverted; the lane passes again.
+
+A **second, narrower** attempt — `hlt` for **I/O commands only** (`!admin`),
+keeping the busy-poll for admin/init, on the theory the data path runs after the
+scheduler timer is live — **also hangs** the lane. So the storage I/O (journal
+staging) runs during *early boot before the preemptive scheduler/timer is firing*,
+and the real defect is a **missed-wakeup race**: with interrupts left enabled
+throughout the wait (the existing `sti`), a completion MSI delivered *between* the
+CQ check and the `hlt` is serviced+EOI'd, leaving the `hlt` with nothing to wake
+it. The genuine fix is therefore a **race-free** wait — `cli` around the CQ check,
+then an atomic `sti; hlt` so a pending completion MSI wakes the halt (no timer
+dependence) — or a full **ISR-driven completion** where `handle_irq` drains the CQ
+and wakes the specific waiter. Both restructure the **interrupt discipline of the
+load-bearing NVMe wait loop** (the IF state on return is part of its contract), so
+this is careful, reviewed, full-gate work — definitively a milestone, now with the
+root cause and the correct design both pinned down. (Verification is runnable here:
+`python tools/run_native_storage_live_v1.py` boots `image-go-native` with
+`-device nvme`; baseline passes, a hang shows as a boot timeout — so the fix *can*
+be iterated safely; it just needs the race-free design, not a naive `hlt`.)
 
 ---
 
