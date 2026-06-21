@@ -207,11 +207,17 @@ ns_task_count` returns the live tasks **visible** in the caller's namespace (the
 whole system if global, else only same-namespace members); `op 3 ns_getpid`
 returns the namespace-**local** pid (1 for a fresh namespace's first task). Proven
 from one ring-3 client (`nsprobe`): global view `> 1` → unshare → namespaced view
-`== 1`, local pid `== 1` (`NS: pid-namespace isolated ok`, `test_pidns_v1.py`).
-Carry-forward (`pidns_v1.md`): scope `/proc`/enumeration + `kill` to the
-namespace; add mount/UTS/network namespaces; nesting/reaping semantics. cgroups +
-io_uring remain (cgroups' aggregate-across-tasks proof is gated on userspace
-multi-task spawn, which apps can't do today; io_uring needs a shared ring).
+`== 1`, local pid `== 1` (`NS: pid-namespace isolated ok`, `test_pidns_v1.py`). A
+second namespace type, **UTS** (per-namespace hostname), followed as `sys_nsctl`
+ops 4/5 — proving the additive-ID window is not actually a wall (new ops on an
+existing id need no new id): a fresh namespace inherits the global `"rugo"`, sets
+its own `"ctr"`, and reads it back (`NS: uts-namespace hostname ok`). Carry-forward
+(`pidns_v1.md`): scope `/proc`/enumeration + `kill` to the namespace; add
+mount/network namespaces; nesting/reaping. cgroups + io_uring remain — cgroups'
+aggregate-across-tasks proof is genuinely gated on userspace multi-PROCESS spawn
+(clone threads share one address space + brk, so they can't demonstrate the
+cross-address-space aggregation that distinguishes a cgroup from a per-process
+rlimit), and apps can't spawn processes today; io_uring needs a shared ring.
 
 ---
 
