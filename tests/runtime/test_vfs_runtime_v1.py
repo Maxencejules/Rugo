@@ -39,7 +39,9 @@ def test_vfs_tree_create_list_persist(qemu_go_c4_runtime, find_in_order):
         "shutdown\n"
     ).stdout
     find_in_order(second, [
-        "VFS: mount ok files=0x0000000000000002",
+        # 3 persisted nodes: /etc + /etc/motd created here, plus the boot-
+        # provisioned /shadow credential store (cred.rs).
+        "VFS: mount ok files=0x0000000000000003",
         "hello-rugo",
         "FSH: cat ok",
         "FSH: rm ok",

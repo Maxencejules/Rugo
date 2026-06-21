@@ -189,6 +189,12 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
         # live task table for ap_eligible Ready tasks (under the run-queue lock) and
         # runs them in ring 3 -- no per-task dispatch from the BSP, each exactly once.
         "SMP: live sched ran=0x0000000000000003 ap-affinity ok",
+        # AP-side GENERAL exit/reschedule: an AP runs a task that exits via the
+        # normal sys_exit syscall path (int 0x80, not the int 0x81 retire trap) --
+        # r4_exit_and_switch made per-CPU retires it (stepping CR3 to ap_saved_cr3,
+        # since an AP's kernel stack is not mapped in the shared table) and returns
+        # the AP to its pull-loop. The path a real spawned app takes on an AP.
+        "SMP: ap general-exit ran=0x0000000000000001 ok",
         # Preemptive time-slicing on an AP (live per-CPU scheduler slice 4): an AP
         # runs TWO CPU-bound tasks in ring 3 with IF=1; its OWN periodic LAPIC timer
         # fires INSIDE the running task (hits= field, >0) and RESCHEDULES the core to

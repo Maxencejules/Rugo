@@ -1502,6 +1502,34 @@ pub(crate) unsafe fn ap_user_trap(frame: *mut u64) {
     *frame.add(21) = 0x10; // SS (ring 0 data)
 }
 
+/// The kernel CR3 this AP saved before entering ring 3 (where its per-CPU kernel
+/// stack is mapped). The general-exit path steps to THIS, not `SHARED_PML4_PHYS`,
+/// before freeing the task's address space -- an AP's kernel stack is not
+/// guaranteed mapped in the shared table.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn ap_saved_cr3() -> u64 {
+    AP_SAVED_CR3.load(Ordering::Acquire)
+}
+
+/// AP-side GENERAL exit (full-os guide Part I.3, live SMP scheduler): a task that
+/// ran on this application processor exited via the general `sys_exit` path (an
+/// `int 0x80`), not the dedicated `int 0x81` retire trap (`ap_user_done`).
+/// `r4_exit_and_switch` has already retired the task + released its address space
+/// (stepping CR3 to `ap_saved_cr3()` first); here we just clear this CPU's
+/// `current`, signal completion (`SMP_LIVE_RAN`), and return to the pull-loop to
+/// claim the next ready task -- the AP analogue of the BSP reschedule. Never returns.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn ap_exit_park() -> ! {
+    core::arch::asm!("mov qword ptr gs:[16], 0", options(nostack)); // no current task
+    SMP_LIVE_RAN.fetch_add(1, Ordering::AcqRel);
+    loop {
+        ap_poll_work();
+        ap_poll_rq();
+        ap_pull_r4_task();
+        core::arch::asm!("sti; hlt", options(nomem, nostack));
+    }
+}
+
 /// Kernel continuation after an AP's ring-3 user task returns: publish
 /// completion (the BSP's smp_dispatch_work is waiting on WORK_DONE), then resume
 /// normal AP duty.
@@ -2095,6 +2123,16 @@ static AP_PULL_CODE: [u8; 35] = [
     0xF6, 0xCD, 0x81, 0xEB, 0xFE,
 ];
 
+// Ring-3 code for the AP general-exit self-test: a bare `sys_exit` -- it exits via
+// the GENERAL syscall path (int 0x80, nr=2 -> r4_exit_and_switch), not the int 0x81
+// retire trap, so it exercises the AP-side general exit/reschedule.
+//   B8 02 00 00 00  mov eax, 2   (SYS exit)   31 FF  xor edi,edi   CD 80  int 0x80
+//   EB FE  jmp $  (unreached)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static AP_EXIT_CODE: [u8; 11] = [
+    0xB8, 0x02, 0x00, 0x00, 0x00, 0x31, 0xFF, 0xCD, 0x80, 0xEB, 0xFE,
+];
+
 /// Called from the AP park loop: when live-scheduler mode is on, claim one READY R4
 /// task from the run set [SMP_LIVE_BASE, +COUNT) under R4_RQ_LOCK (atomic claim, so
 /// the BSP/another CPU can't take the same one), set it as this CPU's per-CPU
@@ -2276,6 +2314,66 @@ unsafe fn smp_live_sched_selftest() -> bool {
     serial_write(b"SMP: live sched ran=0x");
     serial_write_hex(ran);
     serial_write(b" ap-affinity");
+    if ok {
+        serial_write(b" ok\n");
+    } else {
+        serial_write(b" FAIL\n");
+    }
+    ok
+}
+
+/// AP-side GENERAL exit self-test (full-os guide Part I.3): create one AP-eligible
+/// task whose ring-3 code is a bare `sys_exit` (the general `int 0x80` path, not
+/// the `int 0x81` retire trap), let an AP claim + run it, and confirm it exited
+/// through `r4_exit_and_switch`'s per-CPU AP branch (which retires it, releases its
+/// address space on the AP after stepping CR3 to `ap_saved_cr3()`, signals
+/// `SMP_LIVE_RAN`, and returns the AP to its pull-loop). The missing piece for
+/// running a *real* spawned app on an AP: general syscall-path exit/reschedule.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn smp_ap_general_exit_selftest() -> bool {
+    let tid: usize = crate::R4_MAX_TASKS - 1 - 4; // below the live-sched run set
+    const CODE_VA: u64 = 0x0140_0000;
+    const STACK_TOP: u64 = 0x0013_0000;
+    const STACK_PAGE: u64 = STACK_TOP - 0x1000;
+    let kcr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) kcr3, options(nomem, nostack));
+    let ucr3 = match crate::mm::address_space_create(kcr3) {
+        Some(p) => p,
+        None => return false,
+    };
+    if !crate::mm::as_copyout(ucr3, CODE_VA, &AP_EXIT_CODE)
+        || !crate::mm::as_map_zeroed(ucr3, STACK_PAGE, 0x1000)
+    {
+        crate::mm::address_space_release(ucr3);
+        return false;
+    }
+    crate::r4_init_task(tid, CODE_VA, STACK_TOP, 0);
+    crate::R4_TASKS[tid].pml4_phys = ucr3;
+    crate::R4_TASKS[tid].ap_eligible = true; // only an AP claims it
+    crate::R4_TASKS[tid].state = crate::R4State::Ready;
+    SMP_LIVE_RAN.store(0, Ordering::Release);
+    SMP_LIVE_BASE.store(tid as u64, Ordering::Release);
+    SMP_LIVE_COUNT.store(1, Ordering::Release);
+    SMP_LIVE_MODE.store(1, Ordering::Release); // an AP may now pull + run it
+    let mut spins = 0u64;
+    while SMP_LIVE_RAN.load(Ordering::Acquire) < 1 && spins < 300_000_000 {
+        core::hint::spin_loop();
+        spins += 1;
+    }
+    SMP_LIVE_MODE.store(0, Ordering::Release);
+    let ran = SMP_LIVE_RAN.load(Ordering::Acquire);
+    // The general-exit path already released the task's address space ON THE AP
+    // (CR3 stepped to ap_saved_cr3() first, so the AP is provably off ucr3 before
+    // the free, and `ran` was incremented after). So -- unlike the int 0x81 path --
+    // we must NOT free it again here; just retire the slot under the run-queue lock.
+    if ran >= 1 {
+        r4_rq_lock();
+        crate::R4_TASKS[tid].state = crate::R4State::Dead;
+        r4_rq_unlock();
+    }
+    let ok = ran >= 1;
+    serial_write(b"SMP: ap general-exit ran=0x");
+    serial_write_hex(ran);
     if ok {
         serial_write(b" ok\n");
     } else {
@@ -2999,6 +3097,10 @@ pub fn smp_init() {
                 // Live SMP scheduler: an AP autonomously pulls READY R4 tasks from
                 // the run set (claiming each under the run-queue lock) and runs them.
                 let _ = smp_live_sched_selftest();
+                // AP-side GENERAL exit: an AP runs a task that exits via the normal
+                // sys_exit syscall path (not the int 0x81 retire trap) and returns
+                // to its pull-loop -- the path a real spawned app takes on an AP.
+                let _ = smp_ap_general_exit_selftest();
                 // Live SMP scheduler slice 4: an AP runs two CPU-bound tasks
                 // PREEMPTIBLY (IF=1); its own LAPIC timer fires inside the running
                 // ring-3 task and RESCHEDULES the core between the two (time-slicing).

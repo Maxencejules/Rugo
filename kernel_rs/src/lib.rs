@@ -51,6 +51,22 @@ pub(crate) mod dma;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod sha256;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod cred;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod epoll;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod rng;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod audit;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod dmesg;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod gpt;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod fat16;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod pqsig;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod mount;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tty;
@@ -346,54 +362,13 @@ fn serial_write(s: &[u8]) {
     // audit) so userspace can read the kernel log via sys_sysinfo op 4.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe {
-        klog_append(s);
+        crate::dmesg::klog_append(s);
     }
 }
 
-// dmesg ring buffer: a heap-free fixed ring that captures every serial_write
-// line. Oldest bytes are overwritten once full; reads return the most recent
-// `len` bytes in oldest->newest order (full-os guide Part V.11 / IV.10).
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-const KLOG_CAP: usize = 8192;
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static mut KLOG: [u8; KLOG_CAP] = [0; KLOG_CAP];
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static mut KLOG_HEAD: usize = 0;
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-static mut KLOG_LEN: usize = 0;
-
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn klog_append(s: &[u8]) {
-    for &b in s {
-        KLOG[KLOG_HEAD] = b;
-        KLOG_HEAD = (KLOG_HEAD + 1) % KLOG_CAP;
-        if KLOG_LEN < KLOG_CAP {
-            KLOG_LEN += 1;
-        }
-    }
-}
-
-/// Copy the most recent `min(len, valid)` bytes of the dmesg ring into the
-/// user buffer at `ptr`, in oldest->newest order. Returns the count copied,
-/// or u64::MAX if the user buffer is unwritable.
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn klog_read(ptr: u64, len: usize) -> u64 {
-    let n = core::cmp::min(len, KLOG_LEN);
-    if n == 0 {
-        return 0;
-    }
-    let start = (KLOG_HEAD + KLOG_CAP - n) % KLOG_CAP;
-    let first = core::cmp::min(n, KLOG_CAP - start);
-    if copyout_user(ptr, &KLOG[start..start + first], first).is_err() {
-        return 0xFFFF_FFFF_FFFF_FFFF;
-    }
-    if n > first
-        && copyout_user(ptr + first as u64, &KLOG[0..n - first], n - first).is_err()
-    {
-        return 0xFFFF_FFFF_FFFF_FFFF;
-    }
-    n as u64
-}
+// The dmesg ring buffer lives in `crate::dmesg` (gap #9 modularization):
+// `serial_write` above mirrors every line into it via `crate::dmesg::klog_append`,
+// and userspace reads it via sys_sysinfo op 4 (`crate::dmesg::klog_read`).
 
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 fn ascii_upper(b: u8) -> u8 {
@@ -404,479 +379,14 @@ fn ascii_upper(b: u8) -> u8 {
     }
 }
 
-/// Read a file by its 11-byte 8.3 directory name from the FAT16 volume at a
-/// fixed LBA into `out` (single cluster, v1). Returns the byte count, or None
-/// if the volume/BPB is bad or the file is absent (full-os guide Part II.5 FAT;
-/// shared by `sys_sysinfo` op 6 and the `/mnt` open path).
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn fat16_read_named(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
-    const VOL_LBA: u64 = 2048;
-    if !storage::r4_storage_available() || !block_io_dispatch(false, VOL_LBA, 512, false) {
-        return None;
-    }
-    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
-    let spc = BLK_DATA_PAGE.0[13] as u64;
-    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
-    let nfats = BLK_DATA_PAGE.0[16] as u64;
-    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
-    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
-    if bps != 512 || spc == 0 || nfats == 0 {
-        return None;
-    }
-    let root_lba = VOL_LBA + reserved + nfats * spf;
-    let root_sectors = (root_entries * 32 + 511) / 512;
-    let data_lba = root_lba + root_sectors;
-    let mut first_cluster = 0u64;
-    let mut file_size = 0u64;
-    let mut s = 0u64;
-    'scan: while s < root_sectors {
-        if !block_io_dispatch(false, root_lba + s, 512, false) {
-            return None;
-        }
-        let mut e = 0usize;
-        while e < 16 {
-            let base = e * 32;
-            if BLK_DATA_PAGE.0[base] == 0 {
-                break 'scan;
-            }
-            if BLK_DATA_PAGE.0[base..base + 11] == *target {
-                first_cluster = u16::from_le_bytes([
-                    BLK_DATA_PAGE.0[base + 26],
-                    BLK_DATA_PAGE.0[base + 27],
-                ]) as u64;
-                file_size = u32::from_le_bytes([
-                    BLK_DATA_PAGE.0[base + 28],
-                    BLK_DATA_PAGE.0[base + 29],
-                    BLK_DATA_PAGE.0[base + 30],
-                    BLK_DATA_PAGE.0[base + 31],
-                ]) as u64;
-                break 'scan;
-            }
-            e += 1;
-        }
-        s += 1;
-    }
-    if first_cluster < 2 || file_size == 0 {
-        return None;
-    }
-    let cluster_lba = data_lba + (first_cluster - 2) * spc;
-    if !block_io_dispatch(false, cluster_lba, 512, false) {
-        return None;
-    }
-    let n = core::cmp::min(file_size as usize, out.len()).min(512);
-    out[..n].copy_from_slice(&BLK_DATA_PAGE.0[..n]);
-    Some(n)
-}
+// The FAT16 on-disk parser (read_named / read_chain / write_named / list) lives
+// in `crate::fat16` (gap #9 modularization); the /mnt FAT_FILE cache + fd
+// integration stays here and calls `crate::fat16::*`.
 
-/// Read a file by its 8.3 name following the FAT16 cluster CHAIN (full-os guide
-/// Part II.5): unlike `fat16_read_named` (first cluster only), this walks the FAT
-/// from the directory's first cluster to the end-of-chain marker, so it reads
-/// files spanning multiple clusters. Returns min(file_size, out.len()) bytes, or
-/// None on a bad volume/absent file/corrupt chain.
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn fat16_read_chain(target: &[u8; 11], out: &mut [u8]) -> Option<usize> {
-    const VOL_LBA: u64 = 2048;
-    if !storage::r4_storage_available() || !block_io_dispatch(false, VOL_LBA, 512, false) {
-        return None;
-    }
-    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
-    let spc = BLK_DATA_PAGE.0[13] as u64;
-    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
-    let nfats = BLK_DATA_PAGE.0[16] as u64;
-    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
-    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
-    if bps != 512 || spc == 0 || nfats == 0 {
-        return None;
-    }
-    let fat_lba = VOL_LBA + reserved;
-    let root_lba = fat_lba + nfats * spf;
-    let root_sectors = (root_entries * 32 + 511) / 512;
-    let data_lba = root_lba + root_sectors;
+// GPT partition-table parsing (parse + CRC self-tests) lives in `crate::gpt`
+// (gap #9 modularization): boot calls `crate::gpt::gpt_parse_selftest` and
+// `crate::gpt::gpt_crc_selftest`.
 
-    // Locate the directory entry: first cluster + file size.
-    let mut cluster = 0u64;
-    let mut file_size = 0u64;
-    let mut s = 0u64;
-    'scan: while s < root_sectors {
-        if !block_io_dispatch(false, root_lba + s, 512, false) {
-            return None;
-        }
-        let mut e = 0usize;
-        while e < 16 {
-            let base = e * 32;
-            if BLK_DATA_PAGE.0[base] == 0 {
-                break 'scan;
-            }
-            if BLK_DATA_PAGE.0[base..base + 11] == *target {
-                cluster =
-                    u16::from_le_bytes([BLK_DATA_PAGE.0[base + 26], BLK_DATA_PAGE.0[base + 27]])
-                        as u64;
-                file_size = u32::from_le_bytes([
-                    BLK_DATA_PAGE.0[base + 28],
-                    BLK_DATA_PAGE.0[base + 29],
-                    BLK_DATA_PAGE.0[base + 30],
-                    BLK_DATA_PAGE.0[base + 31],
-                ]) as u64;
-                break 'scan;
-            }
-            e += 1;
-        }
-        s += 1;
-    }
-    if cluster < 2 || file_size == 0 {
-        return None;
-    }
-
-    // Walk the chain: copy each cluster's sectors, then follow the FAT16 entry
-    // (2 bytes per cluster) to the next cluster until a terminal value. A valid data
-    // cluster is [2, 0xFFEF]; 0xFFF0..=0xFFF6 are reserved, 0xFFF7 is a bad-cluster
-    // marker, and 0xFFF8..=0xFFFF is end-of-chain. Stopping at `< 0xFFF0` means a
-    // reserved or bad-cluster FAT entry terminates the read instead of being followed
-    // as a (bogus, out-of-range) cluster number -- which would compute a wild
-    // data_lba and read garbage off the disk. The iteration guard additionally bounds
-    // a corrupt self-referential chain so it cannot loop forever.
-    let want = core::cmp::min(file_size as usize, out.len());
-    let mut written = 0usize;
-    let mut guard = 0u64;
-    let max_clusters = out.len() as u64 / (spc * 512) + 4;
-    while cluster >= 2 && cluster < 0xFFF0 && written < want {
-        guard += 1;
-        if guard > max_clusters {
-            return None;
-        }
-        let cluster_lba = data_lba + (cluster - 2) * spc;
-        let mut sec = 0u64;
-        while sec < spc && written < want {
-            if !block_io_dispatch(false, cluster_lba + sec, 512, false) {
-                return None;
-            }
-            let n = core::cmp::min(512, want - written);
-            out[written..written + n].copy_from_slice(&BLK_DATA_PAGE.0[..n]);
-            written += n;
-            sec += 1;
-        }
-        // Read the FAT entry for `cluster` (this overwrites BLK_DATA_PAGE, but the
-        // cluster data was already copied into `out`).
-        let fat_byte = cluster * 2;
-        let fat_sec = fat_lba + fat_byte / 512;
-        let off = (fat_byte % 512) as usize;
-        if !block_io_dispatch(false, fat_sec, 512, false) {
-            return None;
-        }
-        cluster = u16::from_le_bytes([BLK_DATA_PAGE.0[off], BLK_DATA_PAGE.0[off + 1]]) as u64;
-    }
-    Some(written)
-}
-
-/// GPT partition-table parse self-test (full-os guide Part II.5, partitions):
-/// read the GPT header at LBA 1, validate the "EFI PART" signature, then walk the
-/// partition-entry array and count the live entries (non-zero type GUID), logging
-/// each one's first/last LBA. Runs at boot; reports `GPT: none` when LBA 1 is not
-/// a GPT header (the common case). Complements the MBR parser (sysinfo op 5).
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn gpt_parse_selftest() {
-    if !storage::r4_storage_available() || !block_io_dispatch(false, 1, 512, false) {
-        serial_write(b"GPT: none\n");
-        return;
-    }
-    if BLK_DATA_PAGE.0[0..8] != *b"EFI PART" {
-        serial_write(b"GPT: none\n");
-        return;
-    }
-    let entry_lba = u64::from_le_bytes(BLK_DATA_PAGE.0[72..80].try_into().unwrap());
-    let num_entries = u32::from_le_bytes(BLK_DATA_PAGE.0[80..84].try_into().unwrap()) as u64;
-    let entry_size = u32::from_le_bytes(BLK_DATA_PAGE.0[84..88].try_into().unwrap()) as u64;
-    // GPT entries are >= 128 bytes (UEFI spec); bounding entry_size to [128, 512]
-    // also guarantees every per-sector entry's fields (off + 48) stay within the
-    // 512-byte BLK_DATA_PAGE, so a malformed header cannot drive a slice-OOB
-    // panic at boot.
-    if entry_size < 128 || entry_size > 512 || entry_lba == 0 {
-        serial_write(b"GPT: bad header\n");
-        return;
-    }
-    let per_sector = 512 / entry_size;
-    // v1 bound: inspect the first 16 entries (typically 4 sectors). A larger
-    // table is valid; this self-test just confirms the parse, not full coverage.
-    let max_entries = core::cmp::min(num_entries, 16);
-    let mut count = 0u64;
-    let mut e = 0u64;
-    'walk: while e < max_entries {
-        let sector = entry_lba + e / per_sector;
-        if !block_io_dispatch(false, sector, 512, false) {
-            break 'walk;
-        }
-        let mut j = 0u64;
-        while j < per_sector && e < max_entries {
-            let off = (j * entry_size) as usize;
-            let mut used = false;
-            let mut k = 0usize;
-            while k < 16 {
-                if BLK_DATA_PAGE.0[off + k] != 0 {
-                    used = true;
-                    break;
-                }
-                k += 1;
-            }
-            if used {
-                let first =
-                    u64::from_le_bytes(BLK_DATA_PAGE.0[off + 32..off + 40].try_into().unwrap());
-                let last =
-                    u64::from_le_bytes(BLK_DATA_PAGE.0[off + 40..off + 48].try_into().unwrap());
-                serial_write(b"GPT: part first=0x");
-                serial_write_hex(first);
-                serial_write(b" last=0x");
-                serial_write_hex(last);
-                serial_write(b"\n");
-                count += 1;
-            }
-            j += 1;
-            e += 1;
-        }
-    }
-    serial_write(b"GPT: parsed n=0x");
-    serial_write_hex(count);
-    serial_write(b"\n");
-}
-
-/// IEEE 802.3 CRC-32 (reflected, polynomial 0xEDB88320) over `data`. Bitwise (no
-/// table) to keep the .text small. The same CRC GPT uses for its header and
-/// partition-array integrity fields. (full-os guide Part II.5, partitions.)
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    let mut i = 0;
-    while i < data.len() {
-        crc ^= data[i] as u32;
-        let mut k = 0;
-        while k < 8 {
-            let m = (crc & 1).wrapping_neg(); // 0xFFFFFFFF when the low bit is set
-            crc = (crc >> 1) ^ (0xEDB8_8320 & m);
-            k += 1;
-        }
-        i += 1;
-    }
-    !crc
-}
-
-/// GPT header-CRC validation self-test (full-os guide Part II.5): the existing GPT
-/// parser trusts a signed header without checking its CRC, so a corrupted-but-signed
-/// header is accepted silently. This proves the CRC machinery the validation needs:
-/// (1) a known-answer test that crc32 is the real IEEE CRC-32 (CRC32("123456789") ==
-/// 0xCBF43926); (2) build a synthetic GPT header, stamp its header CRC at offset 16,
-/// and validate it the standard GPT way (zero the CRC field, recompute over
-/// HeaderSize bytes, compare); (3) flip a byte and confirm the recomputed CRC no
-/// longer matches (a corrupted header is rejected). Marker `GPT: hdr crc ok`.
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn gpt_crc_selftest() {
-    // (1) Known-answer test: the standard CRC-32 check value.
-    let kat = crc32(b"123456789") == 0xCBF4_3926;
-
-    // (2) Synthesize a minimal GPT header and stamp its header CRC (offset 16..20).
-    const HDR_SIZE: usize = 92;
-    let mut hdr = [0u8; HDR_SIZE];
-    hdr[0..8].copy_from_slice(b"EFI PART");
-    hdr[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes()); // revision 1.0
-    hdr[12..16].copy_from_slice(&(HDR_SIZE as u32).to_le_bytes()); // HeaderSize
-    // offset 16..20 = header CRC, left zero while computing
-    hdr[24..32].copy_from_slice(&1u64.to_le_bytes()); // MyLBA = 1
-    let stored = crc32(&hdr[..HDR_SIZE]);
-    hdr[16..20].copy_from_slice(&stored.to_le_bytes());
-
-    // Validate as a real GPT consumer would: read the stored CRC, zero the field,
-    // recompute over HeaderSize bytes, and compare.
-    let read_crc = u32::from_le_bytes(hdr[16..20].try_into().unwrap());
-    let mut tmp = hdr;
-    tmp[16..20].copy_from_slice(&[0u8; 4]);
-    let valid = crc32(&tmp[..HDR_SIZE]) == read_crc;
-
-    // (3) Corrupt one header byte: the recomputed CRC must no longer match.
-    let mut bad = hdr;
-    bad[24] ^= 0xFF;
-    bad[16..20].copy_from_slice(&[0u8; 4]);
-    let rejects = crc32(&bad[..HDR_SIZE]) != read_crc;
-
-    if kat && valid && rejects {
-        serial_write(b"GPT: hdr crc ok\n");
-    } else {
-        serial_write(b"GPT: hdr crc fail\n");
-    }
-}
-
-/// Write a single-cluster file to the FAT16 root directory (full-os guide Part
-/// II.5, FS maturity): allocate the first free cluster, mark it EOC in every FAT
-/// copy, write the data into that cluster, and fill a free root-dir 8.3 entry.
-/// v1 boundary: one cluster (≤512 B), root dir only, no overwrite/append/chain.
-/// Returns true on success. Shares the BPB parse with `fat16_read_named`.
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn fat16_write_named(target: &[u8; 11], data: &[u8]) -> bool {
-    const VOL_LBA: u64 = 2048;
-    if !storage::r4_storage_available() || data.is_empty() || data.len() > 512 {
-        return false;
-    }
-    if !block_io_dispatch(false, VOL_LBA, 512, false) {
-        return false;
-    }
-    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
-    let spc = BLK_DATA_PAGE.0[13] as u64;
-    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
-    let nfats = BLK_DATA_PAGE.0[16] as u64;
-    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
-    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
-    if bps != 512 || spc == 0 || nfats == 0 || spf == 0 {
-        return false;
-    }
-    let fat_lba = VOL_LBA + reserved;
-    let root_lba = fat_lba + nfats * spf;
-    let root_sectors = (root_entries * 32 + 511) / 512;
-    let data_lba = root_lba + root_sectors;
-
-    // 1) Find a free root-dir slot AND reject a duplicate name -- BEFORE any
-    // on-disk mutation, so a full directory or an already-present name leaks
-    // nothing (the deterministic leak the review found). Scan to the first 0x00
-    // (end-of-directory): entries beyond it are unused.
-    let mut slot_lba = 0u64;
-    let mut slot_off = 0usize;
-    let mut found_slot = false;
-    let mut ended = false;
-    let mut s = 0u64;
-    while s < root_sectors && !ended {
-        if !block_io_dispatch(false, root_lba + s, 512, false) {
-            return false;
-        }
-        let mut e = 0usize;
-        while e < 16 {
-            let base = e * 32;
-            let b0 = BLK_DATA_PAGE.0[base];
-            if b0 == 0x00 {
-                // End of directory: the first free slot if none seen earlier.
-                if !found_slot {
-                    slot_lba = root_lba + s;
-                    slot_off = base;
-                    found_slot = true;
-                }
-                ended = true;
-                break;
-            }
-            if b0 != 0xE5 && BLK_DATA_PAGE.0[base..base + 11] == *target {
-                return false; // name already exists -> refuse (no duplicate entry)
-            }
-            if b0 == 0xE5 && !found_slot {
-                slot_lba = root_lba + s;
-                slot_off = base;
-                found_slot = true;
-            }
-            e += 1;
-        }
-        s += 1;
-    }
-    if !found_slot {
-        return false; // directory full -> nothing committed
-    }
-    // 2) Find a free cluster (first FAT sector, clusters 2..255) -- still no
-    // mutation, so a full FAT also leaks nothing.
-    if !block_io_dispatch(false, fat_lba, 512, false) {
-        return false;
-    }
-    let mut cluster = 0u64;
-    let mut c = 2usize;
-    while c < 256 {
-        if u16::from_le_bytes([BLK_DATA_PAGE.0[c * 2], BLK_DATA_PAGE.0[c * 2 + 1]]) == 0 {
-            cluster = c as u64;
-            break;
-        }
-        c += 1;
-    }
-    if cluster < 2 {
-        return false; // no free cluster -> nothing committed
-    }
-    // 3) Commit: mark the cluster end-of-chain in every FAT copy, write the data
-    // cluster, then link it from the directory entry. (A mid-commit device-write
-    // failure can still leave an orphaned cluster or divergent FAT copies; that
-    // is inherent to a non-journaling FAT writer -- see the v1 boundary.)
-    BLK_DATA_PAGE.0[(cluster as usize) * 2] = 0xFF;
-    BLK_DATA_PAGE.0[(cluster as usize) * 2 + 1] = 0xFF;
-    let mut f = 0u64;
-    while f < nfats {
-        if !block_io_dispatch(true, fat_lba + f * spf, 512, false) {
-            return false;
-        }
-        f += 1;
-    }
-    let cluster_lba = data_lba + (cluster - 2) * spc;
-    core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
-    BLK_DATA_PAGE.0[..data.len()].copy_from_slice(data);
-    if !block_io_dispatch(true, cluster_lba, 512, false) {
-        return false;
-    }
-    // Re-read the chosen directory sector (the buffer was reused above) and fill
-    // the slot we reserved in step 1.
-    if !block_io_dispatch(false, slot_lba, 512, false) {
-        return false;
-    }
-    core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr().add(slot_off), 0, 32);
-    BLK_DATA_PAGE.0[slot_off..slot_off + 11].copy_from_slice(target);
-    BLK_DATA_PAGE.0[slot_off + 11] = 0x20; // attr = archive
-    BLK_DATA_PAGE.0[slot_off + 26] = (cluster & 0xFF) as u8;
-    BLK_DATA_PAGE.0[slot_off + 27] = ((cluster >> 8) & 0xFF) as u8;
-    BLK_DATA_PAGE.0[slot_off + 28..slot_off + 32]
-        .copy_from_slice(&(data.len() as u32).to_le_bytes());
-    block_io_dispatch(true, slot_lba, 512, false)
-}
-
-/// List the FAT16 root directory (full-os guide Part II.5): log each live 8.3
-/// entry as `FATLS: <name11> size=0x<hex>` and return the count, or u64::MAX on
-/// a bad volume. Skips free (0x00), deleted (0xE5), and long-name (attr 0x0F)
-/// entries. Shares the BPB parse with `fat16_read_named`.
-#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-unsafe fn fat16_list() -> u64 {
-    const VOL_LBA: u64 = 2048;
-    if !storage::r4_storage_available() || !block_io_dispatch(false, VOL_LBA, 512, false) {
-        return 0xFFFF_FFFF_FFFF_FFFF;
-    }
-    let bps = u16::from_le_bytes([BLK_DATA_PAGE.0[11], BLK_DATA_PAGE.0[12]]) as u64;
-    let reserved = u16::from_le_bytes([BLK_DATA_PAGE.0[14], BLK_DATA_PAGE.0[15]]) as u64;
-    let nfats = BLK_DATA_PAGE.0[16] as u64;
-    let root_entries = u16::from_le_bytes([BLK_DATA_PAGE.0[17], BLK_DATA_PAGE.0[18]]) as u64;
-    let spf = u16::from_le_bytes([BLK_DATA_PAGE.0[22], BLK_DATA_PAGE.0[23]]) as u64;
-    if bps != 512 || nfats == 0 {
-        return 0xFFFF_FFFF_FFFF_FFFF;
-    }
-    let root_lba = VOL_LBA + reserved + nfats * spf;
-    let root_sectors = (root_entries * 32 + 511) / 512;
-    let mut count = 0u64;
-    let mut s = 0u64;
-    'scan: while s < root_sectors {
-        if !block_io_dispatch(false, root_lba + s, 512, false) {
-            return 0xFFFF_FFFF_FFFF_FFFF;
-        }
-        let mut e = 0usize;
-        while e < 16 {
-            let base = e * 32;
-            let first = BLK_DATA_PAGE.0[base];
-            if first == 0x00 {
-                break 'scan; // end of directory
-            }
-            // Skip deleted (0xE5) and long-file-name (attr 0x0F) entries.
-            if first != 0xE5 && BLK_DATA_PAGE.0[base + 11] != 0x0F {
-                let size = u32::from_le_bytes([
-                    BLK_DATA_PAGE.0[base + 28],
-                    BLK_DATA_PAGE.0[base + 29],
-                    BLK_DATA_PAGE.0[base + 30],
-                    BLK_DATA_PAGE.0[base + 31],
-                ]);
-                serial_write(b"FATLS: ");
-                serial_write(&BLK_DATA_PAGE.0[base..base + 11]);
-                serial_write(b" size=0x");
-                serial_write_hex(size as u64);
-                serial_write(b"\n");
-                count += 1;
-            }
-            e += 1;
-        }
-        s += 1;
-    }
-    count
-}
 
 /// Symmetric cipher for at-rest disk encryption (full-os guide Part IV.10).
 /// AES-128 in CTR mode keyed on a fixed key, per-LBA counter, so encrypt ==
@@ -1023,6 +533,44 @@ static mut KADDR_REQUEST: LimineKaddrRequest = LimineKaddrRequest {
     response: core::ptr::null(),
 };
 
+// --------------- Limine kernel-file request (full-os guide Part V.11,
+// self-hosting installer) --------------- Gives the kernel the in-memory address
+// + size of its OWN loaded ELF image, so the installer can write *real* kernel
+// bytes (not a synthetic fill) to a target disk -- the kernel-image-readable-at-
+// runtime prerequisite for self-hosting. Only the first three fields of the
+// (larger) `limine_file` are declared; we read only address (@8) and size (@16).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[repr(C)]
+struct LimineFile {
+    revision: u64,
+    address: *const u8,
+    size: u64,
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[repr(C)]
+struct LimineKernelFileResponse {
+    revision: u64,
+    kernel_file: *const LimineFile,
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[repr(C)]
+struct LimineKernelFileRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: *const LimineKernelFileResponse,
+}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe impl Sync for LimineKernelFileRequest {}
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+#[used]
+#[link_section = ".limine_requests"]
+static mut KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
+    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b,
+         0xad97e90e83f1ed67, 0x31eb5d1c5ff23b69],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
 static mut HHDM_OFFSET: u64 = 0;
 
 extern "C" {
@@ -1134,6 +682,198 @@ cfg_m3! {
         0
     }
 
+    // Distinct errno codes (full-os guide Part V.11). POSIX-ish error numbers a
+    // failing syscall stamps into the current task's `last_errno` before returning
+    // the −1 sentinel, so `sys_errno` (id 62) lets libc report ENOENT/EBADF/EACCES
+    // instead of collapsing every failure to EIO. Values match Linux/libc.h.
+    const RUGO_ENOENT: i64 = 2; // no such file/directory
+    const RUGO_EBADF: i64 = 9; // bad file descriptor
+    const RUGO_EACCES: i64 = 13; // permission denied
+    const RUGO_EINVAL: i64 = 22; // invalid argument
+
+    /// Stamp the current task's `last_errno` (the cause of the −1 it is about to
+    /// return), read back by `sys_errno`. The shared read/write paths call it in
+    /// every lane, but the per-task table (`R4_TASKS`/`R4_CURRENT`) only exists in
+    /// the go lane, so the non-go definition is a no-op (those lanes never dispatch
+    /// `sys_errno`). (full-os guide Part V.11, distinct errno.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_set_errno(code: i64) {
+        let cur = r4_current_smp(); // the RUNNING task (per-CPU on an AP)
+        if cur < R4_TASKS.len() {
+            R4_TASKS[cur].last_errno = code;
+        }
+    }
+    #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+    unsafe fn r4_set_errno(_code: i64) {}
+
+    /// Clear the current task's `last_errno` (called at syscall entry by the
+    /// dispatch, except for `sys_errno` itself). So a syscall that fails on a path
+    /// that does NOT stamp a code leaves errno at 0 -- libc then falls back to EIO,
+    /// rather than reporting a STALE code from an earlier failed call.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    pub(crate) unsafe fn r4_clear_errno() {
+        let cur = r4_current_smp();
+        if cur < R4_TASKS.len() {
+            R4_TASKS[cur].last_errno = 0;
+        }
+    }
+
+    /// sys_errno (ABI v3.2 id 62): return the current task's last error code (0 if
+    /// none). Additive, read-only, per-task; never changes another syscall's
+    /// return convention. (full-os guide Part V.11, distinct errno.)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_errno() -> u64 {
+        let cur = r4_current_smp();
+        if cur < R4_TASKS.len() {
+            R4_TASKS[cur].last_errno as u64
+        } else {
+            0
+        }
+    }
+
+    /// Next PID-namespace id to hand out. Starts at 1 (0 is the global namespace)
+    /// and only ever increments, so each `unshare` gets a unique id.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut NS_NEXT_PID: u32 = 1;
+
+    /// UTS namespace (full-os guide Part I): each PID namespace carries its own
+    /// hostname, so a task's view of the hostname is namespace-scoped. v1 stores an
+    /// 8-byte hostname encoded little-endian (a longer name is a carry-forward).
+    /// The global namespace (`pid_ns == 0`) uses `GLOBAL_HOSTNAME8`; an unshared
+    /// namespace gets its own entry in `NS_HOSTNAMES` on first `sethostname`.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut GLOBAL_HOSTNAME8: u64 = 0x6F67_7572; // "rugo" (little-endian)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct NsHostname {
+        ns: u32,
+        name8: u64,
+        active: bool,
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut NS_HOSTNAMES: [NsHostname; 8] = [NsHostname {
+        ns: 0,
+        name8: 0,
+        active: false,
+    }; 8];
+
+    /// sys_nsctl (ABI v3.2 id 57, PID namespaces — full-os guide Part I): isolate a
+    /// task's process view. op 1 = unshare_pid: move the caller into a FRESH PID
+    /// namespace (so it sees only itself + tasks it later clones) and return the new
+    /// ns id. op 2 = ns_task_count: number of live tasks visible in the caller's
+    /// namespace (the whole system in the global ns 0, just the namespace members
+    /// otherwise). op 3 = ns_getpid: the caller's namespace-LOCAL pid (1 for the
+    /// first task in a fresh namespace, i.e. its "init"), vs its global tid. op 4 =
+    /// sethostname(a2=ptr, a3=len): set the caller's UTS-namespace hostname (the
+    /// global hostname when in ns 0). op 5 = gethostname: the caller's namespace
+    /// hostname, 8 bytes little-endian -- a task in a fresh namespace reads the
+    /// global "rugo" until it sets its own.
+    /// Additive; reads/sets only the per-task `pid_ns` tag + the hostname store.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_nsctl(op: u64, a2: u64, a3: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let me = r4_current_smp(); // the RUNNING task (per-CPU on an AP)
+        if me >= R4_TASKS.len() {
+            return ERR;
+        }
+        match op {
+            1 => {
+                if NS_NEXT_PID == u32::MAX {
+                    return ERR; // namespace ids exhausted (unreachable in practice)
+                }
+                let ns = NS_NEXT_PID;
+                NS_NEXT_PID += 1;
+                R4_TASKS[me].pid_ns = ns;
+                ns as u64
+            }
+            2 => {
+                let ns = R4_TASKS[me].pid_ns;
+                let mut count = 0u64;
+                let mut t = 0usize;
+                while t < R4_NUM_TASKS {
+                    let live = !matches!(
+                        R4_TASKS[t].state,
+                        R4State::Dead | R4State::Exited
+                    );
+                    // Global ns (0) sees every live task; a real namespace sees only
+                    // its own members.
+                    if live && (ns == 0 || R4_TASKS[t].pid_ns == ns) {
+                        count += 1;
+                    }
+                    t += 1;
+                }
+                count
+            }
+            3 => {
+                let ns = R4_TASKS[me].pid_ns;
+                if ns == 0 {
+                    return me as u64; // global namespace: the real tid
+                }
+                // Namespace-local pid: rank among same-namespace tasks by tid, so the
+                // first (lowest-tid) member is pid 1 -- the namespace's init.
+                let mut rank = 1u64;
+                let mut t = 0usize;
+                while t < me {
+                    if R4_TASKS[t].pid_ns == ns
+                        && !matches!(R4_TASKS[t].state, R4State::Dead | R4State::Exited)
+                    {
+                        rank += 1;
+                    }
+                    t += 1;
+                }
+                rank
+            }
+            4 => {
+                // sethostname: store the caller's UTS-namespace hostname (8 bytes).
+                let ns = R4_TASKS[me].pid_ns;
+                let mut buf = [0u8; 8];
+                let n = core::cmp::min(a3 as usize, 8);
+                if n > 0 && copyin_user(&mut buf[..n], a2, n).is_err() {
+                    return ERR;
+                }
+                let name8 = u64::from_le_bytes(buf);
+                if ns == 0 {
+                    GLOBAL_HOSTNAME8 = name8;
+                    return 0;
+                }
+                // Find this namespace's slot, or claim a free one.
+                let mut i = 0usize;
+                let mut free = usize::MAX;
+                while i < NS_HOSTNAMES.len() {
+                    if NS_HOSTNAMES[i].active && NS_HOSTNAMES[i].ns == ns {
+                        NS_HOSTNAMES[i].name8 = name8;
+                        return 0;
+                    }
+                    if !NS_HOSTNAMES[i].active && free == usize::MAX {
+                        free = i;
+                    }
+                    i += 1;
+                }
+                if free == usize::MAX {
+                    return ERR; // hostname table full
+                }
+                NS_HOSTNAMES[free] = NsHostname { ns, name8, active: true };
+                0
+            }
+            5 => {
+                // gethostname: the caller's namespace hostname (global until set).
+                let ns = R4_TASKS[me].pid_ns;
+                if ns == 0 {
+                    return GLOBAL_HOSTNAME8;
+                }
+                let mut i = 0usize;
+                while i < NS_HOSTNAMES.len() {
+                    if NS_HOSTNAMES[i].active && NS_HOSTNAMES[i].ns == ns {
+                        return NS_HOSTNAMES[i].name8;
+                    }
+                    i += 1;
+                }
+                GLOBAL_HOSTNAME8 // a fresh namespace inherits the global name
+            }
+            _ => ERR,
+        }
+    }
+
     unsafe fn sys_open_v1(path_ptr: u64, flags: u64, _mode: u64) -> u64 {
         let path = match copyinstr_user(path_ptr, 128) {
             Ok(v) => v,
@@ -1167,6 +907,9 @@ cfg_m3! {
                 let node = match vfs::vfs_open(rel, create) {
                     Some(n) => n,
                     None => {
+                        // No such file (open without create), or the create itself
+                        // failed (table/space) -> distinct errno (Part V.11).
+                        r4_set_errno(if create { RUGO_EINVAL } else { RUGO_ENOENT });
                         return 0xFFFF_FFFF_FFFF_FFFF;
                     }
                 };
@@ -1184,6 +927,7 @@ cfg_m3! {
                     if (requested & M10_RIGHT_READ != 0 && !r_ok)
                         || (requested & M10_RIGHT_WRITE != 0 && !w_ok)
                     {
+                        r4_set_errno(RUGO_EACCES); // owner/other mode bits deny it
                         return 0xFFFF_FFFF_FFFF_FFFF;
                     }
                 }
@@ -1224,7 +968,11 @@ cfg_m3! {
                     };
                 let node = match tmpfs_open(rel, create) {
                     Some(n) => n,
-                    None => return 0xFFFF_FFFF_FFFF_FFFF,
+                    None => {
+                        // Missing /tmp file (no create) or the tmpfs table is full.
+                        r4_set_errno(if create { RUGO_EINVAL } else { RUGO_ENOENT });
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
                 };
                 let max = m10_rights_for_kind(M8FdKind::TmpFile);
                 let effective = requested | M10_RIGHT_POLL;
@@ -1360,7 +1108,7 @@ cfg_m3! {
                         j += 1;
                     }
                 }
-                let n = match fat16_read_named(&name83, &mut FAT_FILE) {
+                let n = match crate::fat16::fat16_read_named(&name83, &mut FAT_FILE) {
                     Some(n) => n,
                     None => return 0xFFFF_FFFF_FFFF_FFFF,
                 };
@@ -1464,6 +1212,8 @@ cfg_m3! {
                 return fd;
             }
         }
+        // No path matcher claimed this name -> no such file/directory.
+        r4_set_errno(RUGO_ENOENT);
         0xFFFF_FFFF_FFFF_FFFF
     }
 
@@ -1471,9 +1221,13 @@ cfg_m3! {
         if len == 0 { return 0; }
         if len > 4096 { return 0xFFFF_FFFF_FFFF_FFFF; }
         let idx = fd as usize;
-        if idx >= M8_FD_MAX { return 0xFFFF_FFFF_FFFF_FFFF; }
+        if idx >= M8_FD_MAX {
+            r4_set_errno(RUGO_EBADF); // out-of-range fd (Part V.11, distinct errno)
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         #[cfg(feature = "go_test")]
         if !r4_fd_owner_ok(idx) {
+            r4_set_errno(RUGO_EBADF);
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         if M8_FD_TABLE[idx].rights & M10_RIGHT_READ == 0 {
@@ -1643,7 +1397,7 @@ cfg_m3! {
                 n as u64
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-            M8FdKind::DevUrandom => sys_getrandom(buf, len),
+            M8FdKind::DevUrandom => crate::rng::sys_getrandom(buf, len),
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             M8FdKind::DevNull => 0, // EOF
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -1829,12 +1583,17 @@ cfg_m3! {
         if len == 0 { return 0; }
         if len > 256 { return 0xFFFF_FFFF_FFFF_FFFF; }
         let idx = fd as usize;
-        if idx >= M8_FD_MAX { return 0xFFFF_FFFF_FFFF_FFFF; }
+        if idx >= M8_FD_MAX {
+            r4_set_errno(RUGO_EBADF); // out-of-range fd (Part V.11, distinct errno)
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         #[cfg(feature = "go_test")]
         if !r4_fd_owner_ok(idx) {
+            r4_set_errno(RUGO_EBADF);
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         if M8_FD_TABLE[idx].rights & M10_RIGHT_WRITE == 0 {
+            r4_set_errno(RUGO_EACCES); // fd not opened for writing
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
 
@@ -2162,12 +1921,17 @@ cfg_m3! {
 
     unsafe fn sys_close_v1(fd: u64) -> u64 {
         let idx = fd as usize;
-        if idx >= M8_FD_MAX { return 0xFFFF_FFFF_FFFF_FFFF; }
+        if idx >= M8_FD_MAX {
+            r4_set_errno(RUGO_EBADF); // out-of-range fd (Part V.11, distinct errno)
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         if idx < 3 {
             // Keep stdio descriptors stable for compatibility-profile startup.
+            r4_set_errno(RUGO_EBADF);
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         if M8_FD_TABLE[idx].kind == M8FdKind::Free {
+            r4_set_errno(RUGO_EBADF); // not an open descriptor
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         #[cfg(feature = "go_test")]
@@ -2427,6 +2191,70 @@ cfg_m3! {
             }
         }
         ready
+    }
+
+    // sys_epoll (ABI v3.x id 55) lives in `crate::epoll` (gap #9 modularization):
+    // it owns the epoll-instance state and op dispatch and calls back into this
+    // `epoll_fd_ready` helper for per-fd readiness, which belongs here with the
+    // fd/pipe tables it reads.
+
+    /// Level-triggered readiness for one fd (the subset of sys_poll_v1's rules an
+    /// event loop needs: pipes, vfs files/dirs, console). EPOLLIN = 0x1,
+    /// EPOLLOUT = 0x4. Honors the fd's POLL/READ/WRITE rights like poll does.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    pub(crate) unsafe fn epoll_fd_ready(fd: i32, events: u16) -> u16 {
+        if fd < 0 {
+            return 0;
+        }
+        let idx = fd as usize;
+        if idx >= M8_FD_MAX {
+            return 0;
+        }
+        let rights = M8_FD_TABLE[idx].rights;
+        if rights & M10_RIGHT_POLL == 0 {
+            return 0;
+        }
+        let mut r: u16 = 0;
+        match M8_FD_TABLE[idx].kind {
+            M8FdKind::PipeR => {
+                let p = M8_FD_PIPE[idx] as usize;
+                if events & 0x1 != 0
+                    && rights & M10_RIGHT_READ != 0
+                    && p < PIPE_MAX
+                    && (PIPES[p].len > 0 || PIPES[p].writers == 0)
+                {
+                    r |= 0x1;
+                }
+            }
+            M8FdKind::PipeW => {
+                let p = M8_FD_PIPE[idx] as usize;
+                if events & 0x4 != 0
+                    && rights & M10_RIGHT_WRITE != 0
+                    && p < PIPE_MAX
+                    && PIPES[p].len < PIPE_CAP
+                {
+                    r |= 0x4;
+                }
+            }
+            M8FdKind::VfsFile | M8FdKind::VfsDir => {
+                if events & 0x1 != 0 && rights & M10_RIGHT_READ != 0 {
+                    r |= 0x1;
+                }
+                if events & 0x4 != 0 && rights & M10_RIGHT_WRITE != 0 {
+                    r |= 0x4;
+                }
+            }
+            M8FdKind::Console => {
+                if events & 0x1 != 0 && rights & M10_RIGHT_READ != 0 && serial_can_read() {
+                    r |= 0x1;
+                }
+                if events & 0x4 != 0 && rights & M10_RIGHT_WRITE != 0 {
+                    r |= 0x4;
+                }
+            }
+            _ => {}
+        }
+        r
     }
 
 }
@@ -3955,6 +3783,27 @@ cfg_r4! {
         // while the task is Blocked asleep; the PIT handler clears it and
         // makes the task Ready once the deadline passes.
         sleep_until: u64,
+        // Last error code (full-os guide Part V.11, distinct errno). The kernel
+        // ABI still returns the single −1 sentinel on failure, but well-defined
+        // failure paths (open/read/write/...) first stamp a POSIX-ish code here;
+        // `sys_errno` (id 62) returns it so libc `errno` can distinguish causes
+        // (ENOENT vs EBADF vs EACCES ...) instead of collapsing every error to EIO.
+        // Per-task so a preemption between the failing syscall and the errno query
+        // can't leak another task's code. 0 = no error recorded.
+        last_errno: i64,
+        // PID namespace id (full-os guide Part I, namespaces). 0 = the global
+        // namespace; a non-zero value (assigned by sys_nsctl unshare) isolates the
+        // task's process view -- it then sees only tasks sharing this id, and reads
+        // a namespace-local pid. Inherited by clone threads (they join the
+        // namespace). Independent of `isolation_domain` (which gates resource
+        // quotas), so unsharing a namespace never perturbs quota grouping.
+        pid_ns: u32,
+        // Thread-local storage base (full-os guide Part I, TLS): the %fs segment
+        // base for this task, set via sys_vm_ctl op 5 and restored on every resume
+        // by r4_switch_to, so each task (each clone thread) has its own isolated
+        // TLS. 0 = no TLS. Kept canonical at the syscall so the restore wrmsr never
+        // faults.
+        fs_base: u64,
     }
 
     impl R4Task {
@@ -3994,6 +3843,9 @@ cfg_r4! {
             sec_filter_mask: u64::MAX,
             futex_uaddr: 0,
             sleep_until: 0,
+            last_errno: 0,
+            pid_ns: 0,
+            fs_base: 0,
         };
     }
 
@@ -4102,13 +3954,24 @@ cfg_r4! {
             R4_TASKS[tid].fd_limit = R4_TASK_DEFAULT_FD_LIMIT;
             R4_TASKS[tid].socket_limit = R4_TASK_DEFAULT_SOCKET_LIMIT;
             R4_TASKS[tid].endpoint_limit = R4_TASK_DEFAULT_ENDPOINT_LIMIT;
+            R4_TASKS[tid].pid_ns = 0;
         } else {
             R4_TASKS[tid].isolation_domain = R4_TASKS[parent_tid].isolation_domain;
             R4_TASKS[tid].cap_flags = R4_TASKS[parent_tid].cap_flags;
             R4_TASKS[tid].fd_limit = R4_TASKS[parent_tid].fd_limit;
             R4_TASKS[tid].socket_limit = R4_TASKS[parent_tid].socket_limit;
             R4_TASKS[tid].endpoint_limit = R4_TASKS[parent_tid].endpoint_limit;
+            // Inherit the PID namespace: clone threads join their creator's
+            // namespace (a spawned app inherits the shell's global ns 0 and may
+            // unshare its own later). (full-os guide Part I, namespaces.)
+            R4_TASKS[tid].pid_ns = R4_TASKS[parent_tid].pid_ns;
         }
+        // TLS base is NOT inherited: each task/thread sets up its own %fs base
+        // (POSIX thread-local storage is per-thread). Starts at 0 (no TLS).
+        R4_TASKS[tid].fs_base = 0;
+        // A reused slot must not inherit the prior occupant's error code (the
+        // dispatch clears it per-syscall too, but reset it here for correctness).
+        R4_TASKS[tid].last_errno = 0;
         R4_TASKS[tid].fd_count = 0;
         R4_TASKS[tid].socket_count = 0;
         R4_TASKS[tid].dispatch_count = 0;
@@ -4192,6 +4055,22 @@ cfg_r4! {
             }
         }
         for i in 0..22 { *frame.add(i) = R4_TASKS[tid].saved_frame[i]; }
+        // Restore the task's TLS base (full-os Part I, TLS): each task gets its own
+        // %fs base, so a clone thread's thread-local storage is isolated. Written
+        // on EVERY resume (0 for non-TLS tasks) so an earlier task's fs.base never
+        // leaks into this one. fs_base is kept canonical at the syscall, so the
+        // wrmsr cannot #GP. IA32_FS_BASE = 0xC000_0100.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            let fsb = R4_TASKS[tid].fs_base;
+            core::arch::asm!(
+                "wrmsr",
+                in("ecx") 0xC000_0100u32,
+                in("eax") (fsb & 0xFFFF_FFFF) as u32,
+                in("edx") (fsb >> 32) as u32,
+                options(nostack, nomem, preserves_flags),
+            );
+        }
         R4_TASKS[tid].state = R4State::Running;
         R4_TASKS[tid].dispatch_count += 1;
         // Record the switched-to task as the CALLING CPU's current (per-CPU on an AP,
@@ -4245,7 +4124,7 @@ cfg_r4! {
     unsafe fn sys_net_query(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         if R4_TASKS[r4_current_smp()].cap_flags & R4_TASK_CAP_NETWORK == 0 {
-            audit_event(b"cap-deny", 49); // full-os guide Part IV.10 audit trail
+            crate::audit::audit_event(b"cap-deny", 49); // full-os guide Part IV.10 audit trail
             return ERR;
         }
         match op {
@@ -4583,7 +4462,15 @@ cfg_r4! {
     }
 
     unsafe fn r4_exit_and_switch(frame: *mut u64, exit_status: u64) {
-        let cur = R4_CURRENT;
+        // Per-CPU current (full-os Part I.3, live SMP scheduler): on an application
+        // processor the exiting task is THIS CPU's current (gs:[16]), not the BSP's
+        // R4_CURRENT. `on_ap` is false on the BSP and in non-SMP lanes, so the
+        // BSP/legacy path below is byte-for-byte unchanged.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        let on_ap = !crate::smp::is_bsp();
+        #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+        let on_ap = false;
+        let cur = if on_ap { r4_current_smp() } else { R4_CURRENT };
         let parent = R4_TASKS[cur].parent_tid;
         r4_cleanup_task_resources(cur);
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -4591,6 +4478,9 @@ cfg_r4! {
             if EXEC_APP_TID == cur as i32 {
                 EXEC_APP_TID = -1;
             }
+            // Window-server lifecycle: a dead client's persistent surfaces are
+            // removed so its windows disappear (full-os guide Part III).
+            wm_release_owner(cur);
             // Reclaim a private address space on any exit path (clean exit,
             // signal kill, or fault containment). Step CR3 onto the shared
             // table first so we are not standing on the page tree we free.
@@ -4612,8 +4502,13 @@ cfg_r4! {
                     t += 1;
                 }
                 if !shared {
-                    core::arch::asm!("mov cr3, {}", in(reg) SHARED_PML4_PHYS,
-                                     options(nostack));
+                    // Step CR3 onto a kernel table BEFORE freeing the one we stand
+                    // on. The BSP uses SHARED_PML4_PHYS; an AP must use its OWN saved
+                    // kernel CR3, where its per-CPU kernel stack is mapped (the
+                    // shared table does not necessarily map it -- the cause of the
+                    // earlier AP-exit fault). (full-os Part I.3.)
+                    let kcr3 = if on_ap { crate::smp::ap_saved_cr3() } else { SHARED_PML4_PHYS };
+                    core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack));
                     mm::address_space_release(cur_pml4);
                     R4_TASKS[cur].pml4_phys = SHARED_PML4_PHYS;
                     // Reclaim our own already-exited clone threads that shared
@@ -4651,6 +4546,14 @@ cfg_r4! {
             && r4_wait_matches(R4_TASKS[parent].wait_target, cur)
         {
             r4_wake_waiter(parent, cur);
+        }
+        // AP-side exit (full-os Part I.3): the task ran on an application processor
+        // and has now been retired + its address space released above. Return THIS
+        // CPU to its pull-loop (claim the next ready task) instead of the BSP
+        // reschedule, which uses R4_CURRENT / r4_find_ready. Never returns.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        if on_ap {
+            crate::smp::ap_exit_park();
         }
         match r4_find_ready(R4_CURRENT) {
             Some(tid) => { r4_switch_to(frame, tid); }
@@ -4816,7 +4719,7 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn exec_aslr_base() -> u64 {
         let nslots = (EXEC_ASLR_HI - EXEC_ASLR_LO) / EXEC_ASLR_SLOT;
-        let mut slot = rng_next() % nslots;
+        let mut slot = crate::rng::rng_next() % nslots;
         if EXEC_ASLR_PREV != 0 {
             let prev_slot = (EXEC_ASLR_PREV - EXEC_ASLR_LO) / EXEC_ASLR_SLOT;
             if slot == prev_slot {
@@ -5151,7 +5054,7 @@ cfg_r4! {
         // the CSPRNG, so the stack base differs per spawn. Stays well inside
         // the slot's guard-zoned stride. (Code ASLR needs PIE; carry-forward.)
         let aslr_stk = r4_stack_top_for_slot(tid)
-            .wrapping_sub((rng_next() & 0xF) * 0x1000);
+            .wrapping_sub((crate::rng::rng_next() & 0xF) * 0x1000);
         r4_init_task(tid, entry, aslr_stk, parent);
         // Install the private address space (r4_init_task inherited the
         // parent's, so this must come after it).
@@ -5340,6 +5243,26 @@ cfg_r4! {
                 serial_write(b"\n");
                 cur
             }
+            // op 5 = set_tls(a2 = %fs base) (full-os guide Part I, thread-local
+            // storage): set this task's TLS base so `%fs:offset` addresses its
+            // per-thread block. Stored in the task and restored on every resume by
+            // r4_switch_to, so clone threads keep isolated TLS. Applied immediately
+            // (wrmsr) for the current task. a2 must be canonical lower-half (a user
+            // address) so the restore wrmsr can never #GP. Returns 0.
+            5 => {
+                if a2 >= 0x0000_8000_0000_0000 {
+                    return ERR; // non-canonical / kernel-half -> would #GP on wrmsr
+                }
+                R4_TASKS[r4_current_smp()].fs_base = a2;
+                core::arch::asm!(
+                    "wrmsr",
+                    in("ecx") 0xC000_0100u32, // IA32_FS_BASE
+                    in("eax") (a2 & 0xFFFF_FFFF) as u32,
+                    in("edx") (a2 >> 32) as u32,
+                    options(nostack, nomem, preserves_flags),
+                );
+                0
+            }
             _ => ERR,
         }
     }
@@ -5394,7 +5317,7 @@ cfg_r4! {
             // privilege model. A non-root attempt is denied and audited.
             4 => {
                 if R4_TASKS[r4_current_smp()].uid != 0 {
-                    audit_event(b"setuid-deny", 51);
+                    crate::audit::audit_event(b"setuid-deny", 51);
                     *frame.add(14) = ERR;
                 } else if a2 > 0xFF {
                     *frame.add(14) = ERR;
@@ -5421,14 +5344,14 @@ cfg_r4! {
                 while plen < 16 && pw[plen] != 0 {
                     plen += 1;
                 }
-                match login_verify(&name, &pw[..plen]) {
+                match crate::cred::login_verify(&name, &pw[..plen]) {
                     Some(uid) => {
                         R4_TASKS[r4_current_smp()].uid = uid;
-                        audit_event(b"login-ok", 51);
+                        crate::audit::audit_event(b"login-ok", 51);
                         *frame.add(14) = uid as u64;
                     }
                     None => {
-                        audit_event(b"login-deny", 51);
+                        crate::audit::audit_event(b"login-deny", 51);
                         *frame.add(14) = ERR;
                     }
                 }
@@ -5437,59 +5360,6 @@ cfg_r4! {
                 *frame.add(14) = ERR;
             }
         }
-    }
-
-    /// One account in the credential database (full-os guide Part IV.10). The
-    /// password is stored as its SHA-256 digest (`sha256.rs`), never the cleartext.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    struct PasswdEntry {
-        name: [u8; 8],
-        uid: u8,
-        pw_hash: [u8; 32],
-    }
-
-    /// The credential database: root (uid 0) and a regular user (uid 100). The
-    /// stored hashes are the SHA-256 digests of the cleartext — `sha256(b"toor")`
-    /// and `sha256(b"pass")` — a real cryptographic password hash (replacing the
-    /// prior djb2 demo). `login_verify` recomputes `sha256(pw)` and compares, so the
-    /// cleartext is never stored. (A per-user salt + iterated KDF, and moving the db
-    /// to a root-owned `/etc/passwd` VFS file, are the next hardening steps.)
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static PASSWD: [PasswdEntry; 2] = [
-        PasswdEntry {
-            name: *b"root\0\0\0\0",
-            uid: 0,
-            pw_hash: [
-                0xCE, 0x5C, 0xA6, 0x73, 0xD1, 0x3B, 0x36, 0x11, 0x8D, 0x54, 0xA7, 0xCF, 0x13,
-                0xAE, 0xB0, 0xCA, 0x01, 0x23, 0x83, 0xBF, 0x77, 0x1E, 0x71, 0x34, 0x21, 0xB4,
-                0xD1, 0xFD, 0x84, 0x1F, 0x53, 0x9A,
-            ],
-        },
-        PasswdEntry {
-            name: *b"user\0\0\0\0",
-            uid: 100,
-            pw_hash: [
-                0xD7, 0x4F, 0xF0, 0xEE, 0x8D, 0xA3, 0xB9, 0x80, 0x6B, 0x18, 0xC8, 0x77, 0xDB,
-                0xF2, 0x9B, 0xBD, 0xE5, 0x0B, 0x5B, 0xD8, 0xE4, 0xDA, 0xD7, 0xA3, 0xA7, 0x25,
-                0x00, 0x0F, 0xEB, 0x82, 0xE8, 0xF1,
-            ],
-        },
-    ];
-
-    /// Verify a username/password against `PASSWD`; returns the account uid on a
-    /// match. The password is SHA-256 hashed and compared to the stored digest, so
-    /// the cleartext is never held in the table.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn login_verify(name: &[u8; 8], pw: &[u8]) -> Option<u8> {
-        let h = crate::sha256::sha256(pw);
-        let mut i = 0usize;
-        while i < PASSWD.len() {
-            if PASSWD[i].name == *name && PASSWD[i].pw_hash == h {
-                return Some(PASSWD[i].uid);
-            }
-            i += 1;
-        }
-        None
     }
 
     /// sys_futex (ABI v3.2 id 52): op 1 = wait(uaddr, val) — block while the
@@ -5844,132 +5714,12 @@ cfg_r4! {
         }
     }
 
-    // ---- CSPRNG + getrandom (full-os guide Part IV.10) ----
-    //
-    // A xorshift64* pool seeded once (lazily) from the CMOS wall clock, the
-    // PIT tick counter, a constant, AND — when the CPU supports it — the RDRAND
-    // hardware RNG (CPUID-gated, to stay portable). The hardware value is
-    // XOR-mixed into the timing/clock seed, so a spoofed or unavailable RDRAND
-    // can never *weaken* the existing entropy; it can only add to it.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static mut RNG_STATE: u64 = 0;
-    // 0 = not yet seeded; 1 = RDRAND contributed; 2 = soft seed only (no RDRAND).
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static mut RNG_HWSEED: u8 = 0;
+    // CSPRNG + getrandom (full-os guide Part IV.10) live in `crate::rng`
+    // (gap #9 modularization): the xorshift64*/RDRAND pool, `rng_next`,
+    // `sys_getrandom`, and the hwseed self-test. The entropy sources
+    // (`cmos_unix_seconds`, `R4_PREEMPT_TICKS`) stay here and are consumed by
+    // that module via `crate::` paths.
 
-    /// Read a 64-bit value from RDRAND. The caller MUST have confirmed RDRAND
-    /// support via CPUID first (calling this on a CPU without it is UB). Retries
-    /// the spec-recommended bounded number of times for a transient under-run.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    #[target_feature(enable = "rdrand")]
-    unsafe fn rdrand_raw() -> Option<u64> {
-        let mut v = 0u64;
-        let mut tries = 0;
-        while tries < 10 {
-            if core::arch::x86_64::_rdrand64_step(&mut v) == 1 {
-                return Some(v);
-            }
-            tries += 1;
-        }
-        None
-    }
-
-    /// RDRAND value if the CPU advertises it (CPUID.1:ECX[30]), else None.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn rdrand64() -> Option<u64> {
-        if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) == 0 {
-            return None;
-        }
-        rdrand_raw() // safe: CPUID just confirmed RDRAND support
-    }
-
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn rng_next() -> u64 {
-        if RNG_STATE == 0 {
-            let mut seed = cmos_unix_seconds()
-                ^ 0x9E37_79B9_7F4A_7C15
-                ^ (R4_PREEMPT_TICKS << 17 | R4_PREEMPT_TICKS);
-            match rdrand64() {
-                Some(hw) => {
-                    seed ^= hw; // strengthen — XOR never weakens the soft seed
-                    RNG_HWSEED = 1;
-                }
-                None => RNG_HWSEED = 2,
-            }
-            RNG_STATE = if seed == 0 { 0x1234_5678_9ABC_DEF1 } else { seed };
-        }
-        // Mix in live tick entropy, then xorshift64*.
-        RNG_STATE ^= R4_PREEMPT_TICKS.wrapping_add(0xD1B5_4A32_D192_ED03);
-        let mut x = RNG_STATE;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        RNG_STATE = x;
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
-
-    /// sys_getrandom (ABI v3.2 id 54): fill the user buffer at `buf_ptr`
-    /// with `len` random bytes. Returns the count written, or -1 on a bad
-    /// pointer or oversize request.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_getrandom(buf_ptr: u64, len: u64) -> u64 {
-        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        if len == 0 {
-            return 0;
-        }
-        if len > 4096 {
-            return ERR;
-        }
-        let n = len as usize;
-        let mut tmp = [0u8; 256];
-        let mut done = 0usize;
-        while done < n {
-            let chunk = core::cmp::min(tmp.len(), n - done);
-            let mut i = 0usize;
-            while i < chunk {
-                let r = rng_next().to_le_bytes();
-                let take = core::cmp::min(8, chunk - i);
-                tmp[i..i + take].copy_from_slice(&r[..take]);
-                i += take;
-            }
-            if copyout_user(buf_ptr + done as u64, &tmp[..chunk], chunk).is_err() {
-                return ERR;
-            }
-            done += chunk;
-        }
-        len
-    }
-
-    /// RNG hardware-seeding self-test (full-os guide Part IV.10): force the
-    /// CSPRNG to seed, report whether RDRAND contributed (`RNG: hwseed rdrand
-    /// ok` on a CPU that advertises it, `RNG: hwseed soft (no rdrand)` otherwise
-    /// — both are healthy; the soft path is the portable fallback), and confirm
-    /// the pool still produces distinct output (two 16-byte draws differ).
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn rng_hwseed_selftest() -> u64 {
-        let mut a = [0u8; 16];
-        let mut b = [0u8; 16];
-        let mut i = 0usize;
-        while i < 16 {
-            a[i..i + 8].copy_from_slice(&rng_next().to_le_bytes());
-            i += 8;
-        }
-        i = 0;
-        while i < 16 {
-            b[i..i + 8].copy_from_slice(&rng_next().to_le_bytes());
-            i += 8;
-        }
-        if RNG_HWSEED == 1 {
-            serial_write(b"RNG: hwseed rdrand ok\n");
-        } else {
-            serial_write(b"RNG: hwseed soft (no rdrand)\n");
-        }
-        if a == b {
-            serial_write(b"RNG: hwseed FAIL\n");
-            return 0;
-        }
-        1
-    }
 
     /// sys_sandbox (ABI v3.2 id 59): restrict the calling task to the
     /// syscalls whose bit is set in `allow_mask`. Monotonic — a mask wider
@@ -5992,6 +5742,88 @@ cfg_r4! {
     /// blit in one frame.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     const COMPOSE_MAX: usize = 16;
+
+    /// Standing window-server surface registry (full-os guide Part III). Unlike op
+    /// 4 (a one-shot composite of a client-supplied list that exists only for that
+    /// call), these surfaces PERSIST across calls and carry an OWNER tid, so
+    /// multiple client tasks each keep their own window registered at once. A
+    /// central compose (op 7) paints the WHOLE registry in z-order; a client's
+    /// surfaces are removed when it clears them (op 8, owner-checked) or exits
+    /// (`wm_release_owner`) — the per-client window lifecycle a resident server owns.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const WM_SURFACES_MAX: usize = 8;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct WmSurface {
+        owner: u32,
+        geom: u64, // x<<48 | y<<32 | w<<16 | h
+        color: u32,
+        z: u32,
+        active: bool,
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    impl WmSurface {
+        const EMPTY: Self = Self { owner: 0, geom: 0, color: 0, z: 0, active: false };
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut WM_SURFACES: [WmSurface; WM_SURFACES_MAX] =
+        [WmSurface::EMPTY; WM_SURFACES_MAX];
+
+    /// Composite the persistent surface registry to the framebuffer in z-order
+    /// (painter's algorithm, lowest z first). Returns the number of surfaces
+    /// blitted. Shared by sys_ioctl op 7 and any resident compositor.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn wm_compose_registry() -> u64 {
+        // Collect active surfaces, then stable-sort indices by z ascending.
+        let mut idxs = [0usize; WM_SURFACES_MAX];
+        let mut n = 0usize;
+        let mut i = 0usize;
+        while i < WM_SURFACES_MAX {
+            if WM_SURFACES[i].active {
+                idxs[n] = i;
+                n += 1;
+            }
+            i += 1;
+        }
+        let mut a = 1usize;
+        while a < n {
+            let cur = idxs[a];
+            let mut b = a;
+            while b > 0 && WM_SURFACES[idxs[b - 1]].z > WM_SURFACES[cur].z {
+                idxs[b] = idxs[b - 1];
+                b -= 1;
+            }
+            idxs[b] = cur;
+            a += 1;
+        }
+        let mut painted = 0u64;
+        let mut k = 0usize;
+        while k < n {
+            let s = &WM_SURFACES[idxs[k]];
+            let x = (s.geom >> 48) & 0xFFFF;
+            let y = (s.geom >> 32) & 0xFFFF;
+            let w = (s.geom >> 16) & 0xFFFF;
+            let h = s.geom & 0xFFFF;
+            if fb::fb_blit_rect(x, y, w, h, s.color) {
+                painted += 1;
+            }
+            k += 1;
+        }
+        painted
+    }
+
+    /// Remove every registry surface owned by `tid` (called on task exit so a dead
+    /// client's windows disappear — the lifecycle a window server enforces).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn wm_release_owner(tid: usize) {
+        let mut i = 0usize;
+        while i < WM_SURFACES_MAX {
+            if WM_SURFACES[i].active && WM_SURFACES[i].owner == tid as u32 {
+                WM_SURFACES[i] = WmSurface::EMPTY;
+            }
+            i += 1;
+        }
+    }
 
     /// sys_ioctl (ABI v3.2 id 56, generic device control): op 1 = framebuffer
     /// blit. a2 packs the rectangle as x<<48 | y<<32 | w<<16 | h (each u16);
@@ -6197,6 +6029,52 @@ cfg_r4! {
                 }
                 hda_audio_play(&buf[..n]) as u64
             }
+            // op 8 = wm_register (full-os guide Part III, standing window server):
+            // register/update the calling task's PERSISTENT surface in registry slot
+            // a2. a3 = pointer to two u64s [geom = x<<48|y<<32|w<<16|h] [color(low
+            // 32)|z(high 32)]. The surface is stamped with the caller's tid (owner)
+            // and persists until cleared (op 10) or the owner exits. A slot already
+            // owned by ANOTHER live task may not be hijacked. Returns the slot.
+            8 => {
+                let slot = a2 as usize;
+                if slot >= WM_SURFACES_MAX {
+                    return ERR;
+                }
+                let me = r4_current_smp() as u32;
+                if WM_SURFACES[slot].active && WM_SURFACES[slot].owner != me {
+                    return ERR; // another client owns this window slot
+                }
+                let mut raw = [0u8; 16];
+                if copyin_user(&mut raw, a3, 16).is_err() {
+                    return ERR;
+                }
+                let geom = u64::from_le_bytes(raw[0..8].try_into().unwrap());
+                let w1 = u64::from_le_bytes(raw[8..16].try_into().unwrap());
+                WM_SURFACES[slot] = WmSurface {
+                    owner: me,
+                    geom,
+                    color: (w1 & 0xFFFF_FFFF) as u32,
+                    z: (w1 >> 32) as u32,
+                    active: true,
+                };
+                slot as u64
+            }
+            // op 9 = wm_compose: composite the WHOLE persistent registry (every live
+            // client's window) to the framebuffer in z-order. Returns the surface count.
+            9 => wm_compose_registry(),
+            // op 10 = wm_clear: remove the caller's surface in slot a2 (owner-checked,
+            // so a client cannot close another's window). Returns 0, or ERR.
+            10 => {
+                let slot = a2 as usize;
+                if slot >= WM_SURFACES_MAX
+                    || !WM_SURFACES[slot].active
+                    || WM_SURFACES[slot].owner != r4_current_smp() as u32
+                {
+                    return ERR;
+                }
+                WM_SURFACES[slot] = WmSurface::EMPTY;
+                0
+            }
             _ => ERR,
         }
     }
@@ -6243,15 +6121,128 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut DL_MAP_HI: u64 = 0;
 
-    /// Pick a randomized, slot-aligned load base for the next dlopen, different from
-    /// the previous load's slot (so the per-load base provably varies and never
-    /// overlaps the last one). (full-os guide Part IV.10, code-base ASLR.)
+    // dlopen HANDLE TABLE (full-os guide Part V.11, POSIX dlopen semantics). The
+    // single-slot model above tracks only the MOST-RECENT object (for the back-
+    // compat op2 dlsym + dlclose-by-base); this table lets up to DL_MAX_HANDLES
+    // shared objects be open CONCURRENTLY, each at its own non-overlapping ASLR
+    // slot, so `op4 dlsym_h(handle, name)` resolves a symbol from a SPECIFIC
+    // object's .dynsym and `op3 dlclose(handle)` releases exactly that one's pages
+    // while the others stay live. v1 boundary: at most one ON-DISK object's bytes
+    // are retained (they share the single `DL_LOADED` buffer), so a second on-disk
+    // dlopen invalidates an earlier on-disk handle's dlsym; embedded ("libdl")
+    // handles back onto the static `DL_SO` and are unaffected.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct DlHandle {
+        base: u64,
+        lo: u64,
+        hi: u64,
+        ondisk: bool,
+        used: bool,
+        // tid of the task whose dlopen registered this handle. The pages are
+        // mapped CR3-relative into that task's private address space, but the
+        // handle table is process-global with no fd backing, so this is what
+        // lets task-exit cleanup reclaim slots a task left open (no dlclose) and
+        // lets dlsym_h/dlclose reject a base belonging to a different task --
+        // whose VA is not mapped in the caller's CR3. (full-os Part V.11.)
+        owner_tid: usize,
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const DL_MAX_HANDLES: usize = 4;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_HANDLES: [DlHandle; DL_MAX_HANDLES] = [DlHandle {
+        base: 0,
+        lo: 0,
+        hi: 0,
+        ondisk: false,
+        used: false,
+        owner_tid: 0,
+    }; DL_MAX_HANDLES];
+
+    /// Index of the live handle loaded at `base`, or None.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_handle_find(base: u64) -> Option<usize> {
+        let mut i = 0usize;
+        while i < DL_MAX_HANDLES {
+            if DL_HANDLES[i].used && DL_HANDLES[i].base == base {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// True if any live handle occupies `slot` (used to keep concurrent objects
+    /// in non-overlapping ASLR slots).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_slot_live(slot: u64) -> bool {
+        let b = DLOPEN_BASE + slot * DL_SLOT;
+        dl_handle_find(b).is_some()
+    }
+
+    /// Record a freshly-loaded object in the first free handle slot. Returns false
+    /// if the table is full (the caller then unmaps and fails the dlopen).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_handle_register(base: u64, lo: u64, hi: u64, ondisk: bool) -> bool {
+        let mut i = 0usize;
+        while i < DL_MAX_HANDLES {
+            if !DL_HANDLES[i].used {
+                DL_HANDLES[i] = DlHandle {
+                    base,
+                    lo,
+                    hi,
+                    ondisk,
+                    used: true,
+                    owner_tid: r4_current_smp(),
+                };
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// Release every dlopen handle registered by `owner_tid`. Called from
+    /// task-exit cleanup (`r4_cleanup_task_resources`): a dlopen handle is a
+    /// process-global slot with no fd backing, so a task that dlopen()s and
+    /// exits without dlclose would otherwise leak its slots for the rest of the
+    /// boot (exhausting the DL_MAX_HANDLES table) and leave a dangling base that
+    /// a later dlsym_h/dlclose could resolve into the dead task's freed address
+    /// space. The task's pages are already reclaimed by `address_space_release`
+    /// on the exit path, so this only frees the table slot -- and resets the
+    /// back-compat single-slot globals if they pointed at a reclaimed object
+    /// (mirroring the same reset in op3 dlclose).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn r4_release_owned_dlhandles(owner_tid: usize) {
+        let mut i = 0usize;
+        while i < DL_MAX_HANDLES {
+            if DL_HANDLES[i].used && DL_HANDLES[i].owner_tid == owner_tid {
+                let base = DL_HANDLES[i].base;
+                DL_HANDLES[i].used = false;
+                if base == DL_LOAD_BASE {
+                    DL_MAP_LO = 0;
+                    DL_MAP_HI = 0;
+                    DL_LOAD_BASE = DLOPEN_BASE;
+                    DL_CUR_ONDISK = false;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Pick a randomized, slot-aligned load base for the next dlopen: a slot not
+    /// occupied by any LIVE handle (so concurrent objects never overlap) and, when
+    /// no handle holds it, different from the most-recent base (so a single
+    /// re-open's base provably varies). DL_MAX_HANDLES (4) << DL_NSLOTS (32), so a
+    /// free slot is always found within the bounded scan. (full-os Part IV.10.)
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn dl_aslr_base() -> u64 {
         let prev = (DL_LOAD_BASE - DLOPEN_BASE) / DL_SLOT;
-        let mut slot = rng_next() % DL_NSLOTS;
-        if slot == prev {
+        let mut slot = crate::rng::rng_next() % DL_NSLOTS;
+        let mut tries = 0u64;
+        while (slot == prev || dl_slot_live(slot)) && tries < DL_NSLOTS {
             slot = (slot + 1) % DL_NSLOTS;
+            tries += 1;
         }
         DLOPEN_BASE + slot * DL_SLOT
     }
@@ -6308,7 +6299,7 @@ cfg_r4! {
         // Switch the dlsym image to the on-disk object ONLY on a successful load,
         // so a failed dlopen leaves dlsym resolving the last good object (matching
         // the libdl branch), not the bad/partial on-disk blob.
-        let r = dl_load_elf(&DL_LOADED[..size]);
+        let r = dl_load_elf(&DL_LOADED[..size], true);
         if r != ERR {
             DL_LOADED_LEN = size;
             DL_CUR_ONDISK = true;
@@ -6423,24 +6414,14 @@ cfg_r4! {
     /// dlopen: map an ELF `.so` (the embedded blob or one read off disk) into the
     /// user address space and apply its relocations. Returns the load base, or ERR.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn dl_load_elf(so: &[u8]) -> u64 {
+    unsafe fn dl_load_elf(so: &[u8], ondisk: bool) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         // Code-base ASLR: load at a fresh randomized base (relocations below are all
-        // applied relative to it). dl_resolve reads DL_LOAD_BASE for the same base.
-        // Reclaim a previously-loaded object's pages before loading another, so a
-        // dlopen without an intervening dlclose does not orphan the prior object's
-        // frames and W^X mappings (single live object). Uses the OLD DL_MAP range
-        // and runs BEFORE dl_aslr_base (which reads the OLD DL_LOAD_BASE to avoid
-        // reusing the same slot). vm_unmap_current is CR3-relative, matching the
-        // vm_map_current that created the mappings; an already-unmapped VA (e.g. a
-        // stale range from another address space) is a harmless no-op. (full-os V.11)
-        if DL_MAP_HI != 0 && DL_MAP_LO < DL_MAP_HI {
-            let mut va = DL_MAP_LO;
-            while va < DL_MAP_HI {
-                crate::mm::vm_unmap_current(va);
-                va += 0x1000;
-            }
-        }
+        // applied relative to it; the new handle records that base for dlsym_h).
+        // dl_aslr_base avoids every LIVE handle's slot, so this object does NOT
+        // overlap (and need NOT reclaim) the other concurrently-open handles --
+        // each is freed only by its own dlclose. vm_map_current is CR3-relative.
+        // (full-os guide Part V.11, dlopen handle table.)
         let base = dl_aslr_base();
         DL_LOAD_BASE = base;
         DL_MAP_LO = u64::MAX; // track the mapped page range so dlclose can unmap it
@@ -6592,13 +6573,28 @@ cfg_r4! {
             }
             i += 1;
         }
+        // Register the live object so dlsym_h/dlclose can find it by base. If the
+        // table is full, unmap this object's pages and fail the dlopen rather than
+        // silently orphan a slot (no more than DL_MAX_HANDLES concurrent objects).
+        if !dl_handle_register(base, DL_MAP_LO, DL_MAP_HI, ondisk) {
+            let mut va = DL_MAP_LO;
+            while va < DL_MAP_HI {
+                crate::mm::vm_unmap_current(va);
+                va += 0x1000;
+            }
+            DL_MAP_LO = 0;
+            DL_MAP_HI = 0;
+            DL_LOAD_BASE = DLOPEN_BASE;
+            return ERR;
+        }
         base
     }
 
-    /// dlsym: resolve `target` from the embedded `.so` .dynsym/.dynstr; returns
-    /// its loaded VA (base + st_value), or ERR.
+    /// dlsym: resolve `target` from a `.so` image's .dynsym/.dynstr; returns its
+    /// loaded VA (`base` + st_value), or ERR. `base` is the object's randomized
+    /// load base (per-handle), so a symbol resolves at the right concurrent copy.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn dl_resolve(so: &[u8], target: &[u8]) -> u64 {
+    unsafe fn dl_resolve(so: &[u8], target: &[u8], base: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         let symtab = match dl_dyn(so, 6).and_then(|v| dl_vaddr_to_off(so, v)) {
             Some(o) => o,
@@ -6638,23 +6634,27 @@ cfg_r4! {
             // Exact match: the .so name must terminate right after `target`.
             if ok && nm + target.len() < so.len() && so[nm + target.len()] == 0 {
                 // Resolve against the module's actual (randomized) load base.
-                return DL_LOAD_BASE + st_value;
+                return base + st_value;
             }
             s += 1;
         }
         ERR
     }
 
-    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> ELF `.so` load base VA,
-    /// op 2 = dlsym(name) -> resolved symbol VA. -1 on unknown module/symbol or a
-    /// mapping/relocation failure.
+    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> ELF `.so` load base VA
+    /// (the handle); op 2 = dlsym(name) -> VA resolved against the MOST-RECENT
+    /// object; op 3 = dlclose(handle) -> release that one object's pages; op 4 =
+    /// dlsym_h(handle, name) -> VA resolved against the SPECIFIC handle's object
+    /// (so multiple concurrently-open objects each resolve their own symbols).
+    /// -1 on unknown module/symbol/handle or a mapping/relocation failure.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_dlctl(op: u64, a2: u64, _a3: u64) -> u64 {
+    unsafe fn sys_dlctl(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         match op {
             1 => {
                 // dlopen: "libdl" loads the kernel-embedded .so; a "/data/<x>.so"
-                // path loads a shared object off the filesystem.
+                // path loads a shared object off the filesystem. Up to
+                // DL_MAX_HANDLES may be open at once (each its own ASLR slot).
                 let mut name = [0u8; 32];
                 if copyin_user(&mut name, a2, 32).is_err() {
                     return ERR;
@@ -6666,7 +6666,7 @@ cfg_r4! {
                 let nm = &name[..len];
                 if nm == b"libdl" {
                     DL_CUR_ONDISK = false;
-                    dl_load_elf(DL_SO)
+                    dl_load_elf(DL_SO, false)
                 } else if len > 6 && &nm[..6] == b"/data/" {
                     dl_load_from_vfs(nm)
                 } else {
@@ -6674,7 +6674,8 @@ cfg_r4! {
                 }
             }
             2 => {
-                // dlsym: resolve a name from the currently-loaded object's .dynsym.
+                // dlsym: resolve a name from the most-recently-loaded object's
+                // .dynsym (back-compat; op 4 targets a specific handle).
                 let mut nm = [0u8; 16];
                 if copyin_user(&mut nm, a2, 16).is_err() {
                     return ERR;
@@ -6686,27 +6687,76 @@ cfg_r4! {
                 if len == 0 {
                     return ERR;
                 }
-                dl_resolve(dl_current(), &nm[..len])
+                dl_resolve(dl_current(), &nm[..len], DL_LOAD_BASE)
             }
             3 => {
-                // dlclose(a2 = base): unmap the pages of the object currently loaded
-                // at `base` (the most-recent dlopen) and release their frames.
-                // Returns 0, or ERR if `base` is not the live object / nothing is
-                // loaded. A double-close fails (DL_MAP_HI is cleared). dlsym after a
-                // close is undefined, as in POSIX. (full-os guide Part V.11)
-                if a2 != DL_LOAD_BASE || DL_MAP_HI == 0 || DL_MAP_LO >= DL_MAP_HI {
+                // dlclose(a2 = handle/base): unmap exactly THIS object's pages and
+                // release their frames; other open handles stay live. Returns 0, or
+                // ERR if `base` is not a live handle. A double-close fails (the slot
+                // is freed). dlsym after a close is undefined, as in POSIX. (V.11)
+                let slot = match dl_handle_find(a2) {
+                    Some(s) => s,
+                    None => return ERR,
+                };
+                // Handles are process-local: only the owner may close one. A
+                // foreign base maps pages in another task's CR3, so closing it
+                // here would unmap the wrong address space.
+                if DL_HANDLES[slot].owner_tid != r4_current_smp() {
                     return ERR;
                 }
-                let mut va = DL_MAP_LO;
-                while va < DL_MAP_HI {
-                    crate::mm::vm_unmap_current(va);
-                    va += 0x1000;
+                let lo = DL_HANDLES[slot].lo;
+                let hi = DL_HANDLES[slot].hi;
+                DL_HANDLES[slot].used = false;
+                if hi != 0 && lo < hi {
+                    let mut va = lo;
+                    while va < hi {
+                        crate::mm::vm_unmap_current(va);
+                        va += 0x1000;
+                    }
                 }
-                DL_MAP_LO = 0;
-                DL_MAP_HI = 0;
-                DL_LOAD_BASE = DLOPEN_BASE; // no live object; a stale dlclose now fails
-                DL_CUR_ONDISK = false;
+                // If this was the most-recent object, clear the back-compat globals
+                // so op2/dlsym and a stale dlclose see "no live object".
+                if a2 == DL_LOAD_BASE {
+                    DL_MAP_LO = 0;
+                    DL_MAP_HI = 0;
+                    DL_LOAD_BASE = DLOPEN_BASE;
+                    DL_CUR_ONDISK = false;
+                }
                 0
+            }
+            4 => {
+                // dlsym_h(a2 = handle/base, a3 = name ptr): resolve `name` from the
+                // .dynsym of the SPECIFIC object loaded at `base`, at that object's
+                // own (randomized) load base -- so two concurrently-open copies
+                // resolve the same symbol to two distinct VAs.
+                let slot = match dl_handle_find(a2) {
+                    Some(s) => s,
+                    None => return ERR,
+                };
+                // Handles are process-local: resolving a foreign task's base
+                // would return a VA mapped only in that task's (possibly freed)
+                // CR3, not the caller's -- so reject a handle the caller does
+                // not own.
+                if DL_HANDLES[slot].owner_tid != r4_current_smp() {
+                    return ERR;
+                }
+                let mut nm = [0u8; 16];
+                if copyin_user(&mut nm, a3, 16).is_err() {
+                    return ERR;
+                }
+                let mut len = 0usize;
+                while len < 16 && nm[len] != 0 {
+                    len += 1;
+                }
+                if len == 0 {
+                    return ERR;
+                }
+                let img: &[u8] = if DL_HANDLES[slot].ondisk {
+                    &DL_LOADED[..DL_LOADED_LEN]
+                } else {
+                    DL_SO
+                };
+                dl_resolve(img, &nm[..len], DL_HANDLES[slot].base)
             }
             _ => ERR,
         }
@@ -6721,14 +6771,14 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn dlclose_selftest() {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let base = dl_load_elf(DL_SO);
+        let base = dl_load_elf(DL_SO, false);
         let pg = base & !0xFFF;
         let mapped_before =
             base != ERR && check_page_user_perms(pg, HHDM_OFFSET, USER_PERM_READ);
         let closed = sys_dlctl(3, base, 0);
         let mapped_after = check_page_user_perms(pg, HHDM_OFFSET, USER_PERM_READ);
         let double = sys_dlctl(3, base, 0); // nothing live at `base` now -> ERR
-        let base2 = dl_load_elf(DL_SO); // re-open maps fresh
+        let base2 = dl_load_elf(DL_SO, false); // re-open maps fresh
         let reopened =
             base2 != ERR && check_page_user_perms(base2 & !0xFFF, HHDM_OFFSET, USER_PERM_READ);
         let _ = sys_dlctl(3, base2, 0); // clean up the shared-AS mapping
@@ -6744,77 +6794,9 @@ cfg_r4! {
         }
     }
 
-    // Security audit log (full-os guide Part IV.10): a small ring, distinct
-    // from dmesg, holding structured security events (capability/sandbox
-    // denials and privileged operations) that userspace can query via
-    // sys_sysinfo op 7. Records WHO (tid) tried WHAT (syscall nr) and was denied.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    const AUDIT_CAP: usize = 1024;
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static mut AUDIT: [u8; AUDIT_CAP] = [0; AUDIT_CAP];
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static mut AUDIT_HEAD: usize = 0;
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static mut AUDIT_LEN: usize = 0;
-
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn audit_byte(b: u8) {
-        AUDIT[AUDIT_HEAD] = b;
-        AUDIT_HEAD = (AUDIT_HEAD + 1) % AUDIT_CAP;
-        if AUDIT_LEN < AUDIT_CAP {
-            AUDIT_LEN += 1;
-        }
-    }
-
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn audit_write(s: &[u8]) {
-        for &b in s {
-            audit_byte(b);
-        }
-    }
-
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn audit_hex(v: u64) {
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-        let mut shift: i32 = 60;
-        while shift >= 0 {
-            audit_byte(HEX[((v >> shift) & 0xF) as usize]);
-            shift -= 4;
-        }
-    }
-
-    /// Record a denied/privileged security event: tag + syscall nr + caller tid.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn audit_event(tag: &[u8], nr: u64) {
-        audit_write(b"AUDIT: ");
-        audit_write(tag);
-        audit_write(b" nr=0x");
-        audit_hex(nr);
-        audit_write(b" tid=0x");
-        audit_hex(R4_CURRENT as u64);
-        audit_write(b"\n");
-    }
-
-    /// Copy the most recent `len` bytes of the audit ring (oldest->newest) to
-    /// the user buffer; returns the count or u64::MAX on a bad buffer.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn audit_read(ptr: u64, len: usize) -> u64 {
-        let n = core::cmp::min(len, AUDIT_LEN);
-        if n == 0 {
-            return 0;
-        }
-        let start = (AUDIT_HEAD + AUDIT_CAP - n) % AUDIT_CAP;
-        let first = core::cmp::min(n, AUDIT_CAP - start);
-        if copyout_user(ptr, &AUDIT[start..start + first], first).is_err() {
-            return 0xFFFF_FFFF_FFFF_FFFF;
-        }
-        if n > first
-            && copyout_user(ptr + first as u64, &AUDIT[0..n - first], n - first).is_err()
-        {
-            return 0xFFFF_FFFF_FFFF_FFFF;
-        }
-        n as u64
-    }
+    // Security audit log (full-os guide Part IV.10) lives in `crate::audit`
+    // (gap #9 modularization): a ring of structured security events queried via
+    // sys_sysinfo op 7. Callers use `crate::audit::audit_event(tag, nr)`.
 
     /// True if `needle` occurs in `hay`.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -6833,36 +6815,6 @@ cfg_r4! {
             i += 1;
         }
         false
-    }
-
-    /// Boot self-test for the security audit checkpoints (full-os guide Part IV.10).
-    /// The sandbox-deny gate (syscall.rs) and the power path (sys_power) now record
-    /// an audit event; this drives the same `audit_event` calls those sites make and
-    /// confirms each lands in the ring with the expected tag + syscall nr, read back
-    /// exactly the bytes appended (the way sys_sysinfo op 7 exposes them to userspace).
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn audit_checkpoint_selftest() {
-        let h0 = AUDIT_HEAD;
-        audit_event(b"sandbox-deny", 0x31); // nr 49 (sys_net_query): a filtered syscall
-        audit_event(b"power-off", 58);
-        let h1 = AUDIT_HEAD;
-        // Linearize exactly the bytes the two calls appended ([h0, h1) over the ring).
-        let mut tmp = [0u8; 256];
-        let mut k = 0usize;
-        let mut i = h0;
-        while i != h1 && k < tmp.len() {
-            tmp[k] = AUDIT[i];
-            i = (i + 1) % AUDIT_CAP;
-            k += 1;
-        }
-        let buf = &tmp[..k];
-        let ok = slice_contains(buf, b"sandbox-deny nr=0x0000000000000031")
-            && slice_contains(buf, b"power-off nr=0x000000000000003A");
-        if ok {
-            serial_write(b"AUDIT: checkpoints ok\n");
-        } else {
-            serial_write(b"AUDIT: checkpoints fail\n");
-        }
     }
 
     /// sys_sysinfo (ABI v3.2 id 61): lightweight /proc-style metrics.
@@ -6886,7 +6838,7 @@ cfg_r4! {
             3 => R4_PREEMPT_TICKS,
             // op 4 = dmesg read: copy the kernel log tail (a2 = user buffer,
             // a3 = capacity) -> bytes copied, or u64::MAX on a bad buffer.
-            4 => klog_read(a2, a3 as usize),
+            4 => crate::dmesg::klog_read(a2, a3 as usize),
             // op 5 = MBR partition-table parse (full-os guide Part II.5
             // partitions): read LBA 0, validate the 0x55AA signature, log each
             // non-empty primary entry -> partition count (u64::MAX if no disk
@@ -6941,7 +6893,7 @@ cfg_r4! {
             6 => {
                 let mut tmp = [0u8; 512];
                 let cap = core::cmp::min(a3 as usize, 512);
-                let n = match fat16_read_named(b"HELLO   TXT", &mut tmp[..cap]) {
+                let n = match crate::fat16::fat16_read_named(b"HELLO   TXT", &mut tmp[..cap]) {
                     Some(n) => n,
                     None => return 0xFFFF_FFFF_FFFF_FFFF,
                 };
@@ -6953,10 +6905,10 @@ cfg_r4! {
             // op 7 = security audit-log read (full-os guide Part IV.10):
             // a2 = user buffer, a3 = capacity -> bytes copied (u64::MAX on a
             // bad buffer). Public so any task can inspect the audit trail.
-            7 => audit_read(a2, a3 as usize),
+            7 => crate::audit::audit_read(a2, a3 as usize),
             // op 8 = FAT16 root directory list (full-os guide Part II.5): logs
             // each entry, returns the count.
-            8 => fat16_list(),
+            8 => crate::fat16::fat16_list(),
             // op 9 = disk-encryption round trip (full-os guide Part IV.10):
             // encrypt a known plaintext, write it to a scratch sector, read it
             // back raw (must be ciphertext != plaintext), decrypt, and verify
@@ -7087,11 +7039,11 @@ cfg_r4! {
             11 => {
                 let name: [u8; 11] = *b"WRTEST  TXT";
                 let content: &[u8] = b"fat-write-v1!";
-                if !fat16_write_named(&name, content) {
+                if !crate::fat16::fat16_write_named(&name, content) {
                     return 0;
                 }
                 let mut out = [0u8; 64];
-                let n = match fat16_read_named(&name, &mut out) {
+                let n = match crate::fat16::fat16_read_named(&name, &mut out) {
                     Some(v) => v,
                     None => return 0,
                 };
@@ -7108,7 +7060,7 @@ cfg_r4! {
             12 => {
                 let name: [u8; 11] = *b"BIG     TXT";
                 let mut out = [0u8; 1024];
-                let n = match fat16_read_chain(&name, &mut out) {
+                let n = match crate::fat16::fat16_read_chain(&name, &mut out) {
                     Some(v) => v,
                     None => {
                         serial_write(b"FATBIG: chain read fail\n");
@@ -7138,7 +7090,7 @@ cfg_r4! {
                 // only caller of op 12 and supplies BAD.TXT alongside BIG.TXT.)
                 let badname: [u8; 11] = *b"BAD     TXT";
                 let mut bad = [0u8; 1024];
-                match fat16_read_chain(&badname, &mut bad) {
+                match crate::fat16::fat16_read_chain(&badname, &mut bad) {
                     Some(512) => serial_write(b"FATBIG: bad-cluster guarded ok\n"),
                     _ => serial_write(b"FATBIG: bad-cluster guard FAIL\n"),
                 }
@@ -7203,7 +7155,7 @@ cfg_r4! {
                 // guide Part IV.10): the record lands in the ring even though the
                 // machine stops immediately after.
                 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-                audit_event(b"power-off", 58);
+                crate::audit::audit_event(b"power-off", 58);
                 serial_write(b"POWER: shutdown\n");
                 drain();
                 arch_x86::outw(0x604, 0x2000); // q35 PM1a_CNT (PMBASE 0x600)
@@ -7215,7 +7167,7 @@ cfg_r4! {
             }
             1 => {
                 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-                audit_event(b"power-reboot", 58);
+                crate::audit::audit_event(b"power-reboot", 58);
                 serial_write(b"POWER: reboot\n");
                 drain();
                 arch_x86::outb(0x64, 0xFE); // 8042 pulse CPU reset
@@ -7330,6 +7282,15 @@ cfg_r4! {
             net::r4_release_owned_sockets(tid);
             r4_release_owned_endpoints(tid);
             r4_release_stale_services();
+            // epoll instances and dlopen handles are raw global slots (not owned
+            // fds), so reclaim the exiting task's here too -- otherwise a creator
+            // that exits without close/dlclose leaks the slot for the whole boot.
+            // Both subsystems exist only in this lane (cfg below mirrors theirs).
+            #[cfg(not(feature = "compat_real_test"))]
+            {
+                crate::epoll::r4_release_owned_epolls(tid);
+                r4_release_owned_dlhandles(tid);
+            }
         }
     }
 
@@ -11069,15 +11030,66 @@ unsafe fn block_flush_dispatch() -> bool {
     }
 }
 
+/// Self-hosting installer (full-os guide Part V.11): write REAL kernel bytes --
+/// the kernel's OWN loaded ELF, obtained from the Limine kernel-file response --
+/// to the target disk, instead of a synthetic fill. Reads the first written
+/// sector back and confirms the ELF magic round-tripped. Returns (ok, size). This
+/// closes the kernel-image-readable-at-runtime prerequisite; installing the
+/// bootloader stages + a standalone boot of the target remain (see remediation §7).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn install_self_image_and_verify() -> (bool, u64) {
+    const SELF_LBA: u64 = 1024; // within a 1 MiB target, clear of MBR + partition
+    const SELF_SECTORS: u64 = 16; // 8 KiB proof chunk of the real image
+    let resp = KERNEL_FILE_REQUEST.response;
+    if resp.is_null() {
+        return (false, 0);
+    }
+    let kf = (*resp).kernel_file;
+    if kf.is_null() {
+        return (false, 0);
+    }
+    let addr = (*kf).address;
+    let size = (*kf).size;
+    if addr.is_null() || size < 64 {
+        return (false, size);
+    }
+    // Confirm we really hold the kernel's own ELF (\x7FELF) before writing it.
+    if *addr != 0x7F || *addr.add(1) != b'E' || *addr.add(2) != b'L' || *addr.add(3) != b'F' {
+        return (false, size);
+    }
+    let mut s = 0u64;
+    while s < SELF_SECTORS {
+        let off = (s * 512) as usize;
+        if off >= size as usize {
+            break;
+        }
+        let n = core::cmp::min(512, size as usize - off);
+        core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+        core::ptr::copy_nonoverlapping(addr.add(off), BLK_DATA_PAGE.0.as_mut_ptr(), n);
+        if !virtio_blk_io(true, SELF_LBA + s, 512) {
+            return (false, size);
+        }
+        s += 1;
+    }
+    // Read the first written sector back and confirm the ELF magic survived.
+    core::ptr::write_bytes(BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+    if !virtio_blk_io(false, SELF_LBA, 512) {
+        return (false, size);
+    }
+    let dp = BLK_DATA_PAGE.0.as_ptr();
+    let elf_ok = *dp == 0x7F && *dp.add(1) == b'E' && *dp.add(2) == b'L' && *dp.add(3) == b'F';
+    (elf_ok, size)
+}
+
 /// Installer (full-os guide Part V.11): provision a target disk with an OS boot
-/// record. Finds a SECOND virtio-blk device (the install target) — a generic
-/// boot has only the boot disk, so this is a safe no-op there; only a lane that
-/// attaches a blank second disk exercises the write. Switches the block driver
-/// to the target, writes a boot record (a "RUGOINST" magic + version + the
-/// 0x55AA MBR signature), reads it back to verify, then restores the boot disk.
-/// v1 boundary: it provisions one image block and verifies the write/read path;
-/// a full bootable install (partition layout, kernel copy, bootloader) is
-/// carry-forward.
+/// record + a REAL kernel-image chunk. Finds a SECOND virtio-blk device (the
+/// install target) — a generic boot has only the boot disk, so this is a safe
+/// no-op there; only a lane that attaches a blank second disk exercises the
+/// write. Switches the block driver to the target, writes a boot record
+/// ("RUGOINST" magic + version + 0x55AA MBR signature) + a payload + the kernel's
+/// own ELF (`install_self_image_and_verify`), reads them back to verify, then
+/// restores the boot disk. v1 boundary: bootloader stages + a standalone boot of
+/// the target are carry-forward.
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 unsafe fn installer_selftest() {
     // The boot disk is the first virtio-blk (already initialized by storage boot).
@@ -11127,6 +11139,14 @@ unsafe fn installer_selftest() {
     let provisionable = install_target_provisionable();
     let mbr_ok = provisionable && install_write_and_verify();
     let payload_ok = mbr_ok && install_payload_and_verify();
+    // Self-host step: write the kernel's OWN ELF (real bytes, read at runtime via
+    // the Limine kernel-file response) to the target and verify the round-trip,
+    // while the target disk is still the bound device.
+    let (self_ok, self_size) = if payload_ok {
+        install_self_image_and_verify()
+    } else {
+        (false, 0)
+    };
     // Reset the target so it releases the shared virtqueue (only one device may
     // be bound to VQ_MEM at a time), then restore the boot disk.
     outb(tgt_iobase + VIRTIO_DEVICE_STATUS, 0);
@@ -11151,6 +11171,14 @@ unsafe fn installer_selftest() {
         serial_write(b" sectors=0x");
         serial_write_hex(INSTALL_PART_SECTORS as u64);
         serial_write(b"\n");
+        if self_ok {
+            // Real kernel bytes (own ELF) written + verified on the target.
+            serial_write(b"INSTALL: self-image elf size=0x");
+            serial_write_hex(self_size);
+            serial_write(b" written+verified ok\n");
+        } else {
+            serial_write(b"INSTALL: self-image FAIL\n");
+        }
         serial_write(b"INSTALL: bootable install ok\n");
     } else if mbr_ok {
         serial_write(b"INSTALL: payload FAIL\n");
@@ -13279,13 +13307,13 @@ pub extern "C" fn kmain() -> ! {
         let _ = aes::aes_selftest(); // full-os Part IV.10: AES-128 (FIPS-197 KAT)
         mm::huge_page_selftest(); // full-os Part I.4: 2 MiB huge page
         let _ = tty::tty_selftest(); // full-os Part V.11: TTY line discipline
-        gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
-        gpt_crc_selftest(); // full-os Part II.5: GPT header CRC-32 validation
+        crate::gpt::gpt_parse_selftest(); // full-os Part II.5: GPT partition table parse
+        crate::gpt::gpt_crc_selftest(); // full-os Part II.5: GPT header CRC-32 validation
         let _ = mount::mount_selftest(); // full-os Part II.5: mount table
         dl_ondisk_seed(); // full-os Part V.11: seed /data/dltest.so for on-disk dlopen
         clock_ids_selftest(); // full-os Part IV.9: BOOTTIME + MONOTONIC_RAW clock ids
         timerfd_periodic_selftest(); // full-os Part IV.9: periodic timerfd re-arm
-        audit_checkpoint_selftest(); // full-os Part IV.10: sandbox/power audit checkpoints
+        crate::audit::audit_checkpoint_selftest(); // full-os Part IV.10: sandbox/power audit checkpoints
         let _ = kbd::input_event_selftest(); // full-os Part III: input event queue
         match fb::fb_alpha_selftest() {
             // full-os Part III: framebuffer alpha blending (src-over).
@@ -13299,7 +13327,7 @@ pub extern "C" fn kmain() -> ! {
             2 => serial_write(b"FBCURSOR: save-under skip (no fb)\n"),
             _ => serial_write(b"FBCURSOR: save-under FAIL\n"),
         }
-        let _ = rng_hwseed_selftest(); // full-os Part IV.10: RDRAND-seeded CSPRNG
+        let _ = crate::rng::rng_hwseed_selftest(); // full-os Part IV.10: RDRAND-seeded CSPRNG
         // full-os Part I.3: online CPU count via the real sys_sysinfo op-13 path.
         serial_write(b"CPUS: count=0x");
         serial_write_hex(sys_sysinfo(13, 0, 0));
@@ -13365,6 +13393,14 @@ pub extern "C" fn kmain() -> ! {
         // window page tables dl_load_elf's vm_map_current needs are now present), in
         // the free DLOPEN window; cleans up after itself so the Go image is untouched.
         dlclose_selftest();
+        // Provision the on-disk credential store (/data/shadow, root-owned and
+        // owner-only) from the compiled seed, in this known-good VFS context.
+        // login_verify reads it as the runtime source of truth (gap #8).
+        crate::cred::cred_store_provision();
+        // full-os Part IV.10: public-key (Lamport) signature verify -- the genuine
+        // embedded signature passes; a message tamper and a signature tamper are
+        // both rejected (the kernel holds only the public key, so it cannot forge).
+        crate::pqsig::sigverify_selftest();
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         // The boot task and its service threads run on the shared table;

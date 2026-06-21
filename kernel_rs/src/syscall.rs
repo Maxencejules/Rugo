@@ -57,6 +57,14 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
         // checked first, so r4_current_smp is only read on the gated path.
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         {
+            // Distinct errno (full-os guide Part V.11): clear the caller's
+            // last_errno at the start of EVERY syscall except the errno read
+            // itself, so a syscall that fails on a path that does NOT stamp a code
+            // leaves errno at 0 (libc then falls back to EIO) rather than reporting
+            // a STALE code from an earlier failed call.
+            if nr != 62 {
+                r4_clear_errno();
+            }
             if nr < 64 {
                 let cur = r4_current_smp();
                 if cur < R4_MAX_TASKS && (R4_TASKS[cur].sec_filter_mask >> nr) & 1 == 0 {
@@ -66,7 +74,7 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                     // Record the denial in the security audit ring (full-os
                     // guide Part IV.10): a sandboxed task probing a filtered
                     // syscall is a security-relevant event.
-                    audit_event(b"sandbox-deny", nr);
+                    crate::audit::audit_event(b"sandbox-deny", nr);
                     *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
                     return;
                 }
@@ -273,7 +281,12 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             54 => {
-                *frame.add(14) = sys_getrandom(arg1, arg2);
+                *frame.add(14) = crate::rng::sys_getrandom(arg1, arg2);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            55 => {
+                let arg4 = *frame.add(5); // r10
+                *frame.add(14) = crate::epoll::sys_epoll(arg1, arg2, arg3, arg4);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             59 => {
@@ -284,12 +297,24 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                 *frame.add(14) = sys_ioctl(arg1, arg2, arg3);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            57 => {
+                *frame.add(14) = sys_nsctl(arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             58 => {
                 *frame.add(14) = sys_power(arg1);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             60 => {
                 *frame.add(14) = sys_dlctl(arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            62 => {
+                *frame.add(14) = sys_errno();
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            63 => {
+                *frame.add(14) = crate::pqsig::sys_sigverify(arg1);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             61 => {

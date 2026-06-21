@@ -29,14 +29,43 @@ is drawn under a later one), and blits each via `fb_blit_rect` (clamped to the
 framebuffer). Returns the number of surfaces blitted (or -1 on bad
 op/count/pointer).
 
+## Persistent surface registry (standing window server)
+
+op 4 composites a *throwaway* list supplied per call — fine for one client drawing
+its own frame, but not a window server, which must hold **multiple clients'**
+windows persistently and own their lifecycle. `sys_ioctl` adds a persistent,
+owner-stamped registry (`WM_SURFACES`, 8 slots):
+
+- **op 8 `wm_register(slot=a2, desc_ptr=a3)`** — register/update the caller's
+  surface in `slot` (`desc` = `[geom][color|z<<32]`, same encoding as op 4). The
+  surface is stamped with the caller's tid and **persists across calls** until
+  cleared or the owner exits. A slot owned by another live client cannot be
+  hijacked. Returns the slot.
+- **op 9 `wm_compose()`** — composite the **whole** registry (every live client's
+  window) to the framebuffer in z-order. Returns the surface count.
+- **op 10 `wm_clear(slot=a2)`** — remove the caller's surface (owner-checked, so a
+  client cannot close another's window).
+- **Exit cleanup** — `wm_release_owner` runs from `r4_exit_and_switch`, so a dead
+  client's windows disappear automatically (the lifecycle a server enforces).
+
+`test_winsrv_v1.py`: `wmprobe` registers two windows (red z=0, blue z=1),
+composes (=2), clears one, composes (=1), and exits leaving the other registered;
+then a **different** client `wmcheck` composes and sees **0** — the kernel removed
+the exited owner's window. This proves the registry is a server-owned lifecycle,
+not a per-call list.
+
 ## v1 boundary / carry-forward
 
-- **Solid-color surfaces, kernel-composited.** A surface is a colored rectangle,
-  not yet a per-client pixel buffer. v1 proves z-ordered composition of multiple
-  surfaces; **shared-memory pixel surfaces** (a client maps a buffer, draws
-  pixels, the compositor blits the buffer), **damage/dirty regions**, alpha
-  blending, and a standing **compositor process** that owns the framebuffer are
-  carry-forward.
+- **Solid-color surfaces.** A surface is a colored rectangle, not yet a per-client
+  pixel buffer; **shared-memory pixel surfaces**, **damage/dirty regions**, and
+  alpha blending are carry-forward.
+- **Registry is kernel-mediated; clients submit directly.** The persistent
+  registry + per-client lifecycle exist, but a **resident user-space compositor
+  process** driving the compose loop on a timer/vsync (vs each client triggering
+  `wm_compose`), plus **two concurrently-live clients** coexisting on screen
+  (proven here across two *sequential* clients via exit-cleanup), are the next step.
+- **No input routing.** Pairing composition with the mouse + a per-window input
+  event queue (so clicks hit the top window) is the window-server's next layer.
 - **No input routing.** Pairing composition with the PS/2 mouse (`mouse_v1.md`)
   + a per-window input event queue (so clicks hit the top window) is the
   window-server's next layer; the mouse device is up but movement reporting needs

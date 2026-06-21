@@ -18,7 +18,13 @@ def test_login_authenticated_privilege_change(qemu_go_c4_runtime, find_in_order)
     # recorded in the audit ring, covered by test_audit_v1.)
     find_in_order(out, [
         "SPAWN: loginprobe",
+        # Credentials live in a root-owned, owner-only /data/shadow store
+        # (provisioned at boot); an unprivileged (uid 100) app is denied reading it.
+        "LOGINPROBE: shadow protected ok",
         "LOGINPROBE: ok",
+        # After LOGIN_LOCKOUT consecutive wrong root logins the account locks and
+        # even the correct password is refused (online brute-force throttle).
+        "LOGINPROBE: lockout ok",
         "RUGO: halt ok",
     ])
     assert "LOGINPROBE: FAIL" not in out

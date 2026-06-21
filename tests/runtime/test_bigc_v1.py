@@ -80,8 +80,16 @@ def test_exec_multipage_c_app(find_in_order):
     find_in_order(out, [
         "EXEC: bigcprobe ok",
         "BIGC: ok sum=0x14070400 high=0xe1f2a765 pages>2",
+        # rlibc v2: free() reuses freed blocks via a free list (no longer a no-op).
+        "BIGC: heap reuse=1 distinct=1",
+        # rlibc v3: bidirectional buffered FILE* - write a file then read it back.
+        "BIGC: stdio rw[11]=rlibc-stdio eof=1",
+        # rlibc v2 distinct errno: open(missing)->ENOENT, read(badfd)->EBADF, !=.
+        "BIGC: errno enoent=1 ebadf=1 distinct=1",
         "BIGC: done",
         "RUGO: halt ok",
     ])
     assert "BIGC: FAIL" not in out
+    assert "BIGC: stdio fopen err" not in out
+    assert "BIGC: stdio reopen err" not in out
     assert "USERPF" not in out

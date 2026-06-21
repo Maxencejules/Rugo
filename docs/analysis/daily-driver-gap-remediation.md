@@ -1,0 +1,608 @@
+# Daily-Driver Gap Remediation Plan
+
+Source: the verified 10-point "missing pieces vs a real daily-driver OS" audit
+(2026-06-21, 21-agent codebase audit, zero hallucinated evidence). This plan
+turns each finding into a concrete remediation: what is already fixed, what is a
+contained next step, and what is a milestone that cannot be closed in one pass.
+
+The audit's load-bearing conclusion — **real runnable foundations + a tier of
+advanced subsystems that exist only as `cfg(go_test)` boot self-tests or Python
+report generators, not live paths** — is correct and frames everything below.
+
+Legend: **[DONE]** landed + gate-verified this pass · **[NEXT]** contained,
+days-scale · **[MILESTONE]** weeks+, needs its own roadmap · **[DECISION]**
+needs an explicit soften-claim-vs-implement choice before work starts.
+
+---
+
+## 0. What landed this pass (verified)
+
+- **#3 Concurrent pipelines [DONE].** `runPipeline`
+  (`services/go/coreutils.go`) now spawns both stages with the non-blocking
+  `spawnIO` (mirroring the co-residency `asConc` proves) and reaps both, instead
+  of blocking on the left stage via `spawnRunIO`. Left streams into the pipe
+  while right drains it in parallel, in separate address spaces; the 512-byte
+  ring no longer bounds the left stage's total output. The asm coreutils already
+  handled concurrent pipe I/O (`cat.asm` yields-and-retries on a full ring,
+  `wc.asm` on an empty one), so no app change was needed. Verified:
+  `test-pipes-v1` + `test-concurrent-exec-v1` green.
+  - Carry-forward: only two-stage `a | b` is supported (`shell_session.go`
+    splits on the first ` | `); 3+ stage pipelines and a `>512 B`
+    deadlock-avoidance gate need file-append (`fswrite` overwrites with a 96-byte
+    cap today) before they can be expressed through the shell.
+
+- **#8 Salted credentials + iterated KDF + lockout [DONE].**
+  `PASSWD`/`login_verify` (`kernel_rs/src/lib.rs`) now:
+  - store/check **`PBKDF2-HMAC-SHA256(pw, per-user-salt, 4096)`** (over the
+    existing `hmac_sha256`) instead of bare `sha256(pw)` — defeats
+    precomputed/rainbow tables and cross-account hash equality, and makes each
+    offline guess cost 4096 HMACs;
+  - **lock an account after 3 consecutive failures** (`LOGIN_FAILS`/`LOGIN_LOCKOUT`),
+    refusing even the correct password until reset — an online brute-force throttle.
+  - **file-based store**: credentials now live in a root-owned, owner-only
+    `/shadow` VFS file (the `/etc/shadow` analogue; tree rooted at `/data`),
+    provisioned at boot (`cred_store_provision`, alongside `dlclose_selftest`).
+    `login_verify` reads it as the runtime source of truth (fallback to the seed
+    if unreadable). `loginprobe` proves a uid-100 app is denied reading it while
+    root can. (Internal `vfs_*` paths are `/data`-stripped → `/shadow`; the login
+    syscall path can't reliably create VFS files, so it provisions at boot.)
+  - Verified: `test-login-v1` (`lockout ok` + `shadow protected ok`) +
+    `test-audit-v1` + `test-users-runtime-v1` + `test-userid-v1` +
+    `test-vfs-runtime-v1` (node count 2→3) green.
+  - Remaining for #8: a real input fuzzer (see §8). The store is now a file, so a
+    `passwd`-style tool to mutate it is a natural follow-up.
+
+- **#4 libc real `free()` + buffered `FILE*` stdio [DONE].** `rlibc.c`:
+  - `malloc`/`free` replaced the v1 no-op `free` with a free-list allocator (each
+    block carries a 16-byte size header, `free` pushes onto a LIFO list, the next
+    fitting `malloc` reuses the freed block). Proof: `HELLOC: heap reuse=1 distinct=1`.
+  - Added a **bidirectional buffered `FILE*`** layer over the fd syscalls
+    (256-byte buffer, 8-slot pool): read side `fopen`/`fgetc`/`fread`/`feof`,
+    write side `fputc`/`fwrite`/`fflush` (flush-on-close), `fclose`. Proofs:
+    `HELLOC: stdio fread[16]=from-c-with-love eof=1` and
+    `HELLOC: stdio rw[11]=hello-stdio` (write a file, read it back).
+  - Verified: `test-libc-v1` (all proofs).
+  - Remaining for #4: a real editor + package installer (TLS is now DONE — see
+    below).
+
+- **#4 thread-local storage [DONE — kernel mechanism].** libc had no TLS. Added a
+  per-task `%fs` base (`R4Task.fs_base`, MSR `IA32_FS_BASE`): `sys_vm_ctl op 5 =
+  set_tls(base)` validates the base canonical (so the restore `wrmsr` can't `#GP`),
+  stores + applies it; `r4_switch_to` restores `IA32_FS_BASE = task.fs_base` on
+  every resume (0 for non-TLS tasks), so each task's `%fs` base is isolated and a
+  clone thread's TLS is never clobbered; `r4_init_task` resets it (TLS is
+  per-thread, not inherited). Proof: `tlsprobe` sets `fs.base` to a block, writes a
+  magic via `[fs:0]`, confirms it aliases the block, then YIELDS and re-reads
+  `[fs:0]` — still the magic, so the kernel restored this task's base on resume
+  (`TLS: fs-base tls ok`, `test_tls_v1.py`). The `wrmsr`-on-every-switch verified
+  safe (switch-heavy login/signals/dynamic-tasks/concurrent-exec/futex green).
+  Carry-forward (`tls_v1.md`): rlibc `__thread`/per-thread errno wiring (gated on
+  the PE→ELF `.tdata/.tbss` toolchain) and a `%gs` TCB / `fs:0` self-pointer.
+
+- **#4 distinct errno [DONE].** The syscall ABI returned a single −1 sentinel, so
+  rlibc collapsed every failure to `EIO`. Added a per-task `last_errno` (R4Task
+  field) that well-defined failure paths stamp with a POSIX code before returning
+  −1 (`open` → `ENOENT`/`EACCES`, `read`/`write` → `EBADF`/`EACCES`); new
+  `sys_errno` (id 62) returns it — additive, read-only, never changing an existing
+  syscall's return convention. `r4_set_errno` is a cfg pair (real in the go lane
+  where the task table exists, a no-op elsewhere) so the shared read/write
+  handlers compile in every lane. rlibc's `open`/`read`/`write` wrappers now read
+  it (`rugo_errno`) and set `errno` to the real cause, falling back to `EIO` only
+  on un-stamped paths (so `hello.c` and `test_libc` are unchanged; `hello.elf`
+  stays 6016 B — no shared-region pressure).
+  - Proof: `errnoprobe` (raw kernel: `ENOENT=2` vs `EBADF=9`, `ERRNO: distinct
+    ok`, `test_errno_v1.py`) + `bigprobe` (libc wrappers: `BIGC: errno enoent=1
+    ebadf=1 distinct=1`, `test_bigc_v1.py`), both on dedicated disks. Verified +
+    all ABI/contract gates green. Coverage now spans `open` (generic-unmatched +
+    `/data` + `/tmp` → ENOENT/EINVAL/EACCES) and `read`/`write`/`close`
+    (EBADF/EACCES) — `hello.c`'s `open("/no/such/file")` reports the real ENOENT=2
+    (`test_libc` upgraded from the old EIO=5). Remaining: stamp `mkdir`/`unlink`/
+    `stat`/`lseek`/`spawn` (still `EIO`); negative-return-convention is
+    intentionally NOT adopted (it would break the frozen −1 sentinel).
+
+- **#4 dlopen HANDLE TABLE [DONE].** The dynamic linker tracked only ONE live
+  object (a single `DL_LOAD_BASE`/`DL_MAP_*`): a second `dlopen` reclaimed the
+  first, and `dlsym` always resolved the most-recent object — not POSIX. Added a
+  4-entry handle table (`DL_HANDLES{base,lo,hi,ondisk}`): up to 4 objects open
+  **concurrently**, each at its own non-overlapping ASLR slot (`dl_aslr_base`
+  skips every live handle's slot), each freed only by its own `dlclose`. New
+  `sys_dlctl op4 = dlsym_h(handle, name)` resolves a symbol against a *specific*
+  handle at that object's base; `op3 dlclose(handle)` releases exactly one. `op1`
+  (returns a handle) and `op2` (most-recent dlsym) stay back-compatible, so
+  `dlprobe`/`ondlprobe` are untouched. `dl_resolve` now takes an explicit base,
+  `dl_load_elf` an `ondisk` flag + registers the handle (unmaps + fails if full).
+  - Proof: new ring-3 `multidlprobe` (own dedicated disk) opens `libdl` twice →
+    two live objects at distinct bases; `dlsym_h(getval)` on each yields two
+    distinct callable VAs (each relocated → 42); `dlclose(h1)` leaves `h2`
+    resolvable+runnable while `h1`'s handle returns −1 (`MULTIDL: handle table
+    ok`, `test_dlhandles_v1.py`). Verified: 7 dl tests (incl. dynlink/aslr/
+    code_aslr/dlopen_ondisk no-regression + boot `DLCLOSE` selftest) + all 18
+    ABI/contract gates green. v1 boundary: ≤1 *on-disk* object retained (the
+    `DL_LOADED` buffer is shared); embedded handles back onto the static image.
+
+---
+
+## 1. SMP — live per-CPU scheduler  [AP general exit/reschedule DONE; load-balancing policy carry-forward]
+
+**[DONE] AP-side general-app exit/reschedule.** The residual below (a general app
+exiting *on an AP* through `r4_exit_and_switch`, which was BSP-centric) is now
+implemented. `r4_exit_and_switch` is per-CPU (`on_ap = !is_bsp()`, so the BSP path
+is byte-for-byte unchanged — verified by login/signals/dynamic-tasks/waitpid/fork/
+concurrent-exec all green); on an AP it retires THIS CPU's current
+(`r4_current_smp`) and returns to the pull-loop (`ap_exit_park`) instead of the BSP
+`r4_find_ready` reschedule. The fix that took three tries (two reverts pinned it):
+the exit cleanup steps CR3 off the task's address space before freeing it, and an
+AP's per-CPU kernel stack is **not** mapped in `SHARED_PML4_PHYS` (the BSP's table),
+so it must step to `ap_saved_cr3()` (its own saved kernel CR3). Proof
+(`test_smp_runtime_v1.py`): an `ap_eligible` task whose ring-3 code is a bare
+`sys_exit` is claimed + run by an AP, exits through the per-CPU AP branch, and the
+BSP observes completion — `SMP: ap general-exit ran=0x1 ok`. So a task now runs
+AND exits/reschedules on an AP via the **general** syscall path. Carry-forward:
+marking *production* apps `ap_eligible` + load-balancing the general workload is a
+scheduler-policy choice; the mechanism is in place.
+
+
+Current (`kernel_rs/src/smp.rs`, `lib.rs`): cross-CPU data locks
+(`FS<NET<STORAGE<R4_RQ`, `smp.rs:1869`) are real and wired into production
+syscall/VFS/net paths, but **no task runs on an AP at steady state**:
+`ap_eligible` is forced false by the production initializer (`lib.rs:4068`) and
+flipped true only inside `cfg(go_test)` self-tests; `SMP_LIVE_MODE` is set to 1
+transiently in three self-tests and reset to 0, so `ap_pull_r4_task` is inert
+after boot. `R4_CURRENT` is a single global (`lib.rs:4004`). No load balancer,
+work-stealing, or migration exists.
+
+Remediation (slices, each its own `test-*-v1` boot gate):
+1. **Per-CPU current task.** Replace the single `R4_CURRENT` with a per-CPU
+   array indexed by `r4_current_smp()`'s CPU id (the GS-base machinery already
+   exists). Make `r4_switch_to`/timer preemption per-CPU. Gate: BSP-only still
+   green (no behavior change yet).
+2. **Live AP run path.** Promote `SMP_LIVE_MODE` to a real, default-on flag and
+   let APs pull `Ready` tasks from a shared queue under `R4_RQ_LOCK` instead of
+   parking. Start with one AP, spawned-app tasks only. Gate: a spawned app
+   observably runs on CPU≠0 (read APIC id from the task).
+3. **Load balancing + migration.** BSP pushes excess `Ready` tasks to idle APs;
+   add work-stealing when an AP's queue is empty. Gate: N>cores spawns spread
+   across all CPUs; per-CPU dispatch counters all non-zero.
+4. **SMP-safe audit.** Re-audit every syscall handler for per-CPU `current`
+   assumptions now that two tasks run truly concurrently (the locks exist but
+   have never contended against a live AP task).
+
+Risk: high — concurrency bugs are non-deterministic and the `-smp1` lanes can't
+reproduce them. Each slice must land behind a multi-core boot gate.
+
+**Investigated this pass (2026-06-21) — why this is the capstone, not a slice.**
+The live-scheduler *mechanism* fully works: `smp_live_sched_selftest`
+([smp.rs:2199](../../kernel_rs/src/smp.rs#L2199)) creates real per-address-space
+tasks, marks them `ap_eligible`, flips `SMP_LIVE_MODE=1`, and APs autonomously
+pull + run them under `R4_RQ_LOCK` ([smp.rs:2105](../../kernel_rs/src/smp.rs#L2105)).
+BUT those tasks run a tiny code blob and retire via a **dedicated `int 0x81` path**
+(`ap_user_trap`/`ap_user_done`). A real `sys_spawn` app does general `int 0x80`
+syscalls and exits via `r4_exit_and_switch` — and **AP-side task exit / blocking /
+rescheduling is the unimplemented part**. `ap_resume_r4_task` sets the AP's
+per-CPU current (`gs:[16]`) so an app's syscalls would dispatch via
+`r4_current_smp()`, but returning the AP to its park loop on the app's exit/block
+is not handled. So the first *real* slice is: implement AP-side exit/block/resched
+(generalize `ap_user_done` to the real scheduler), then mark spawned external apps
+`ap_eligible` with `SMP_LIVE_MODE` on. `test-smp-v1` today exercises the `int 0x81`
+selftest path, **not** a real app's path, so a new spawn-an-app-on-an-AP gate is
+also required. This is genuine capstone work, not a flag flip.
+
+**Re-confirmed (this pass):** the exact blocker is that `r4_exit_and_switch`
+([lib.rs](../../kernel_rs/src/lib.rs)) reads the BSP global `R4_CURRENT` (not the
+per-CPU `r4_current_smp()`), so a general app exiting *on an AP* would retire the
+wrong task — and nothing marks a production app `ap_eligible`, so this is latent,
+not a live bug. The slice is therefore a real scheduler feature: make
+`r4_exit_and_switch` per-CPU-aware (retire *this CPU's* current and, on an AP,
+return to the pull-loop instead of a BSP `r4_switch_to`), mark a spawned app
+`ap_eligible`, and add a spawn-app-on-an-AP gate.
+
+**ATTEMPTED + reverted (this pass) — the fault point is now pinned.** Implemented
+exactly that: `r4_exit_and_switch` made per-CPU (`on_ap = !is_bsp()`, so the BSP
+path is byte-for-byte unchanged — and indeed every pre-existing SMP marker still
+prints), an AP-park branch (`crate::smp::ap_exit_park`: signal `SMP_LIVE_RAN` +
+return to the pull-loop), and a self-test that runs an `ap_eligible` task whose
+ring-3 code is a bare `sys_exit` (`AP_EXIT_CODE`). Result: the AP **faults during
+the exit-path cleanup** — the boot stalls right after `live sched ran=3` with no
+`ap general-exit` marker. Root cause: `r4_exit_and_switch`'s cleanup does
+`mov cr3, SHARED_PML4_PHYS` then frees the task's address space; that assumes the
+running CPU's kernel stack (and the `r4_exit_and_switch` code path) stay mapped
+after the CR3 load — true for the BSP (it lives in `SHARED`), but an **AP's
+per-CPU kernel stack is not guaranteed mapped in `SHARED_PML4_PHYS`**, so the next
+stack access faults. So the real remaining work is an **AP-safe exit sequence**:
+either switch to a stack provably mapped in the shared table before the CR3 step,
+or defer the address-space free off the exiting AP (hand it to the BSP/teardown,
+as `smp_live_sched_selftest` already does for the `int 0x81` path). That is the
+focused, full-gate work — now narrowed to the exact instruction (the CR3 load) and
+the exact invariant (AP kernel-stack mapping) that must be made safe. (Reverted;
+the SMP lane is green again — `test-smp-v1` / `test-smp-syscall-v1` pass.)
+
+---
+
+## 2. POSIX/runtime surface  [epoll DONE; rest MILESTONE]
+
+- **[DONE] Native epoll** (`sys_epoll`, ABI v3.x id 55). A real level-triggered
+  readiness set over the existing fd/pipe tables — "stateful poll", reusing the
+  `sys_poll_v1` readiness rules. ops: create / ctl_add / wait / close, writing
+  `{fd:i32, revents:u16, pad:u16}` records (EPOLLIN=0x1, EPOLLOUT=0x4). Verified
+  by a ring-3 `epollprobe` on a dedicated disk (`test-epoll-v1`,
+  `EPOLLPROBE: ready ok`): an empty pipe reports 0 ready, after a write reports
+  the read end ready with EPOLLIN. The additive id was allocated cleanly — all
+  five ABI gates and the Linux-compat epoll-deferral contract stay green (the
+  compat profile's deferral is a separate, report-backed surface).
+
+Still missing for #2: fork/clone work via `sys_proc_ctl` (real CoW fork,
+`lib.rs:5598`); the direct syscall IDs 43/44/45 are deliberate ENOSYS stubs
+(`lib.rs:12518`) **by tested contract** — do not wire them. io_uring / netlink /
+raw-packet / namespaces / cgroups have zero kernel implementation; each is an
+independent milestone (defer until a userland consumer exists; keep honest
+ENOSYS until then).
+
+Remediation (pick by what userland actually needs next):
+- **epoll first** — a level-triggered readiness set over the existing fd/pipe
+  tables is the smallest real win and unblocks event-loop userland. The kernel
+  already computes per-fd readiness in `sys_poll_v1` ([lib.rs:2216](../../kernel_rs/src/lib.rs#L2216)),
+  so epoll is essentially *stateful poll* and the readiness logic is reusable.
+  - **Investigated this pass (2026-06-21): epoll is an ABI-allocation decision,
+    not a casual patch.** Free syscall id 55 exists in the 48..63 window and no
+    go-lane *runtime* test asserts epoll=ENOSYS (the deferral is a Linux-compat
+    contract asserted only by `tests/compat/` Python report generators). BUT the
+    syscall surface is frozen behind **five ABI gates** —
+    `test_abi_source_truth_v3`, `test_abi_docs_v3`, `test_abi_window_v3`,
+    `test_abi_stability_gate_v3`, `test_abi_diff_gate_v3` — so adding id 55 means
+    bumping the frozen ABI baseline + docs in lockstep across all five (plus a new
+    probe app in `COREUTILS_ELFS` + `APP_REGION_APPS`). That is a deliberate
+    governance step the project gated on purpose; do it as an explicit ABI v3.x
+    additive allocation, then implement `sys_epoll` (create/ctl/wait) reusing the
+    poll readiness logic, with a ring-3 `epollprobe` runtime test.
+- **Do NOT wire the direct fork/clone/epoll IDs (43/44/45)** to the working
+  path: they are a *deliberately-tested deferral contract* (`tests/compat/`), not
+  a bug. Allocate a fresh id for a real implementation instead.
+- namespaces/cgroups/io_uring/netlink are each independent milestones; defer
+  until there is a userland consumer, and keep them as honest ENOSYS until then.
+
+**[DONE — first namespace] PID namespace (`sys_nsctl`, id 57).** namespaces are no
+longer zero-implementation. Each task carries a `pid_ns` tag (0 = global),
+inherited across `r4_init_task` (clone threads join their creator's namespace),
+independent of `isolation_domain` so quota grouping is untouched. `op 1
+unshare_pid` moves the caller into a fresh namespace (its "init"); `op 2
+ns_task_count` returns the live tasks **visible** in the caller's namespace (the
+whole system if global, else only same-namespace members); `op 3 ns_getpid`
+returns the namespace-**local** pid (1 for a fresh namespace's first task). Proven
+from one ring-3 client (`nsprobe`): global view `> 1` → unshare → namespaced view
+`== 1`, local pid `== 1` (`NS: pid-namespace isolated ok`, `test_pidns_v1.py`). A
+second namespace type, **UTS** (per-namespace hostname), followed as `sys_nsctl`
+ops 4/5 — proving the additive-ID window is not actually a wall (new ops on an
+existing id need no new id): a fresh namespace inherits the global `"rugo"`, sets
+its own `"ctr"`, and reads it back (`NS: uts-namespace hostname ok`). Carry-forward
+(`pidns_v1.md`): scope `/proc`/enumeration + `kill` to the namespace; add
+mount/network namespaces; nesting/reaping. cgroups + io_uring remain — cgroups'
+aggregate-across-tasks proof is genuinely gated on userspace multi-PROCESS spawn
+(clone threads share one address space + brk, so they can't demonstrate the
+cross-address-space aggregation that distinguishes a cgroup from a per-process
+rlimit), and apps can't spawn processes today; io_uring needs a shared ring.
+
+---
+
+## 3. Concurrent pipelines — **DONE** (see §0). Follow-ups: 3+ stage pipelines and `fswrite` append.
+
+---
+
+## 4. Userland / libc  [MILESTONE, with contained slices]
+
+Current: the dynamic loader (`dl_load_elf`/`dl_resolve`/`sys_dlctl`, dlsym,
+dlclose) is real but `cfg(go_test)`-only and single-global-object (no handle
+table, no dependency resolution, `lib.rs:6676`). libc (`libc/rlibc.c`) is thin:
+no `FILE*`, only `EIO`, no TLS, no-op `free`. No editor; `pkgsvc.go` is a
+verifier, not an installer.
+
+Remediation slices:
+- **libc errno table + real `stdio` `FILE*`** over the existing fd syscalls
+  (buffered read/write). Contained; gated by a new `rlibc` proof app.
+- **`free` that actually frees** (bump → free-list) in the user allocator.
+- **dlopen handle table** (multiple simultaneous objects) + needed-library
+  resolution — promotes the loader past the single-object model.
+- A real line editor and a package *installer* (not just verifier) are larger.
+
+Watch: the Go userspace image is at ~31.8 KiB of the 28 KiB… (32 KiB) cap with
+≈0.9 KiB headroom — Go-side growth needs the 9th code page procedure first.
+
+---
+
+## 5. Hardware breadth  [I/O interrupt-driven completion DONE; rest MILESTONE + DECISION]
+
+**[DONE] Interrupt-driven NVMe I/O completion.** After two reverted naive
+attempts (below) pinned the missed-wakeup race, the **race-free** fix landed: the
+submit loop now waits with interrupts DISABLED around the CQ check and, for an
+I/O command, re-enables + halts ATOMICALLY (`sti; hlt`) so a pending completion
+MSI wakes the halt with no missed wakeup and no timer dependence
+([native.rs](../../kernel_rs/src/runtime/native.rs), `nvme_submit_command`). The
+CQ check stays authoritative; every return leaves interrupts disabled (the loop's
+contract); admin/init commands keep the busy-poll (no guaranteed wake before the
+scheduler timer). Verified on the **live** native NVMe lane
+(`run_native_storage_live_v1.py`, `image-go-native` + `-device nvme`): status
+pass, and the now-**gated** marker `NVME: io irq-driven completion ok` confirms an
+I/O command slept on its completion interrupt. So input (IRQ1/IRQ12) **and** the
+NVMe I/O data path are now genuinely interrupt-driven. Remaining for #5: admin/init
+completion (still polled by design), a non-completing-command timeout under the
+`hlt` wait (a never-completing command would block rather than time out — a v1
+boundary, vs a device failure), and widening to the other native drivers
+(e1000/virtio) + the AHCI/rtl8169 doc-honesty decision below.
+
+
+Current: every native driver (VirtIO-blk/net, NVMe, e1000, xHCI/HID, MSI) is a
+feature-gated **polled** proof; none is continuously device-interrupt-driven on
+its data path (`native.rs:897` MSI handler only counts + EOIs). No power
+mgmt/suspend; only S5 (`lib.rs:7187`).
+
+**[DECISION] Doc-honesty debt:** `docs/hw/support_matrix_v7.md:18-41` declares
+**AHCI Tier-1 release-blocking** with *zero* kernel source; rtl8169 and IOMMU are
+likewise doc-only. Either:
+- (a) **Implement** a minimal AHCI/rtl8169 driver to back the Tier-1 claim, or
+- (b) **Downgrade** the matrix to reflect "no implementation" / planned tier.
+
+Note (b) is **not free**: the matrix is asserted by ~15 `tests/hw/*` gates
+(`test_hw_gate_v7`, `test_hw_matrix_docs_v6`, `test_nvme_ahci_docs_v1`,
+`test_native_storage_driver_matrix_v1`, …). Softening the claim requires updating
+those gates in lockstep. This is a deliberate call for the owner — flagged, not
+silently changed.
+
+Real remediation: make one driver (NVMe is closest) genuinely interrupt-driven
+end-to-end as the template, then widen.
+
+**Investigated this pass — the "polled" claim is narrower than stated.** INPUT is
+already genuinely interrupt-driven: the PS/2 keyboard on **IRQ1** (vector 33) and
+the mouse on **IRQ12** (`MOUSE: irq dx/dy`, `test_mouse_irq_v1.py`) drive their
+data paths off real hardware interrupts, not polling. The MSI/MSI-X plumbing is
+also real: `bind_irq`/`enable_msi[x]` program vector 64, and `handle_irq`
+([native.rs:897](../../kernel_rs/src/runtime/native.rs#L897)) counts + EOIs each
+MSI (`irq_hits=` is reported per NVMe I/O). The precise residual is **storage/net
+COMPLETION**: `nvme_submit_command` ([native.rs:704](../../kernel_rs/src/runtime/native.rs#L704))
+binds + receives the MSI but detects completion by **spin-polling the CQ phase
+bit** (line 753) rather than blocking on the interrupt. Flipping that to a
+`hlt`-until-IRQ wait is the genuine fix — but it sits on the **load-bearing**
+storage path (the FS reads/writes through it) in the higher-friction native lane,
+so it is a real milestone slice (template-then-widen), not a safe one-pass change.
+
+**ATTEMPTED + reverted this pass — empirical proof it is a milestone, not a slice.**
+The naive fix (replace the submit loop's `pause` busy-spin with `hlt`, guarded by
+`irq_mode != None`, since the `sti` is already issued) was implemented and verified
+against the **live** native NVMe lane (`run_native_storage_live_v1.py`, which boots
+`image-go-native` with `-device nvme`). Result: **the lane HANGS** (QEMU boot
+timeout) — `hlt` during early NVMe *init* (identify / create-queue admin commands)
+blocks with no wake, because the periodic timer is not yet reliably firing at that
+boot stage and a just-missed completion MSI (fired between the CQ check and the
+`hlt`) leaves nothing to wake the core. Reverted; the lane passes again.
+
+A **second, narrower** attempt — `hlt` for **I/O commands only** (`!admin`),
+keeping the busy-poll for admin/init, on the theory the data path runs after the
+scheduler timer is live — **also hangs** the lane. So the storage I/O (journal
+staging) runs during *early boot before the preemptive scheduler/timer is firing*,
+and the real defect is a **missed-wakeup race**: with interrupts left enabled
+throughout the wait (the existing `sti`), a completion MSI delivered *between* the
+CQ check and the `hlt` is serviced+EOI'd, leaving the `hlt` with nothing to wake
+it. The genuine fix is therefore a **race-free** wait — `cli` around the CQ check,
+then an atomic `sti; hlt` so a pending completion MSI wakes the halt (no timer
+dependence) — or a full **ISR-driven completion** where `handle_irq` drains the CQ
+and wakes the specific waiter. Both restructure the **interrupt discipline of the
+load-bearing NVMe wait loop** (the IF state on return is part of its contract), so
+this is careful, reviewed, full-gate work — definitively a milestone, now with the
+root cause and the correct design both pinned down. (Verification is runnable here:
+`python tools/run_native_storage_live_v1.py` boots `image-go-native` with
+`-device nvme`; baseline passes, a hang shows as a boot timeout — so the fix *can*
+be iterated safely; it just needs the race-free design, not a naive `hlt`.)
+
+---
+
+## 6. GUI as a standing system  [MILESTONE + DECISION]
+
+Current: framebuffer + pixel/alpha/cursor primitives (`fb.rs`) and IRQ12 mouse
+input (`kbd.rs`) are real; the compose/surface/input-poll syscalls are real
+kernel code but `cfg(go_test)`-gated with **zero userspace callers**. The booted
+"desktop" (`services/go/desktop.go:23-62`) renders nothing — scripted `log()` +
+`sysYield()`. The WM/toolkit/GUI-runtime "qualification" is
+`tools/x4_desktop_runtime_common_v1.py:612-629` grepping the serial boot
+transcript for scripted `DESK*` markers; budgets are asserted, not measured.
+
+**[DECISION] Doc-honesty debt:** the desktop report presents transcript-grep as
+measured compositor/app-launch budgets. Either build a real (even minimal)
+window-server service that drives the GUI syscalls and emit *measured* numbers,
+or relabel the report as a scripted-marker contract check (again gated by
+~10 `tests/desktop/*` gates — lockstep update required).
+
+Real remediation: a persistent window-server task that owns surfaces + an event
+loop pumping the real input ring, with one userspace client drawing through the
+compose syscall. That is the first genuinely "standing" slice.
+
+**[DONE — first standing slice] Persistent owner-stamped surface registry.** The
+compositor was a one-shot z-order of a client's *throwaway* per-call list (op 4) —
+no persistence, no ownership, no lifecycle. Added a persistent registry
+(`WM_SURFACES`, 8 slots) on `sys_ioctl`: **op 8 `wm_register`** (stamps the
+caller's tid, persists across calls, no cross-client hijack), **op 9 `wm_compose`**
+(z-orders the *whole* registry — every live client's window), **op 10 `wm_clear`**
+(owner-checked). `wm_release_owner` runs from `r4_exit_and_switch`, so a dead
+client's windows disappear — the server-owned per-client lifecycle. Now driven by
+**real userspace callers** (closing the "zero userspace callers" gap): `wmprobe`
+registers two windows, composes (=2), clears one, composes (=1), exits leaving one;
+a *different* client `wmcheck` composes and sees **0** — the kernel exit-cleaned
+the dead owner's window (`test_winsrv_v1.py`). This is the registry + lifecycle a
+window server is built on. Still carry-forward: a **resident user-space compositor
+process** driving the compose loop (vs clients triggering it), **two concurrently-
+live clients** on screen (proven here across two *sequential* clients), shared-
+memory pixel surfaces, and input routing to the focused window. The fabricated
+`DESK*` transcript-grep DECISION is unchanged (separate doc-honesty debt).
+
+---
+
+## 7. Installer / self-hosting  [MILESTONE]
+
+Current: `installer_selftest` (`lib.rs:11082`) is genuine runtime provisioning
+but writes a fill pattern (not the real kernel/fs), installs no bootloader, and
+restores the boot disk so nothing boots standalone. `build_installer_v2.py` and
+the graphical smoke tool are report generators. Self-hosting is absent.
+
+**[DONE — kernel-bytes-at-runtime prerequisite] Installer writes real kernel
+bytes.** The blocker (the kernel can't read its own image at runtime) is solved
+with a **Limine kernel-file request** (`LIMINE_KERNEL_FILE_REQUEST`): its response
+gives the in-memory address + size of the kernel's OWN loaded ELF.
+`install_self_image_and_verify` reads it, confirms the `\x7FELF` magic, writes an
+8 KiB chunk of the real image to the target (while bound), and reads it back to
+confirm the magic round-tripped. So the installer now writes a valid bootable MBR
++ partition + payload **and** real kernel bytes it accessed at runtime
+(`INSTALL: self-image elf size=0x<n> written+verified ok`, `test_installer_v1.py`).
+Remaining for self-host: write the FULL kernel + fs image (vs an 8 KiB proof
+chunk), install the Limine bootloader stages to the target, and add a standalone
+(non-restoring) boot gate — the prerequisite below is now in place.
+
+Remediation (ordered):
+1. Installer writes the **real** kernel ELF + SimpleFS image to the target disk.
+2. Install the Limine bootloader stages to the target so it boots unaided.
+3. Boot the installed target standalone in QEMU as the gate (not a restore).
+4. Self-hosting (Rugo building Rugo) is a separate, much larger milestone.
+
+**Investigated this pass — the provisioning is real; the residual is the OS bytes.**
+`install_write_and_verify` ([lib.rs:10838](../../kernel_rs/src/lib.rs#L10838))
+already writes a **structurally-valid bootable MBR** to a fresh second disk — boot
+flag `0x80`, a real 16-byte partition entry (type/LBA/sector-count at offset 446),
+and the `0x55AA` signature — then reads it back and verifies the partition entry
+round-tripped. `install_payload_and_verify` writes + verifies a payload. So the
+*provisioning mechanism* (target-disk switch, partition table, write+read-back
+verification) is genuine, not a stub. The blocker is step 1's **real bytes**: the
+payload is a deterministic fill, because writing a bootable copy needs the kernel
+ELF + fs image *accessible at runtime* — the kernel is loaded by Limine as
+segments, not as a readable file, so it would have to read its own image back off
+the boot medium (ISO9660/boot-FAT parse) before it can copy it. That, plus
+installing Limine stages and a standalone (non-restoring) boot gate, is the
+genuine milestone — the provisioning scaffolding it builds on is already in place.
+
+---
+
+## 8. Security hardening depth  [salt DONE; rest MILESTONE + DECISION]
+
+- **[DONE]** Salted credential hashing (§0).
+- **[NEXT] Iterated KDF + `/etc/shadow`.** Replace the single-pass
+  `sha256(salt||pw)` with an iterated KDF (PBKDF2-HMAC-SHA256 over the existing
+  `hmac_sha256`, fixed cost) and move `PASSWD` out of a kernel static into a
+  root-owned VFS file. Add login attempt lockout/backoff.
+- **[DONE] Public-key package/update signing.** The symmetric keyed-hash
+  (`SHA-256(key||payload)`, kernel HMAC) is now joined by a genuine **asymmetric
+  Lamport one-time signature** verifier (`kernel_rs/src/pqsig.rs`): the kernel
+  embeds ONLY the public key (256 SHA-256 hash pairs, `lamport_pub.bin` 16 KiB) +
+  a reference signature, so it can verify but never forge — the property the
+  symmetric scheme lacked. `lamport_verify` reuses the in-kernel SHA-256 (no
+  big-int/curve math → small, auditable; sidesteps the "constant-time field
+  implementation" risk entirely). Keypair+sig generated offline + deterministically
+  by `tools/lamport_keygen_v1.py` (private key discarded). `sys_sigverify` (id 63):
+  op1 accepts the genuine sig, op2/op3 reject a message/signature tamper. Proven
+  at boot (`PQSIG: lamport verify ok, forgery rejected`) AND from ring 3
+  (`PQSIGAPP: verify ok forge rejected`, `test_pqsig_v1.py`). Carry-forward
+  (`pqsig_v1.md`): Lamport is one-time, so per-package signing needs a Merkle/XMSS
+  batch (the 8 KiB sig is large for the size-tight package store) — the verify
+  primitive + asymmetry are what's closed here; wiring it into the live
+  `sys_spawn` package load (vs the boot/ring-3 proof) is the remaining step.
+- **[DECISION] Fabricated fuzzing.** `tools/run_security_fuzz_v2.py:54,65`
+  invents `signal_hits` via `rng.random()<0.004` and `coverage_points` via a
+  hash — telemetry that *looks* measured but never feeds input to a real binary.
+  Either build a real input-mutation harness against an actual parser
+  (ELF/GPT/packet), or relabel these as a synthetic control-attestation model so
+  they stop reading as measured fuzz coverage. Gated by 5 `tests/security/*`
+  gates — lockstep update required.
+- Parser hardening: the audit **retracts** the "31 unchecked unwraps" concern —
+  all are infallible `try_into().unwrap()` on pre-bounds-checked fixed slices.
+  No action; do not cite it as evidence.
+
+---
+
+## 9. Kernel structure / maintainability  [PATTERN DEMONSTRATED; bulk MILESTONE]
+
+Current: `lib.rs` ~13.6k lines / 249 fns holding syscalls + ELF loader + linker +
+GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
+(confirmed), none denied. The unwrap concern is withdrawn (see #8).
+
+- **[DONE] Seven clean module extractions — `cred`, `epoll`, `rng`, `audit`,
+  `dmesg`, `gpt`, `fat16`.**
+  - `cred.rs` (now 189 lines): the password table + iterated salted KDF + lockout
+    + `/shadow` store + `login_verify`, depending only on `crate::sha256` +
+    `crate::vfs`; the login dispatch calls `crate::cred::login_verify`.
+  - `epoll.rs` (110 lines): the epoll-instance state (`EPOLLS`) + `sys_epoll` op
+    dispatch, depending only on `crate::memory::*` and the `epoll_fd_ready`
+    readiness helper (which stays in `lib.rs` with the fd/pipe tables it reads —
+    so no fd internals are exposed). The dispatch calls `crate::epoll::sys_epoll`.
+  - `rng.rs` (125 lines): the xorshift64*/RDRAND CSPRNG + `rng_next` +
+    `sys_getrandom` + hwseed self-test, depending only on `crate::memory::copyout_user`
+    and the entropy sources (`crate::cmos_unix_seconds`, `crate::R4_PREEMPT_TICKS`,
+    `crate::serial_write`) which stay in lib.rs.
+  - `audit.rs` (98 lines): the security audit ring + `audit_event` + `audit_read`
+    + checkpoint self-test, depending only on `crate::R4_CURRENT`,
+    `crate::memory::copyout_user`, and `crate::{slice_contains,serial_write}`.
+  - `dmesg.rs` (47 lines): the kernel-log ring (`klog_append`/`klog_read`) that
+    `serial_write` mirrors into; depends only on `crate::memory::copyout_user`.
+  - `gpt.rs` (136 lines): GPT partition-table parse + IEEE CRC-32 + CRC self-test,
+    depending on `crate::storage`, `crate::block_io_dispatch`, `crate::BLK_DATA_PAGE`
+    (incl. its tuple field, via descendant access), and `crate::serial_write*`.
+  - **Key technique: no `pub(crate)` widening needed** — child modules can read
+    *private* crate-root items (the descendant-access privacy rule), so the
+    entropy/tid/serial helpers stay private in lib.rs and are consumed via
+    `crate::` paths. (One caveat learned: the rule is one-directional — a parent
+    can't read a child module's privates, so a self-test that touches a module's
+    internal state must live *in* that module.)
+  - All four are `go_test`-gated, so the blast radius is the go lane (verifiable
+    without the full 50-lane gate). These are the clean **template** for the rest.
+  - `fat16.rs` (346 lines): the FAT16 on-disk parser — `fat16_read_named`,
+    `fat16_read_chain`, `fat16_write_named`, `fat16_list` — moved verbatim,
+    depending on `crate::{block_io_dispatch, storage, BLK_DATA_PAGE, serial_write*}`
+    via descendant access. The `/mnt` `FAT_FILE` cache and fd integration stay in
+    lib.rs and call through `crate::fat16::` (7 call sites rewritten). This is the
+    single largest #9 bulk item the earlier passes had flagged as deferred — it
+    proved a *clean* extraction after GPT left the four functions contiguous and
+    inter-call-free. Verified: FAT16 read/chain/write + partitions + login/epoll
+    sanity all green.
+  - **Key technique: no `pub(crate)` widening needed** — child modules can read
+    *private* crate-root items (the descendant-access privacy rule), so the
+    entropy/tid/serial helpers stay private in lib.rs and are consumed via
+    `crate::` paths. (One caveat learned: the rule is one-directional — a parent
+    can't read a child module's privates, so a self-test that touches a module's
+    internal state must live *in* that module.)
+  - Net effect: despite adding TWO whole features this session (epoll + /shadow),
+    `lib.rs` is **net-REDUCED 695 lines** — 13,517 (start) → 12,822 — with ~1,050
+    lines now in **seven** focused modules. The direction is decisively
+    decompose-not-grow. The remaining monolith bulk (the fd-integrated `/mnt`
+    cache, the fd/pipe layer, the ELF/PIE loader) is larger, interconnected, and
+    spread across the file (many call sites), so it needs the full-gate subsystem
+    extraction.
+
+Remaining (the bulk, MILESTONE):
+- Extract the remaining self-contained subsystems the same way — GPT/FAT16
+  parsing, the ELF/PIE loader, the FILE/pipe/poll/epoll layer, the fb/console.
+  Subsystems used across many lanes (un-gated) invalidate all ~50 lane builds, so
+  batch those behind one full gate.
+- Triage the 91 warnings: delete genuinely-dead code, `#[allow]` the intentional,
+  reach a clean build, then `-D warnings` in CI. Most are cross-lane `dead_code`,
+  so this also needs the full gate (a fn unused in the go lane may be live in
+  another).
+
+Risk: low logic risk, high build/iteration cost — schedule when a full gate run
+is affordable.
+
+---
+
+## 10. Evidence vs implementation clarity  [ongoing discipline]
+
+The audit confirms the pattern (e.g. `sys_net_query` ops 1-3 live, 4-25
+self-test, `lib.rs:4245`) but also that the docs themselves keep the distinction
+visible (`full-os-implementation-status.md`, M84's explicit warning). Keep that
+discipline: when a milestone's gate is a boot self-test or a report generator
+rather than a live path, say so in the contract doc. The §5/§6/§8 doc-honesty
+decisions above are the concrete instances to resolve.
+
+---
+
+## Suggested order
+
+1. **SMP slice 1-2** (§1) — highest leverage; makes the concurrency story real.
+2. **libc errno + stdio/`free`** (§4) and **KDF + /etc/shadow** (§8) — contained
+   userland/security wins.
+3. **Resolve the three doc-honesty decisions** (§5, §6, §8-fuzz) — cheap once the
+   soften-vs-implement call is made; each needs lockstep gate updates.
+4. **lib.rs extraction + warning cleanup** (§9) — batch behind one full gate.
+5. **epoll** (§2), then the larger milestones (drivers §5, window server §6,
+   installer §7) as dedicated roadmaps.

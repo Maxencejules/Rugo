@@ -124,13 +124,17 @@ def test_installer_provisions_target_disk(find_in_order):
         # The MBR carries a real bootable primary partition...
         "INSTALL: partition type=0x0000000000000083 lba=0x0000000000000040 "
         "sectors=0x0000000000000008",
-        # ...and the multi-sector payload wrote+verified into it.
+        # ...the multi-sector payload wrote+verified into it...
+        # ...and the kernel wrote its OWN ELF (real bytes read at runtime via the
+        # Limine kernel-file response) to the target and verified the round-trip.
+        "INSTALL: self-image elf size=0x",
         "INSTALL: bootable install ok",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "INSTALL: verify FAIL" not in out
     assert "INSTALL: payload FAIL" not in out
+    assert "INSTALL: self-image FAIL" not in out
     assert "INSTALL: no target" not in out
     # Host-side: the boot record really landed on the target disk.
     assert target_head[0:8] == b"RUGOINST", f"magic missing: {target_head[0:16]!r}"

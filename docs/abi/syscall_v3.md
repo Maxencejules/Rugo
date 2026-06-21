@@ -33,8 +33,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `docs/runtime/arp_v1.md`, `docs/runtime/tcp_listen_v1.md`,
   `docs/runtime/icmpv6_v1.md`, `docs/runtime/udp_echo_v1.md`);
   `50` = `sys_vm_ctl` (op 1 = mmap(va, sz, prot) → va, op 2 = munmap(va,
-  sz) → 0, op 3 = brk(new) → old break, op 4 = mprotect(va, sz, prot) → 0;
-  contract in `docs/runtime/mmap_v1.md`);
+  sz) → 0, op 3 = brk(new) → old break, op 4 = mprotect(va, sz, prot) → 0,
+  op 5 = set_tls(`rsi`=base) → 0 — set the task's `%fs` base for thread-local
+  storage (per-task, restored on context switch; base must be canonical lower-half);
+  contract in `docs/runtime/mmap_v1.md`, `docs/runtime/tls_v1.md`);
   `51` = `sys_proc_ctl` (op 1 = fork — copy-on-write duplicate of the
   caller, returns child tid to the parent and 0 to the child; op 2 = clone
   — new thread sharing the caller's address space, `rsi` = entry
@@ -49,6 +51,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   fd; contract in `docs/runtime/clock_v1.md`);
   `54` = `sys_getrandom` (`rdi`=buf, `rsi`=len → bytes written; contract in
   `docs/runtime/rng_v1.md`);
+  `55` = `sys_epoll` (level-triggered readiness over the fd/pipe tables; op 1 =
+  create → epoll id, op 2 = ctl_add(`rsi`=ep, `rdx`=fd, `r10`=events), op 3 =
+  wait(`rsi`=ep, `rdx`=out, `r10`=max) → ready count, writing `{fd:i32,
+  revents:u16, pad:u16}` records, op 4 = close; EPOLLIN=0x1, EPOLLOUT=0x4);
   `59` = `sys_sandbox` (`rdi`=allow_mask → restrict the caller to the
   syscalls whose bit is set; monotonic; syscalls 0 and 2 always kept;
   contract in `docs/runtime/sandbox_v1.md`);
@@ -56,13 +62,25 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `rsi` packs the rect x<<48|y<<32|w<<16|h, `rdx` = XRGB color; op 2 = openpty
   → (slave_fd << 32) | master_fd; op 3 = PC speaker beep(`rsi`=Hz) → gate bits;
   op 4 = compositor compose(`rsi`=ptr to ≤16 surface descriptors, `rdx`=count) →
-  surfaces blitted in z-order; contract in `docs/runtime/graphics_v1.md`,
+  surfaces blitted in z-order; op 6 = pixel-surface blit; op 7 = audio PCM write;
+  op 8 = wm_register(`rsi`=slot, `rdx`=desc) persistent owner-stamped surface,
+  op 9 = wm_compose → composite the whole registry in z-order, op 10 =
+  wm_clear(`rsi`=slot) owner-checked; contract in `docs/runtime/graphics_v1.md`,
   `docs/runtime/pty_v1.md`, `docs/runtime/audio_v1.md`, `docs/runtime/compositor_v1.md`);
+  `57` = `sys_nsctl` (PID + UTS namespaces; op 1 = unshare_pid → move the caller
+  into a fresh PID namespace, returns the ns id; op 2 = ns_task_count → live tasks
+  visible in the caller's namespace; op 3 = ns_getpid → namespace-local pid (1 =
+  the namespace's init); op 4 = sethostname(`rsi`=ptr, `rdx`=len); op 5 =
+  gethostname → the namespace hostname (8 bytes LE). Additive, sets only the
+  per-task `pid_ns` tag + the hostname store; contract in `docs/runtime/pidns_v1.md`);
   `58` = `sys_power` (op 0 = shutdown via ACPI S5 / debug-exit, op 1 =
   reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
-  `60` = `sys_dlctl` (dynamic loading; op 1 = dlopen(`rsi`=name) → module base VA,
-  op 2 = dlsym(`rsi`=name) → resolved symbol VA; contract in
-  `docs/runtime/dynlink_v1.md`);
+  `60` = `sys_dlctl` (dynamic loading; op 1 = dlopen(`rsi`=name) → module base VA
+  (the handle), op 2 = dlsym(`rsi`=name) → symbol VA resolved against the
+  most-recent object, op 3 = dlclose(`rsi`=handle) → release that one object's
+  pages, op 4 = dlsym_h(`rsi`=handle, `rdx`=name) → symbol VA resolved against
+  that SPECIFIC handle (up to 4 objects open concurrently, each its own ASLR
+  slot; additive ops, non-breaking); contract in `docs/runtime/dynlink_v1.md`);
   `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
   frames, op 3 = uptime ticks, op 4 = dmesg read(`rsi`=buf, `rdx`=cap) →
   bytes copied, op 5 = MBR partition parse → partition count (logs each
@@ -76,6 +94,17 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `docs/runtime/partitions_v1.md`, `docs/runtime/fat16_v1.md`,
   `docs/runtime/audit_v1.md`, `docs/runtime/disk_crypt_v1.md`,
   `docs/runtime/journal_v1.md`).
+  `62` = `sys_errno` (→ the current task's last error code; 0 if none). Well-defined
+  failure paths (open → ENOENT/EACCES, read/write → EBADF/EACCES) stamp a per-task
+  POSIX-ish code before returning the −1 sentinel, so libc `errno` can distinguish
+  causes instead of collapsing every failure to EIO. Additive, read-only, per-task;
+  it never changes another syscall's return convention. Contract in
+  `docs/runtime/libc_v1.md`.
+  `63` = `sys_sigverify` (public-key package signing; op 1 = verify the embedded
+  Lamport reference signature → 1, op 2 = tampered message → 0, op 3 = tampered
+  signature → 0). The kernel embeds only the PUBLIC key + a signature, so it can
+  verify but never forge — unlike the old symmetric HMAC scheme. Contract in
+  `docs/runtime/pqsig_v1.md`.
 
 Spawned tasks get a copy-on-write-isolated private address space, a random
 page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),

@@ -26,6 +26,7 @@ typedef long intptr_t;
 #define SYS_PROC_INFO 28
 #define SYS_SPAWN 46
 #define SYS_FS_CTL 47
+#define SYS_ERRNO 62
 
 /* fs_ctl ops */
 #define FS_CTL_MKDIR 1
@@ -87,11 +88,31 @@ int atoi(const char *s);
 
 /* ---- errno (rlibc v2) ---- */
 extern int errno;
+#define ENOENT 2  /* no such file or directory */
 #define EIO 5
+#define EBADF 9   /* bad file descriptor */
+#define EACCES 13 /* permission denied */
+#define EINVAL 22 /* invalid argument */
+/* sys_errno (id 62): the kernel's last error code for this task, or 0. The
+ * syscall wrappers below read it so errno reflects the real cause (ENOENT vs
+ * EBADF vs EACCES) instead of a single EIO. */
+long rugo_errno(void);
 
 /* ---- stdio subset (console or rugo_stdout_fd) ---- */
 int putchar(int c);
 int puts(const char *s);
 int printf(const char *fmt, ...);
+
+/* ---- buffered FILE* stdio (rlibc v3) over the fd layer ---- */
+#define EOF (-1)
+typedef struct __FILE FILE;
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *f);
+int fgetc(FILE *f);
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
+int feof(FILE *f);
+int fputc(int c, FILE *f);
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+int fflush(FILE *f);
 
 #endif /* RUGO_LIBC_H */

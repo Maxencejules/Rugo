@@ -34,6 +34,27 @@ def test_dlopen_dlsym_call_and_code_aslr(qemu_go_c4_runtime, find_in_order):
     assert "USERPF" not in out  # the loaded code ran in ring3 without faulting
 
 
+def test_dlopen_handles_reclaimed_on_task_exit(qemu_go_c4_runtime, find_in_order):
+    # Resource-lifecycle: each dlprobe run dlopen()s "libdl" TWICE and exits
+    # WITHOUT dlclose, leaking 2 of the 4 global DL_HANDLES slots. Unless
+    # task-exit cleanup reclaims a dead task's handles, two dlprobe runs fill
+    # the table and the third run's first dlopen fails (handle table full).
+    # Running dlprobe 3 times (2 leaks each > DL_MAX_HANDLES=4) must succeed
+    # every time iff exiting tasks release their dlopen handles.
+    boot, _disk_path = qemu_go_c4_runtime
+
+    runs = 3
+    out = boot("probe dlprobe\n" * runs + "shutdown\n").stdout
+
+    assert "DLPROBE: FAIL" not in out
+    assert "USERPF" not in out
+    assert out.count("DLPROBE: aslr+dlsym ok") == runs, (
+        f"expected {runs} successful dlprobe runs, "
+        f"got {out.count('DLPROBE: aslr+dlsym ok')} "
+        f"(dlopen handles leaked on exit -> table exhausted)"
+    )
+
+
 def test_dlclose_unmaps(qemu_go_c4_runtime):
     # Full-OS guide Part V.11: sys_dlctl op 3 = dlclose(base) unmaps the pages of the
     # most-recent dlopen and releases their frames. The boot self-test dlopens the
