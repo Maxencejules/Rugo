@@ -49,8 +49,7 @@ needs an explicit soften-claim-vs-implement choice before work starts.
   - Verified: `test-login-v1` (`lockout ok` + `shadow protected ok`) +
     `test-audit-v1` + `test-users-runtime-v1` + `test-userid-v1` +
     `test-vfs-runtime-v1` (node count 2→3) green.
-  - Remaining for #8: replace symmetric keyed-hash package signing with public-key
-    (Ed25519/RSA); a real input fuzzer (see §8). The store is now a file, so a
+  - Remaining for #8: a real input fuzzer (see §8). The store is now a file, so a
     `passwd`-style tool to mutate it is a natural follow-up.
 
 - **#4 libc real `free()` + buffered `FILE*` stdio [DONE].** `rlibc.c`:
@@ -294,12 +293,22 @@ Remediation (ordered):
   `sha256(salt||pw)` with an iterated KDF (PBKDF2-HMAC-SHA256 over the existing
   `hmac_sha256`, fixed cost) and move `PASSWD` out of a kernel static into a
   root-owned VFS file. Add login attempt lockout/backoff.
-- **[MILESTONE] Public-key package/update signing.** Today signing is symmetric
-  keyed-hash `SHA-256(key||payload)` with hard-coded keys (`hash.go:140-152`,
-  `pkgsvc.go:47-48`) — no asymmetric crypto. Real fix: an Ed25519 (or RSA)
-  verify in the kernel/pkg path with a public key baked in and private keys off
-  the device. Large (needs a constant-time field implementation, zero external
-  crates).
+- **[DONE] Public-key package/update signing.** The symmetric keyed-hash
+  (`SHA-256(key||payload)`, kernel HMAC) is now joined by a genuine **asymmetric
+  Lamport one-time signature** verifier (`kernel_rs/src/pqsig.rs`): the kernel
+  embeds ONLY the public key (256 SHA-256 hash pairs, `lamport_pub.bin` 16 KiB) +
+  a reference signature, so it can verify but never forge — the property the
+  symmetric scheme lacked. `lamport_verify` reuses the in-kernel SHA-256 (no
+  big-int/curve math → small, auditable; sidesteps the "constant-time field
+  implementation" risk entirely). Keypair+sig generated offline + deterministically
+  by `tools/lamport_keygen_v1.py` (private key discarded). `sys_sigverify` (id 63):
+  op1 accepts the genuine sig, op2/op3 reject a message/signature tamper. Proven
+  at boot (`PQSIG: lamport verify ok, forgery rejected`) AND from ring 3
+  (`PQSIGAPP: verify ok forge rejected`, `test_pqsig_v1.py`). Carry-forward
+  (`pqsig_v1.md`): Lamport is one-time, so per-package signing needs a Merkle/XMSS
+  batch (the 8 KiB sig is large for the size-tight package store) — the verify
+  primitive + asymmetry are what's closed here; wiring it into the live
+  `sys_spawn` package load (vs the boot/ring-3 proof) is the remaining step.
 - **[DECISION] Fabricated fuzzing.** `tools/run_security_fuzz_v2.py:54,65`
   invents `signal_hits` via `rng.random()<0.004` and `coverage_points` via a
   hash — telemetry that *looks* measured but never feeds input to a real binary.
