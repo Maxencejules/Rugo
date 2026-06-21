@@ -198,6 +198,21 @@ Remediation (pick by what userland actually needs next):
 - namespaces/cgroups/io_uring/netlink are each independent milestones; defer
   until there is a userland consumer, and keep them as honest ENOSYS until then.
 
+**[DONE — first namespace] PID namespace (`sys_nsctl`, id 57).** namespaces are no
+longer zero-implementation. Each task carries a `pid_ns` tag (0 = global),
+inherited across `r4_init_task` (clone threads join their creator's namespace),
+independent of `isolation_domain` so quota grouping is untouched. `op 1
+unshare_pid` moves the caller into a fresh namespace (its "init"); `op 2
+ns_task_count` returns the live tasks **visible** in the caller's namespace (the
+whole system if global, else only same-namespace members); `op 3 ns_getpid`
+returns the namespace-**local** pid (1 for a fresh namespace's first task). Proven
+from one ring-3 client (`nsprobe`): global view `> 1` → unshare → namespaced view
+`== 1`, local pid `== 1` (`NS: pid-namespace isolated ok`, `test_pidns_v1.py`).
+Carry-forward (`pidns_v1.md`): scope `/proc`/enumeration + `kill` to the
+namespace; add mount/UTS/network namespaces; nesting/reaping semantics. cgroups +
+io_uring remain (cgroups' aggregate-across-tasks proof is gated on userspace
+multi-task spawn, which apps can't do today; io_uring needs a shared ring).
+
 ---
 
 ## 3. Concurrent pipelines — **DONE** (see §0). Follow-ups: 3+ stage pipelines and `fswrite` append.
