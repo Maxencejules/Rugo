@@ -64,8 +64,27 @@ needs an explicit soften-claim-vs-implement choice before work starts.
     `HELLOC: stdio rw[11]=hello-stdio` (write a file, read it back).
   - Verified: `test-libc-v1` (all proofs).
   - Remaining for #4: TLS, distinct errno codes (needs a kernel ABI that returns
-    negative errno, not a single −1 sentinel), dlopen handle table, a real editor
-    + package installer.
+    negative errno, not a single −1 sentinel), a real editor + package installer.
+
+- **#4 dlopen HANDLE TABLE [DONE].** The dynamic linker tracked only ONE live
+  object (a single `DL_LOAD_BASE`/`DL_MAP_*`): a second `dlopen` reclaimed the
+  first, and `dlsym` always resolved the most-recent object — not POSIX. Added a
+  4-entry handle table (`DL_HANDLES{base,lo,hi,ondisk}`): up to 4 objects open
+  **concurrently**, each at its own non-overlapping ASLR slot (`dl_aslr_base`
+  skips every live handle's slot), each freed only by its own `dlclose`. New
+  `sys_dlctl op4 = dlsym_h(handle, name)` resolves a symbol against a *specific*
+  handle at that object's base; `op3 dlclose(handle)` releases exactly one. `op1`
+  (returns a handle) and `op2` (most-recent dlsym) stay back-compatible, so
+  `dlprobe`/`ondlprobe` are untouched. `dl_resolve` now takes an explicit base,
+  `dl_load_elf` an `ondisk` flag + registers the handle (unmaps + fails if full).
+  - Proof: new ring-3 `multidlprobe` (own dedicated disk) opens `libdl` twice →
+    two live objects at distinct bases; `dlsym_h(getval)` on each yields two
+    distinct callable VAs (each relocated → 42); `dlclose(h1)` leaves `h2`
+    resolvable+runnable while `h1`'s handle returns −1 (`MULTIDL: handle table
+    ok`, `test_dlhandles_v1.py`). Verified: 7 dl tests (incl. dynlink/aslr/
+    code_aslr/dlopen_ondisk no-regression + boot `DLCLOSE` selftest) + all 18
+    ABI/contract gates green. v1 boundary: ≤1 *on-disk* object retained (the
+    `DL_LOADED` buffer is shared); embedded handles back onto the static image.
 
 ---
 
