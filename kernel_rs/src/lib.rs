@@ -4233,6 +4233,9 @@ cfg_r4! {
             if EXEC_APP_TID == cur as i32 {
                 EXEC_APP_TID = -1;
             }
+            // Window-server lifecycle: a dead client's persistent surfaces are
+            // removed so its windows disappear (full-os guide Part III).
+            wm_release_owner(cur);
             // Reclaim a private address space on any exit path (clean exit,
             // signal kill, or fault containment). Step CR3 onto the shared
             // table first so we are not standing on the page tree we free.
@@ -5462,6 +5465,88 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     const COMPOSE_MAX: usize = 16;
 
+    /// Standing window-server surface registry (full-os guide Part III). Unlike op
+    /// 4 (a one-shot composite of a client-supplied list that exists only for that
+    /// call), these surfaces PERSIST across calls and carry an OWNER tid, so
+    /// multiple client tasks each keep their own window registered at once. A
+    /// central compose (op 7) paints the WHOLE registry in z-order; a client's
+    /// surfaces are removed when it clears them (op 8, owner-checked) or exits
+    /// (`wm_release_owner`) — the per-client window lifecycle a resident server owns.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const WM_SURFACES_MAX: usize = 8;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct WmSurface {
+        owner: u32,
+        geom: u64, // x<<48 | y<<32 | w<<16 | h
+        color: u32,
+        z: u32,
+        active: bool,
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    impl WmSurface {
+        const EMPTY: Self = Self { owner: 0, geom: 0, color: 0, z: 0, active: false };
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut WM_SURFACES: [WmSurface; WM_SURFACES_MAX] =
+        [WmSurface::EMPTY; WM_SURFACES_MAX];
+
+    /// Composite the persistent surface registry to the framebuffer in z-order
+    /// (painter's algorithm, lowest z first). Returns the number of surfaces
+    /// blitted. Shared by sys_ioctl op 7 and any resident compositor.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn wm_compose_registry() -> u64 {
+        // Collect active surfaces, then stable-sort indices by z ascending.
+        let mut idxs = [0usize; WM_SURFACES_MAX];
+        let mut n = 0usize;
+        let mut i = 0usize;
+        while i < WM_SURFACES_MAX {
+            if WM_SURFACES[i].active {
+                idxs[n] = i;
+                n += 1;
+            }
+            i += 1;
+        }
+        let mut a = 1usize;
+        while a < n {
+            let cur = idxs[a];
+            let mut b = a;
+            while b > 0 && WM_SURFACES[idxs[b - 1]].z > WM_SURFACES[cur].z {
+                idxs[b] = idxs[b - 1];
+                b -= 1;
+            }
+            idxs[b] = cur;
+            a += 1;
+        }
+        let mut painted = 0u64;
+        let mut k = 0usize;
+        while k < n {
+            let s = &WM_SURFACES[idxs[k]];
+            let x = (s.geom >> 48) & 0xFFFF;
+            let y = (s.geom >> 32) & 0xFFFF;
+            let w = (s.geom >> 16) & 0xFFFF;
+            let h = s.geom & 0xFFFF;
+            if fb::fb_blit_rect(x, y, w, h, s.color) {
+                painted += 1;
+            }
+            k += 1;
+        }
+        painted
+    }
+
+    /// Remove every registry surface owned by `tid` (called on task exit so a dead
+    /// client's windows disappear — the lifecycle a window server enforces).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn wm_release_owner(tid: usize) {
+        let mut i = 0usize;
+        while i < WM_SURFACES_MAX {
+            if WM_SURFACES[i].active && WM_SURFACES[i].owner == tid as u32 {
+                WM_SURFACES[i] = WmSurface::EMPTY;
+            }
+            i += 1;
+        }
+    }
+
     /// sys_ioctl (ABI v3.2 id 56, generic device control): op 1 = framebuffer
     /// blit. a2 packs the rectangle as x<<48 | y<<32 | w<<16 | h (each u16);
     /// a3 is the 32-bpp XRGB color. Returns 0 on success, -1 if no
@@ -5665,6 +5750,52 @@ cfg_r4! {
                     return ERR;
                 }
                 hda_audio_play(&buf[..n]) as u64
+            }
+            // op 8 = wm_register (full-os guide Part III, standing window server):
+            // register/update the calling task's PERSISTENT surface in registry slot
+            // a2. a3 = pointer to two u64s [geom = x<<48|y<<32|w<<16|h] [color(low
+            // 32)|z(high 32)]. The surface is stamped with the caller's tid (owner)
+            // and persists until cleared (op 10) or the owner exits. A slot already
+            // owned by ANOTHER live task may not be hijacked. Returns the slot.
+            8 => {
+                let slot = a2 as usize;
+                if slot >= WM_SURFACES_MAX {
+                    return ERR;
+                }
+                let me = r4_current_smp() as u32;
+                if WM_SURFACES[slot].active && WM_SURFACES[slot].owner != me {
+                    return ERR; // another client owns this window slot
+                }
+                let mut raw = [0u8; 16];
+                if copyin_user(&mut raw, a3, 16).is_err() {
+                    return ERR;
+                }
+                let geom = u64::from_le_bytes(raw[0..8].try_into().unwrap());
+                let w1 = u64::from_le_bytes(raw[8..16].try_into().unwrap());
+                WM_SURFACES[slot] = WmSurface {
+                    owner: me,
+                    geom,
+                    color: (w1 & 0xFFFF_FFFF) as u32,
+                    z: (w1 >> 32) as u32,
+                    active: true,
+                };
+                slot as u64
+            }
+            // op 9 = wm_compose: composite the WHOLE persistent registry (every live
+            // client's window) to the framebuffer in z-order. Returns the surface count.
+            9 => wm_compose_registry(),
+            // op 10 = wm_clear: remove the caller's surface in slot a2 (owner-checked,
+            // so a client cannot close another's window). Returns 0, or ERR.
+            10 => {
+                let slot = a2 as usize;
+                if slot >= WM_SURFACES_MAX
+                    || !WM_SURFACES[slot].active
+                    || WM_SURFACES[slot].owner != r4_current_smp() as u32
+                {
+                    return ERR;
+                }
+                WM_SURFACES[slot] = WmSurface::EMPTY;
+                0
             }
             _ => ERR,
         }
