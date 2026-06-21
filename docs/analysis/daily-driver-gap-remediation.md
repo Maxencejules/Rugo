@@ -291,15 +291,24 @@ GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
   - `rng.rs` (125 lines): the xorshift64*/RDRAND CSPRNG + `rng_next` +
     `sys_getrandom` + hwseed self-test, depending only on `crate::memory::copyout_user`
     and the entropy sources (`crate::cmos_unix_seconds`, `crate::R4_PREEMPT_TICKS`,
-    `crate::serial_write`) which stay in lib.rs. No new `pub(crate)` needed —
-    child modules read private crate-root items (descendant access).
-  - All three are `go_test`-gated, so the blast radius is the go lane (verifiable
+    `crate::serial_write`) which stay in lib.rs.
+  - `audit.rs` (98 lines): the security audit ring + `audit_event` + `audit_read`
+    + checkpoint self-test, depending only on `crate::R4_CURRENT`,
+    `crate::memory::copyout_user`, and `crate::{slice_contains,serial_write}`.
+  - **Key technique: no `pub(crate)` widening needed** — child modules can read
+    *private* crate-root items (the descendant-access privacy rule), so the
+    entropy/tid/serial helpers stay private in lib.rs and are consumed via
+    `crate::` paths. (One caveat learned: the rule is one-directional — a parent
+    can't read a child module's privates, so a self-test that touches a module's
+    internal state must live *in* that module.)
+  - All four are `go_test`-gated, so the blast radius is the go lane (verifiable
     without the full 50-lane gate). These are the clean **template** for the rest.
   - Net effect: despite adding TWO whole features this session (epoll + /shadow),
-    `lib.rs` is **net-REDUCED** — 13,517 (start) → 13,418 (−99) — because the bulk
-    now lives in three modules. The direction is decisively decompose-not-grow;
-    the remaining monolith bulk (fd/pipe layer, ELF/PIE loader, GPT/FAT16) is
-    larger and interconnected, so it needs the full-gate subsystem extraction below.
+    `lib.rs` is **net-REDUCED 195 lines** — 13,517 (start) → 13,322 — with 522
+    lines now in four focused modules. The direction is decisively
+    decompose-not-grow. The remaining monolith bulk (fd/pipe layer, ELF/PIE loader,
+    GPT/FAT16) is larger and interconnected (used by many syscalls), so it needs
+    the full-gate subsystem extraction.
 
 Remaining (the bulk, MILESTONE):
 - Extract the remaining self-contained subsystems the same way — GPT/FAT16
