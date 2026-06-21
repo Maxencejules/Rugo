@@ -246,7 +246,26 @@ Watch: the Go userspace image is at ~31.8 KiB of the 28 KiB… (32 KiB) cap with
 
 ---
 
-## 5. Hardware breadth  [MILESTONE + DECISION on doc honesty]
+## 5. Hardware breadth  [I/O interrupt-driven completion DONE; rest MILESTONE + DECISION]
+
+**[DONE] Interrupt-driven NVMe I/O completion.** After two reverted naive
+attempts (below) pinned the missed-wakeup race, the **race-free** fix landed: the
+submit loop now waits with interrupts DISABLED around the CQ check and, for an
+I/O command, re-enables + halts ATOMICALLY (`sti; hlt`) so a pending completion
+MSI wakes the halt with no missed wakeup and no timer dependence
+([native.rs](../../kernel_rs/src/runtime/native.rs), `nvme_submit_command`). The
+CQ check stays authoritative; every return leaves interrupts disabled (the loop's
+contract); admin/init commands keep the busy-poll (no guaranteed wake before the
+scheduler timer). Verified on the **live** native NVMe lane
+(`run_native_storage_live_v1.py`, `image-go-native` + `-device nvme`): status
+pass, and the now-**gated** marker `NVME: io irq-driven completion ok` confirms an
+I/O command slept on its completion interrupt. So input (IRQ1/IRQ12) **and** the
+NVMe I/O data path are now genuinely interrupt-driven. Remaining for #5: admin/init
+completion (still polled by design), a non-completing-command timeout under the
+`hlt` wait (a never-completing command would block rather than time out — a v1
+boundary, vs a device failure), and widening to the other native drivers
+(e1000/virtio) + the AHCI/rtl8169 doc-honesty decision below.
+
 
 Current: every native driver (VirtIO-blk/net, NVMe, e1000, xHCI/HID, MSI) is a
 feature-gated **polled** proof; none is continuously device-interrupt-driven on
