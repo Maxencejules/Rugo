@@ -247,6 +247,20 @@ silently changed.
 Real remediation: make one driver (NVMe is closest) genuinely interrupt-driven
 end-to-end as the template, then widen.
 
+**Investigated this pass — the "polled" claim is narrower than stated.** INPUT is
+already genuinely interrupt-driven: the PS/2 keyboard on **IRQ1** (vector 33) and
+the mouse on **IRQ12** (`MOUSE: irq dx/dy`, `test_mouse_irq_v1.py`) drive their
+data paths off real hardware interrupts, not polling. The MSI/MSI-X plumbing is
+also real: `bind_irq`/`enable_msi[x]` program vector 64, and `handle_irq`
+([native.rs:897](../../kernel_rs/src/runtime/native.rs#L897)) counts + EOIs each
+MSI (`irq_hits=` is reported per NVMe I/O). The precise residual is **storage/net
+COMPLETION**: `nvme_submit_command` ([native.rs:704](../../kernel_rs/src/runtime/native.rs#L704))
+binds + receives the MSI but detects completion by **spin-polling the CQ phase
+bit** (line 753) rather than blocking on the interrupt. Flipping that to a
+`hlt`-until-IRQ wait is the genuine fix — but it sits on the **load-bearing**
+storage path (the FS reads/writes through it) in the higher-friction native lane,
+so it is a real milestone slice (template-then-widen), not a safe one-pass change.
+
 ---
 
 ## 6. GUI as a standing system  [MILESTONE + DECISION]
