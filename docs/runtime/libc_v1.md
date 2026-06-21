@@ -42,8 +42,22 @@ The app size cap is 64 KiB (`EXEC_APP_MAX_BYTES`).
 formatting, malloc, the spawn argument string, and open/read of a file
 created moments earlier through the shell — all through rlibc.
 
+## Distinct errno (Part V.11)
+
+`errno` no longer collapses every failure to `EIO`. The kernel stamps a
+per-task error code on well-defined failure paths (`open` → `ENOENT`/`EACCES`,
+`read`/`write` → `EBADF`/`EACCES`) and `sys_errno` (id 62) returns it; the rlibc
+`open`/`read`/`write` wrappers read it (`rugo_errno`) and set `errno` to the
+real cause, falling back to `EIO` only where the kernel has not yet stamped a
+code. `apps/c-bigprobe/bigprobe.c` proves it on its dedicated disk:
+`open("/data/nope")` → `errno == ENOENT`, `read(99)` → `errno == EBADF`, and the
+two differ (`BIGC: errno enoent=1 ebadf=1 distinct=1`, `test_bigc_v1.py`). The
+raw kernel surface is proven independently by `errnoprobe` (`test_errno_v1.py`).
+
 ## v1 carry-forward
 
-errno, a real allocator with free, buffered FILE* streams, lseek
-(needs a kernel seek surface), environment variables, and a port of a
-real third-party C program.
+A real allocator with free and buffered FILE* streams are **done** (see
+`bigprobe`); remaining: TLS, more errno coverage (only the highest-traffic
+failure paths are stamped so far — others still fall back to `EIO`), lseek
+(needs a kernel seek surface), environment variables, and a port of a real
+third-party C program.

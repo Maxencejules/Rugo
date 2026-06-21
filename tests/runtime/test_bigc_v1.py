@@ -84,6 +84,8 @@ def test_exec_multipage_c_app(find_in_order):
         "BIGC: heap reuse=1 distinct=1",
         # rlibc v3: bidirectional buffered FILE* - write a file then read it back.
         "BIGC: stdio rw[11]=rlibc-stdio eof=1",
+        # rlibc v2 distinct errno: open(missing)->ENOENT, read(badfd)->EBADF, !=.
+        "BIGC: errno enoent=1 ebadf=1 distinct=1",
         "BIGC: done",
         "RUGO: halt ok",
     ])

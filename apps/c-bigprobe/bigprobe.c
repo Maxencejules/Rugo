@@ -338,6 +338,20 @@ int main(void) {
         puts("BIGC: stdio fopen err");
     }
 
+    /* rlibc v2 DISTINCT errno (Part V.11): two different failures, routed through
+     * the libc open()/read() wrappers, now carry two different errno values
+     * (ENOENT vs EBADF) instead of a single EIO -- the wrappers read sys_errno. */
+    errno = 0;
+    (void)open("/data/nope", O_RDONLY, 0); /* missing file -> ENOENT */
+    int e_open = errno;
+    errno = 0;
+    char eb[1];
+    (void)read(99, eb, 1); /* out-of-range fd -> EBADF */
+    int e_read = errno;
+    printf("BIGC: errno enoent=%d ebadf=%d distinct=%d\n",
+           (long)(e_open == ENOENT), (long)(e_read == EBADF),
+           (long)(e_open != e_read));
+
     puts("BIGC: done");
     return 0;
 }

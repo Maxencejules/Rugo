@@ -13,6 +13,19 @@ long rugo_stdout_fd;
  * call fails (the kernel ABI returns RUGO_ERR / -1 on error). */
 int errno;
 
+/* sys_errno (id 62): the kernel's last error code for this task. The wrappers
+ * below read it on failure so errno carries the real cause (ENOENT/EBADF/EACCES)
+ * instead of a single EIO; paths the kernel has not yet instrumented report 0,
+ * for which the wrappers keep the EIO fallback. */
+long rugo_errno(void) { return rugo_syscall3(SYS_ERRNO, 0, 0, 0); }
+
+/* Map a failed syscall to errno: the kernel's distinct code if it set one, else
+ * EIO. Keeps existing single-sentinel paths (errno == EIO) unchanged. */
+static void set_errno_from_kernel(void) {
+    long e = rugo_errno();
+    errno = (e != 0) ? (int)e : EIO;
+}
+
 /* mingw gcc emits a call to __main at the top of main() as a
  * constructor hook; freestanding programs stub it out. */
 void __main(void) {}
@@ -22,21 +35,21 @@ void __main(void) {}
 long open(const char *path, long flags, long mode) {
     long r = rugo_syscall3(SYS_OPEN, (long)path, flags, mode);
     if (r == RUGO_ERR)
-        errno = EIO;
+        set_errno_from_kernel();
     return r;
 }
 
 ssize_t read(long fd, void *buf, size_t len) {
     ssize_t r = rugo_syscall3(SYS_READ, fd, (long)buf, (long)len);
     if (r == RUGO_ERR)
-        errno = EIO;
+        set_errno_from_kernel();
     return r;
 }
 
 ssize_t write(long fd, const void *buf, size_t len) {
     ssize_t r = rugo_syscall3(SYS_WRITE, fd, (long)buf, (long)len);
     if (r == RUGO_ERR)
-        errno = EIO;
+        set_errno_from_kernel();
     return r;
 }
 
