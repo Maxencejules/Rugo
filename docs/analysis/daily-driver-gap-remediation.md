@@ -63,8 +63,25 @@ needs an explicit soften-claim-vs-implement choice before work starts.
     `HELLOC: stdio fread[16]=from-c-with-love eof=1` and
     `HELLOC: stdio rw[11]=hello-stdio` (write a file, read it back).
   - Verified: `test-libc-v1` (all proofs).
-  - Remaining for #4: TLS, distinct errno codes (needs a kernel ABI that returns
-    negative errno, not a single −1 sentinel), a real editor + package installer.
+  - Remaining for #4: TLS, a real editor + package installer.
+
+- **#4 distinct errno [DONE].** The syscall ABI returned a single −1 sentinel, so
+  rlibc collapsed every failure to `EIO`. Added a per-task `last_errno` (R4Task
+  field) that well-defined failure paths stamp with a POSIX code before returning
+  −1 (`open` → `ENOENT`/`EACCES`, `read`/`write` → `EBADF`/`EACCES`); new
+  `sys_errno` (id 62) returns it — additive, read-only, never changing an existing
+  syscall's return convention. `r4_set_errno` is a cfg pair (real in the go lane
+  where the task table exists, a no-op elsewhere) so the shared read/write
+  handlers compile in every lane. rlibc's `open`/`read`/`write` wrappers now read
+  it (`rugo_errno`) and set `errno` to the real cause, falling back to `EIO` only
+  on un-stamped paths (so `hello.c` and `test_libc` are unchanged; `hello.elf`
+  stays 6016 B — no shared-region pressure).
+  - Proof: `errnoprobe` (raw kernel: `ENOENT=2` vs `EBADF=9`, `ERRNO: distinct
+    ok`, `test_errno_v1.py`) + `bigprobe` (libc wrappers: `BIGC: errno enoent=1
+    ebadf=1 distinct=1`, `test_bigc_v1.py`), both on dedicated disks. Verified +
+    all ABI/contract gates green. Remaining: stamp the rest of the failure paths
+    (others still fall back to `EIO`); negative-return-convention is intentionally
+    NOT adopted (it would break the frozen sentinel).
 
 - **#4 dlopen HANDLE TABLE [DONE].** The dynamic linker tracked only ONE live
   object (a single `DL_LOAD_BASE`/`DL_MAP_*`): a second `dlopen` reclaimed the
