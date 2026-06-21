@@ -176,10 +176,27 @@ wrong task — and nothing marks a production app `ap_eligible`, so this is late
 not a live bug. The slice is therefore a real scheduler feature: make
 `r4_exit_and_switch` per-CPU-aware (retire *this CPU's* current and, on an AP,
 return to the pull-loop instead of a BSP `r4_switch_to`), mark a spawned app
-`ap_eligible`, and add a spawn-app-on-an-AP gate. Unlike #5/#4/#7 (targeted
-mechanisms landed this pass), #1 is a feature on the exit path — every task exit
-flows through it, so a regression breaks all lanes; it warrants its own focused,
-full-gate session, not a 15th change at the tail of a large pass.
+`ap_eligible`, and add a spawn-app-on-an-AP gate.
+
+**ATTEMPTED + reverted (this pass) — the fault point is now pinned.** Implemented
+exactly that: `r4_exit_and_switch` made per-CPU (`on_ap = !is_bsp()`, so the BSP
+path is byte-for-byte unchanged — and indeed every pre-existing SMP marker still
+prints), an AP-park branch (`crate::smp::ap_exit_park`: signal `SMP_LIVE_RAN` +
+return to the pull-loop), and a self-test that runs an `ap_eligible` task whose
+ring-3 code is a bare `sys_exit` (`AP_EXIT_CODE`). Result: the AP **faults during
+the exit-path cleanup** — the boot stalls right after `live sched ran=3` with no
+`ap general-exit` marker. Root cause: `r4_exit_and_switch`'s cleanup does
+`mov cr3, SHARED_PML4_PHYS` then frees the task's address space; that assumes the
+running CPU's kernel stack (and the `r4_exit_and_switch` code path) stay mapped
+after the CR3 load — true for the BSP (it lives in `SHARED`), but an **AP's
+per-CPU kernel stack is not guaranteed mapped in `SHARED_PML4_PHYS`**, so the next
+stack access faults. So the real remaining work is an **AP-safe exit sequence**:
+either switch to a stack provably mapped in the shared table before the CR3 step,
+or defer the address-space free off the exiting AP (hand it to the BSP/teardown,
+as `smp_live_sched_selftest` already does for the `int 0x81` path). That is the
+focused, full-gate work — now narrowed to the exact instruction (the CR3 load) and
+the exact invariant (AP kernel-stack mapping) that must be made safe. (Reverted;
+the SMP lane is green again — `test-smp-v1` / `test-smp-syscall-v1` pass.)
 
 ---
 
