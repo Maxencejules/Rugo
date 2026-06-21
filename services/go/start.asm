@@ -96,6 +96,12 @@ main.sysNetQuery:
     int  0x80
     ret
 
+global main.sysPower
+main.sysPower:
+    mov  eax, 58
+    int  0x80
+    ret
+
 global main.sysOpenRaw
 main.sysOpenRaw:
     mov  eax, 18

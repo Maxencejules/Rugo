@@ -51,8 +51,28 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
                 if cs & 3 == 3 {
                     let demand_cr2: u64;
                     core::arch::asm!("mov {}, cr2", out(reg) demand_cr2, options(nomem, nostack));
+                    // Swap-in (full-os guide Part I.4) runs FIRST: a swapped-out
+                    // page has present=0, which try_demand_map would otherwise
+                    // misread as a fresh demand hole and clobber (losing the
+                    // page + leaking its swap slot). A non-swapped fault returns
+                    // here with no side effect, then demand-map handles it.
+                    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                    {
+                        if crate::mm::try_swap_in(demand_cr2) {
+                            return;
+                        }
+                    }
                     if crate::mm::try_demand_map(demand_cr2) {
                         return;
+                    }
+                    // Copy-on-write break (full-os guide Part I.2): a write
+                    // fault on a present page is a forked CoW page; give the
+                    // writer a private copy and retry.
+                    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+                    {
+                        if error_code & 0x2 != 0 && crate::mm::cow_break(demand_cr2) {
+                            return;
+                        }
                     }
                     #[cfg(feature = "go_test")]
                     {
@@ -92,6 +112,13 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
                 crate::kbd::kbd_irq();
                 crate::sched::pic_send_eoi(1);
             }
+            // IRQ12 (vector 44): PS/2 mouse aux interrupt. EOI both PICs (the
+            // mouse is on the PIC2 slave, reached via the cascade).
+            #[cfg(all(feature = "go_test", not(feature = "sched_test"), not(feature = "compat_real_test")))]
+            44 => {
+                crate::kbd::mouse_irq();
+                crate::sched::pic_send_eoi(12);
+            }
             #[cfg(any(feature = "blk_test", feature = "fs_test", feature = "go_test"))]
             64 | 65 => {
                 if runtime::native::handle_irq(int_num) {
@@ -100,6 +127,22 @@ pub extern "C" fn trap_handler(frame: *mut u64) {
             }
             128 => {
                 crate::syscall::syscall_dispatch(frame);
+            }
+            // AP user-task report gate (SMP capstone): the ring-3 task an
+            // application processor runs traps here to hand back its result;
+            // the handler trampolines the AP back into kernel code.
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            129 => {
+                crate::smp::ap_user_trap(frame);
+            }
+            240 => {
+                crate::smp::ipi_handler();
+            }
+            241 => {
+                crate::smp::lapic_timer_handler(frame);
+            }
+            242 => {
+                crate::smp::tlb_shootdown_handler();
             }
             _ => {}
         }

@@ -33,11 +33,18 @@ ISR_ERR   14               ; #PF  Page Fault
 ; --- IRQ stubs (remapped by PIC to vectors 32+) ---
 ISR_NOERR 32               ; IRQ0  PIT timer
 ISR_NOERR 33               ; IRQ1  PS/2 keyboard
+ISR_NOERR 44               ; IRQ12 PS/2 mouse (aux), via the PIC cascade
 ISR_NOERR 64               ; Native-driver MSI/MSI-X
 ISR_NOERR 65               ; Local APIC spurious vector
 
 ; --- Software interrupt for syscalls (int 0x80 = vector 128) ---
 ISR_NOERR 128              ; Syscall gate (DPL=3 set in IDT by Rust)
+ISR_NOERR 129             ; AP user-task report gate 0x81 (DPL=3; SMP capstone)
+
+; --- Inter-processor interrupt (SMP, full-os guide Part I.3) ---
+ISR_NOERR 240             ; IPI vector 0xF0 (fixed delivery), handled per-CPU
+ISR_NOERR 241             ; Per-CPU LAPIC timer vector 0xF1 (AP preemption clock)
+ISR_NOERR 242             ; TLB-shootdown IPI vector 0xF2 (cross-CPU invalidation)
 
 ; --- Common tail: save all GPRs, call Rust handler, restore, iretq ---
 ;

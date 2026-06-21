@@ -44,6 +44,34 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             qemu_exit(arg1 as u8);
             loop { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
         }
+        // Sandbox allowlist (full-os guide Part IV.10): a task that has
+        // narrowed its mask via sys_sandbox is denied any syscall whose bit
+        // is clear. Default mask is all-ones, so unsandboxed tasks are
+        // unaffected. The calling task is resolved via r4_current_smp (full-os
+        // Part I.3): R4_CURRENT on the BSP (transparent), the AP's own per-CPU
+        // current on an application processor -- so the mask check consults the
+        // actually-running task on every core. The `cur < R4_MAX_TASKS` guard keeps
+        // it safe for the synthetic AP self-tests, whose per-CPU current is a marker
+        // value (e.g. 0x5A) rather than a real R4_TASKS index: an out-of-range
+        // current is treated as unsandboxed (mask check skipped). `nr < 64` is
+        // checked first, so r4_current_smp is only read on the gated path.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        {
+            if nr < 64 {
+                let cur = r4_current_smp();
+                if cur < R4_MAX_TASKS && (R4_TASKS[cur].sec_filter_mask >> nr) & 1 == 0 {
+                    serial_write(b"SANDBOX: deny nr=0x");
+                    serial_write_hex(nr);
+                    serial_write(b"\n");
+                    // Record the denial in the security audit ring (full-os
+                    // guide Part IV.10): a sandboxed task probing a filtered
+                    // syscall is a security-relevant event.
+                    audit_event(b"sandbox-deny", nr);
+                    *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
+                    return;
+                }
+            }
+        }
         match nr {
             0 => {
                 *frame.add(14) = sys_debug_write(arg1, arg2);
@@ -68,11 +96,17 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             15 => {
+                // NET_LOCK (slice 4): serialize the net syscall against the BSP PIT
+                // pump + another core's net access (no-op on single-CPU lanes).
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_send(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             16 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_recv(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             42 => {
                 *frame.add(14) = sys_shm_unmap_r4(arg1);
@@ -127,43 +161,65 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             31 => {
+                // NET_LOCK (slice 4): every R4 socket syscall touches the shared
+                // R4_SOCKETS table (+ CONN for the wire path); serialize across cores.
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_open_r4(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             32 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_bind_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             33 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_listen_r4(arg1, arg2);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             34 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_connect_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             35 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_accept_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             36 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_send_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             37 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_recv_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             38 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_socket_close_r4(arg1);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             39 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_if_config_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             #[cfg(any(feature = "net_test", feature = "go_test"))]
             40 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = net::sys_net_route_add_r4(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
             }
             41 => {
                 *frame.add(14) = sys_isolation_config_r4(arg1, arg2, arg3);
@@ -194,7 +250,50 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             49 => {
+                let net_g = crate::net_io_enter();
                 *frame.add(14) = sys_net_query(arg1, arg2, arg3);
+                crate::net_io_exit(net_g);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            50 => {
+                let arg4 = *frame.add(5); // r10
+                *frame.add(14) = sys_vm_ctl(arg1, arg2, arg3, arg4);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            51 => {
+                sys_proc_ctl(frame, arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            52 => {
+                sys_futex(frame, arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            53 => {
+                sys_time(frame, arg1, arg2);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            54 => {
+                *frame.add(14) = sys_getrandom(arg1, arg2);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            59 => {
+                *frame.add(14) = sys_sandbox(arg1);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            56 => {
+                *frame.add(14) = sys_ioctl(arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            58 => {
+                *frame.add(14) = sys_power(arg1);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            60 => {
+                *frame.add(14) = sys_dlctl(arg1, arg2, arg3);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            61 => {
+                *frame.add(14) = sys_sysinfo(arg1, arg2, arg3);
             }
             _ => {
                 *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;

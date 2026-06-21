@@ -26,7 +26,60 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `48` = `sys_signal_ctl` (op 1 = register handler, op 2 = kill(tid, sig),
   op 3 = sigreturn; contract in `docs/runtime/signals_v1.md`);
   `49` = `sys_net_query` (op 1 = DHCP discover, op 2 = DNS A query,
-  op 3 = poll; contract in `docs/runtime/netcfg_v1.md`).
+  op 3 = poll, op 4 = ICMP echo self-test, op 5 = ARP responder self-test,
+  op 6 = TCP passive-open (listener) self-test, op 7 = ICMPv6 echo self-test,
+  op 8 = UDP echo (port 7) self-test (→ 1 ok / 0 fail); contract in
+  `docs/runtime/netcfg_v1.md`, `docs/runtime/icmp_v1.md`,
+  `docs/runtime/arp_v1.md`, `docs/runtime/tcp_listen_v1.md`,
+  `docs/runtime/icmpv6_v1.md`, `docs/runtime/udp_echo_v1.md`);
+  `50` = `sys_vm_ctl` (op 1 = mmap(va, sz, prot) → va, op 2 = munmap(va,
+  sz) → 0, op 3 = brk(new) → old break, op 4 = mprotect(va, sz, prot) → 0;
+  contract in `docs/runtime/mmap_v1.md`);
+  `51` = `sys_proc_ctl` (op 1 = fork — copy-on-write duplicate of the
+  caller, returns child tid to the parent and 0 to the child; op 2 = clone
+  — new thread sharing the caller's address space, `rsi` = entry
+  (`rdi` is the op selector = 2); op 3 = getuid → caller uid; op 4 =
+  setuid(`rsi`) — root-only, denied+audited otherwise; contract in
+  `docs/runtime/fork_v1.md`, `docs/runtime/userid_v1.md`);
+  `52` = `sys_futex` (op 1 = wait(`rsi`=uaddr, `rdx`=val), op 2 = wake(uaddr,
+  n); contract in `docs/runtime/futex_v1.md`);
+  `53` = `sys_time` (op 1 = clock_gettime(`rsi`=clockid: 0 = MONOTONIC
+  nanoseconds since boot, 1 = REALTIME seconds since the Unix epoch); op 2 =
+  nanosleep(`rsi`=nanoseconds), op 3 = timerfd_create(`rsi`=nanoseconds) →
+  fd; contract in `docs/runtime/clock_v1.md`);
+  `54` = `sys_getrandom` (`rdi`=buf, `rsi`=len → bytes written; contract in
+  `docs/runtime/rng_v1.md`);
+  `59` = `sys_sandbox` (`rdi`=allow_mask → restrict the caller to the
+  syscalls whose bit is set; monotonic; syscalls 0 and 2 always kept;
+  contract in `docs/runtime/sandbox_v1.md`);
+  `56` = `sys_ioctl` (generic device control; op 1 = framebuffer blit,
+  `rsi` packs the rect x<<48|y<<32|w<<16|h, `rdx` = XRGB color; op 2 = openpty
+  → (slave_fd << 32) | master_fd; op 3 = PC speaker beep(`rsi`=Hz) → gate bits;
+  op 4 = compositor compose(`rsi`=ptr to ≤16 surface descriptors, `rdx`=count) →
+  surfaces blitted in z-order; contract in `docs/runtime/graphics_v1.md`,
+  `docs/runtime/pty_v1.md`, `docs/runtime/audio_v1.md`, `docs/runtime/compositor_v1.md`);
+  `58` = `sys_power` (op 0 = shutdown via ACPI S5 / debug-exit, op 1 =
+  reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
+  `60` = `sys_dlctl` (dynamic loading; op 1 = dlopen(`rsi`=name) → module base VA,
+  op 2 = dlsym(`rsi`=name) → resolved symbol VA; contract in
+  `docs/runtime/dynlink_v1.md`);
+  `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
+  frames, op 3 = uptime ticks, op 4 = dmesg read(`rsi`=buf, `rdx`=cap) →
+  bytes copied, op 5 = MBR partition parse → partition count (logs each
+  entry), op 6 = FAT16 read HELLO.TXT(`rsi`=buf, `rdx`=cap) → file bytes,
+  op 7 = security audit-log read(`rsi`=buf, `rdx`=cap) → bytes copied,
+  op 8 = FAT16 root directory list → entry count (logs each), op 9 = disk
+  encryption round-trip self-test, op 10 = FS journal write-ahead+replay
+  self-test, op 11 = FAT16 single-cluster file write+read-back self-test
+  (→ 1 ok / 0 fail); contract in
+  `docs/runtime/sysinfo_v1.md`, `docs/runtime/dmesg_v1.md`,
+  `docs/runtime/partitions_v1.md`, `docs/runtime/fat16_v1.md`,
+  `docs/runtime/audit_v1.md`, `docs/runtime/disk_crypt_v1.md`,
+  `docs/runtime/journal_v1.md`).
+
+Spawned tasks get a copy-on-write-isolated private address space, a random
+page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),
+and the boot-time PCI device inventory is logged (`PCI:`/`PROBE:` markers).
 
 ## Invocation
 

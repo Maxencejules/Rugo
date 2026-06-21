@@ -12,9 +12,12 @@
 //   518..:    512-byte data blocks (block i lives at sector 518 + i)
 //
 // Files are contiguously allocated in v1; growth past the current run
-// reallocates and copies. Mutations are write-through: the cached node
-// table / bitmap sector is rewritten before the call returns. Crash
-// journaling is a documented carry-forward.
+// reallocates and copies. METADATA writes (node table, bitmap, superblock) are
+// crash-consistent via a write-ahead journal (see the journal region below):
+// vfs_write/vfs_mkdir/vfs_unlink wrap their metadata flushes in a transaction
+// that is committed atomically and replayed at mount after a crash. Data-block
+// writes stay write-through (ordered mode) -- a torn data write corrupts only a
+// file's bytes, never the directory tree or allocation map.
 
 #![allow(dead_code)]
 
@@ -48,32 +51,42 @@ static mut VFS: VfsState = VfsState {
     bitmap: [0; BLOCK_SIZE],
 };
 
+// The FS block primitives hold STORAGE_LOCK across the BLK_DATA_PAGE fill -> dispatch
+// -> read sequence (full-os Part I.3, workload-distribution slice 2): an AP-migrated
+// go-shell task's FS syscall reaches here under FS_LOCK (slice 3, outer), and its
+// block I/O must not race the BSP's concurrent block I/O on the shared bounce buffer +
+// virtio ring. storage_io_enter/exit is a no-op in the single-CPU lanes.
 unsafe fn read_sector(sector: u64, dst: &mut [u8]) -> bool {
-    if !crate::block_io_dispatch(false, sector, 512, false) {
-        return false;
+    let g = crate::storage_io_enter();
+    let ok = crate::block_io_dispatch(false, sector, 512, false);
+    if ok {
+        dst[..512].copy_from_slice(&crate::BLK_DATA_PAGE.0[..512]);
     }
-    dst[..512].copy_from_slice(&crate::BLK_DATA_PAGE.0[..512]);
-    true
+    crate::storage_io_exit(g);
+    ok
 }
 
 unsafe fn write_sector(sector: u64, src: &[u8]) -> bool {
+    let g = crate::storage_io_enter();
     core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
     crate::BLK_DATA_PAGE.0[..src.len().min(512)]
         .copy_from_slice(&src[..src.len().min(512)]);
-    crate::block_io_dispatch(true, sector, 512, false)
+    let ok = crate::block_io_dispatch(true, sector, 512, false);
+    crate::storage_io_exit(g);
+    ok
 }
 
 unsafe fn flush_node_sector(node_idx: usize) -> bool {
     let per = 512 / NODE_SIZE;
     let s = node_idx / per;
-    write_sector(
+    jwrite(
         BASE_SECTOR + 1 + s as u64,
         &VFS.nodes[s * 512..(s + 1) * 512],
     )
 }
 
 unsafe fn flush_bitmap() -> bool {
-    write_sector(BITMAP_SECTOR, &VFS.bitmap)
+    jwrite(BITMAP_SECTOR, &VFS.bitmap)
 }
 
 unsafe fn flush_superblock() -> bool {
@@ -82,7 +95,214 @@ unsafe fn flush_superblock() -> bool {
     sb[4..8].copy_from_slice(&2u32.to_le_bytes());
     let used = node_used() as u32;
     sb[8..12].copy_from_slice(&used.to_le_bytes());
-    write_sector(BASE_SECTOR, &sb)
+    jwrite(BASE_SECTOR, &sb)
+}
+
+// ---- Write-ahead journal (full-os guide Part II.5, design #1) ----
+// Crash-consistency for SimpleFS METADATA writes (the node table, bitmap, and
+// superblock). A mutation opens a transaction; every metadata flush it makes is
+// logged to the journal region (the 512-byte payload to a journal data slot, the
+// home sector recorded in the header) instead of going straight home. txn_commit
+// writes the header with `committed = 1` (the atomic commit point), applies the
+// logged sectors to their homes, then clears the flag. A crash between commit and
+// clear leaves the header committed; `replay_journal` at mount re-applies the
+// logged sectors (idempotent), so the on-disk structure is never left with a
+// half-finished multi-sector metadata update. Data-block writes stay write-through
+// (ordered-mode style): a torn data write corrupts only that file's bytes, never
+// the directory tree / allocation map, and journaling only metadata keeps the
+// cached-write path free of stale-read hazards. Journal region is clear of the VFS
+// data blocks (which end at sector 1541) and the standalone-journal/cache scratch.
+const J_HEADER: u64 = 1543; // journal header sector
+const J_DATA: u64 = J_HEADER + 1; // journal data slots (1544..)
+const J_MAX: usize = 8; // max metadata sectors per transaction (txns touch <=3)
+const J_MAGIC: u32 = 0x31304A56; // "VJ01"
+
+struct JTxn {
+    active: bool,
+    overflow: bool,
+    count: usize,
+    targets: [u64; J_MAX],
+    // Snapshot of the in-RAM metadata caches taken at txn_begin (before the mutation
+    // touches them). The journal rolls back the on-DISK sectors on abort; these roll
+    // back the RAM caches in lockstep, so an aborted mutation leaves VFS.nodes /
+    // VFS.bitmap exactly matching the (untouched) disk -- no RAM/disk divergence.
+    nodes_snap: [u8; MAX_NODES * NODE_SIZE],
+    bitmap_snap: [u8; BLOCK_SIZE],
+}
+
+static mut JTXN: JTxn = JTxn {
+    active: false,
+    overflow: false,
+    count: 0,
+    targets: [0; J_MAX],
+    nodes_snap: [0; MAX_NODES * NODE_SIZE],
+    bitmap_snap: [0; BLOCK_SIZE],
+};
+
+/// Open a transaction. MUST be called BEFORE the mutation modifies VFS.nodes /
+/// VFS.bitmap, so the snapshot captures the pristine pre-mutation cache.
+unsafe fn txn_begin() {
+    JTXN.active = true;
+    JTXN.overflow = false;
+    JTXN.count = 0;
+    JTXN.nodes_snap.copy_from_slice(&VFS.nodes);
+    JTXN.bitmap_snap.copy_from_slice(&VFS.bitmap);
+}
+
+/// Log one metadata sector write to the open transaction (payload -> a journal
+/// slot, home sector recorded). With no transaction open, writes straight through
+/// (so format-time / replay-time writes are unaffected).
+unsafe fn jwrite(sector: u64, data: &[u8]) -> bool {
+    if !JTXN.active {
+        return write_sector(sector, data);
+    }
+    if JTXN.count >= J_MAX {
+        JTXN.overflow = true;
+        return false;
+    }
+    let slot = J_DATA + JTXN.count as u64;
+    if !write_sector(slot, data) {
+        JTXN.overflow = true;
+        return false;
+    }
+    JTXN.targets[JTXN.count] = sector;
+    JTXN.count += 1;
+    true
+}
+
+/// Abort the open transaction: invalidate any journal header (so a stale committed
+/// flag can't replay), drop the buffered writes, and ROLL BACK the in-RAM caches to
+/// the txn_begin snapshot. Nothing was applied to the FS homes, so disk is exactly as
+/// it was before txn_begin; restoring the caches keeps RAM in sync with it.
+unsafe fn txn_abort() {
+    let clr = [0u8; 512];
+    let _ = write_sector(J_HEADER, &clr);
+    VFS.nodes.copy_from_slice(&JTXN.nodes_snap);
+    VFS.bitmap.copy_from_slice(&JTXN.bitmap_snap);
+    JTXN.active = false;
+    JTXN.count = 0;
+    JTXN.overflow = false;
+}
+
+/// Commit the open transaction atomically: write the journal header with
+/// `committed = 1` (THE commit point), apply every logged sector to its home, then
+/// clear the header. Returns false (after a clean abort that applies nothing) if the
+/// transaction overflowed or the header write failed.
+unsafe fn txn_commit() -> bool {
+    if !JTXN.active {
+        return true;
+    }
+    if JTXN.overflow {
+        txn_abort();
+        return false;
+    }
+    let n = JTXN.count;
+    let mut hdr = [0u8; 512];
+    hdr[0..4].copy_from_slice(&J_MAGIC.to_le_bytes());
+    hdr[4..8].copy_from_slice(&1u32.to_le_bytes()); // committed
+    hdr[8..12].copy_from_slice(&(n as u32).to_le_bytes());
+    let mut i = 0;
+    while i < n {
+        hdr[12 + i * 4..16 + i * 4].copy_from_slice(&(JTXN.targets[i] as u32).to_le_bytes());
+        i += 1;
+    }
+    if !write_sector(J_HEADER, &hdr) {
+        txn_abort();
+        return false;
+    }
+    // Apply: copy each journal slot to its home sector.
+    let mut ok = true;
+    i = 0;
+    while i < n {
+        let mut buf = [0u8; 512];
+        ok = ok
+            && read_sector(J_DATA + i as u64, &mut buf)
+            && write_sector(JTXN.targets[i], &buf);
+        i += 1;
+    }
+    // Clear the committed flag ONLY if every apply succeeded. If an apply failed
+    // partway (a device I/O error), leave the header committed so the next mount's
+    // replay_journal re-drives the remaining (idempotent) applies -- erasing it here
+    // would strand a half-applied metadata update with no recovery record. The RAM
+    // caches already hold the intended state, which replay makes the disk match.
+    if ok {
+        let clr = [0u8; 512];
+        let _ = write_sector(J_HEADER, &clr);
+    }
+    JTXN.active = false;
+    ok
+}
+
+/// At mount: if the journal header is committed (a crash happened between the commit
+/// point and the clear), re-apply the logged metadata sectors to their homes, then
+/// clear the header. Idempotent. Returns the number of sectors replayed.
+unsafe fn replay_journal() -> usize {
+    let mut hdr = [0u8; 512];
+    if !read_sector(J_HEADER, &mut hdr) {
+        return 0;
+    }
+    let magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+    let committed = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
+    if magic != J_MAGIC || committed != 1 {
+        return 0;
+    }
+    let mut n = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
+    if n > J_MAX {
+        n = J_MAX;
+    }
+    let mut i = 0;
+    while i < n {
+        let b = 12 + i * 4;
+        let tgt = u32::from_le_bytes([hdr[b], hdr[b + 1], hdr[b + 2], hdr[b + 3]]) as u64;
+        let mut buf = [0u8; 512];
+        if read_sector(J_DATA + i as u64, &mut buf) {
+            let _ = write_sector(tgt, &buf);
+        }
+        i += 1;
+    }
+    let clr = [0u8; 512];
+    let _ = write_sector(J_HEADER, &clr);
+    n
+}
+
+/// Crash-recovery self-test for the metadata journal (full-os guide Part II.5):
+/// synthesize a committed journal (header + one data slot) targeting a scratch
+/// sector -- exactly the on-disk state a crash between commit and clear leaves --
+/// run `replay_journal` as a post-crash mount would, and confirm the scratch sector
+/// received the journaled payload and the header was cleared. Proves the live FS
+/// journal's replay path deterministically, independent of an actual crash. Leaves
+/// the journal clean (header cleared) so it never replays spuriously afterwards.
+pub(crate) unsafe fn vfs_journal_selftest() -> bool {
+    const SCRATCH: u64 = 1560; // free, clear of VFS data + the journal + other scratch
+    let pat = *b"VJTESTPATTERN-OK";
+    let mut slot = [0u8; 512];
+    slot[..pat.len()].copy_from_slice(&pat);
+    if !write_sector(J_DATA, &slot) {
+        return false;
+    }
+    let zero = [0u8; 512];
+    let _ = write_sector(SCRATCH, &zero); // so a stale match can't pass
+    let mut hdr = [0u8; 512];
+    hdr[0..4].copy_from_slice(&J_MAGIC.to_le_bytes());
+    hdr[4..8].copy_from_slice(&1u32.to_le_bytes()); // committed
+    hdr[8..12].copy_from_slice(&1u32.to_le_bytes()); // count = 1
+    hdr[12..16].copy_from_slice(&(SCRATCH as u32).to_le_bytes());
+    if !write_sector(J_HEADER, &hdr) {
+        return false;
+    }
+    let n = replay_journal();
+    let mut got = [0u8; 512];
+    let _ = read_sector(SCRATCH, &mut got);
+    let mut hdr2 = [0u8; 512];
+    let _ = read_sector(J_HEADER, &mut hdr2);
+    let committed_after = u32::from_le_bytes([hdr2[4], hdr2[5], hdr2[6], hdr2[7]]);
+    let ok = n == 1 && got[..pat.len()] == pat && committed_after == 0;
+    if ok {
+        serial_write(b"VFS: journal ok\n");
+    } else {
+        serial_write(b"VFS: journal FAIL\n");
+    }
+    ok
 }
 
 pub(crate) fn vfs_ready() -> bool {
@@ -144,9 +364,13 @@ pub(crate) unsafe fn set_node_mode(idx: usize, mode: u8) -> bool {
     flush_node_sector(idx)
 }
 
-/// Resolve a path to its node index without creating anything.
+/// Resolve a path to its node index without creating anything. FS_LOCK-guarded
+/// (slice 3); calls the unlocked inner so it does not re-enter vfs_open's lock.
 pub(crate) unsafe fn vfs_lookup(path: &[u8]) -> Option<usize> {
-    vfs_open(path, false)
+    let g = crate::fs_io_enter();
+    let r = vfs_open_inner(path, false);
+    crate::fs_io_exit(g);
+    r
 }
 
 unsafe fn node_start(idx: usize) -> usize {
@@ -184,6 +408,20 @@ unsafe fn set_node_start(idx: usize, start: u32) {
     VFS.nodes[base + 24..base + 28].copy_from_slice(&start.to_le_bytes());
 }
 
+/// Change a node's name in place, preserving its parent, kind, mode, owner,
+/// start and size -- only the name field (bytes [0, NAME_MAX)) is rewritten.
+/// Used by vfs_rename (set_node would zero mode/owner). (full-os Part II.5)
+unsafe fn set_node_name(idx: usize, name: &[u8]) {
+    let base = idx * NODE_SIZE;
+    let mut i = 0;
+    while i < NAME_MAX {
+        VFS.nodes[base + i] = 0;
+        i += 1;
+    }
+    let n = core::cmp::min(name.len(), NAME_MAX);
+    VFS.nodes[base..base + n].copy_from_slice(&name[..n]);
+}
+
 /// Mount the region, formatting it in place when the magic is absent.
 pub(crate) unsafe fn vfs_mount() {
     let mut sb = [0u8; 512];
@@ -215,6 +453,14 @@ pub(crate) unsafe fn vfs_mount() {
             serial_write(b"VFS: io err\n");
         }
         return;
+    }
+    // Recover any committed-but-unapplied metadata transaction BEFORE loading the
+    // node table / bitmap, so we read a structurally-consistent FS (full-os II.5).
+    let replayed = replay_journal();
+    if replayed != 0 {
+        serial_write(b"VFS: journal replay n=0x");
+        serial_write_hex(replayed as u64);
+        serial_write(b"\n");
     }
     let mut s = 0u64;
     while s < NODE_SECTORS {
@@ -339,12 +585,36 @@ unsafe fn free_blocks(start: usize, count: usize) {
     }
 }
 
+/// Count the data blocks currently marked free in the bitmap (used by the
+/// truncate self-test to prove the trailing blocks were released).
+unsafe fn count_free_blocks() -> usize {
+    let mut n = 0;
+    let mut b = 0;
+    while b < MAX_BLOCKS {
+        if VFS.bitmap[b / 8] & (1 << (b % 8)) == 0 {
+            n += 1;
+        }
+        b += 1;
+    }
+    n
+}
+
 fn blocks_for(bytes: usize) -> usize {
     (bytes + BLOCK_SIZE - 1) / BLOCK_SIZE
 }
 
 /// Look up an existing node; optionally create a missing file leaf.
+/// FS_LOCK-guarded entry (slice 3): serializes the open/create against any other VFS
+/// op on another core. User copyin of `path` happened in the handler (kernel buffer),
+/// so the lock covers no user fault. STORAGE_LOCK nests inside via the flush path.
 pub(crate) unsafe fn vfs_open(path: &[u8], create: bool) -> Option<usize> {
+    let g = crate::fs_io_enter();
+    let r = vfs_open_inner(path, create);
+    crate::fs_io_exit(g);
+    r
+}
+
+unsafe fn vfs_open_inner(path: &[u8], create: bool) -> Option<usize> {
     if !VFS.ready {
         return None;
     }
@@ -360,14 +630,31 @@ pub(crate) unsafe fn vfs_open(path: &[u8], create: bool) -> Option<usize> {
         return None;
     }
     let idx = free_node_slot()?;
+    // Journal the new file's node-table + superblock entry atomically (begin before
+    // set_node so the cache snapshot is pristine for rollback on abort).
+    txn_begin();
     set_node(idx, seg, parent, KIND_FILE, 0, 0);
-    if !flush_node_sector(idx) || !flush_superblock() {
-        return None;
+    if flush_node_sector(idx) && flush_superblock() {
+        // txn_commit handles its own state (it aborts on overflow and leaves the
+        // header committed for replay on an apply failure); don't abort after it.
+        if txn_commit() {
+            Some(idx)
+        } else {
+            None
+        }
+    } else {
+        txn_abort();
+        None
     }
-    Some(idx)
 }
 
 pub(crate) unsafe fn vfs_mkdir(path: &[u8]) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_mkdir_inner(path);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_mkdir_inner(path: &[u8]) -> bool {
     if !VFS.ready {
         return false;
     }
@@ -380,19 +667,34 @@ pub(crate) unsafe fn vfs_mkdir(path: &[u8]) -> bool {
     let Some(idx) = free_node_slot() else {
         return false;
     };
+    // Journal the node-table + superblock update atomically (full-os Part II.5).
+    // txn_begin before set_node so the cache snapshot is pristine for rollback.
+    txn_begin();
     set_node(idx, seg, parent, KIND_DIR, 0, 0);
-    flush_node_sector(idx) && flush_superblock()
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
 }
 
 pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_unlink_inner(path);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_unlink_inner(path: &[u8]) -> bool {
     if !VFS.ready {
         return false;
     }
     let Some((_, Some(idx), _)) = resolve(path) else {
         return false;
     };
-    if node_kind(idx) == KIND_DIR {
-        // Only empty directories can be removed.
+    let is_dir = node_kind(idx) == KIND_DIR;
+    if is_dir {
+        // Only empty directories can be removed (pure validation, before the txn).
         let mut i = 0;
         while i < MAX_NODES {
             if node_kind(i) != KIND_FREE && node_parent(i) == idx as u8 {
@@ -400,18 +702,223 @@ pub(crate) unsafe fn vfs_unlink(path: &[u8]) -> bool {
             }
             i += 1;
         }
-    } else {
+    }
+    // Journal the bitmap (freed blocks) + node-table + superblock atomically, so a
+    // crash never leaves the node freed while the bitmap still marks its blocks used
+    // (or vice versa). (full-os guide Part II.5.)
+    txn_begin();
+    if !is_dir {
         free_blocks(node_start(idx), blocks_for(node_size(idx)));
         if !flush_bitmap() {
+            txn_abort();
             return false;
         }
     }
     set_node(idx, b"", 0, KIND_FREE, 0, 0);
-    flush_node_sector(idx) && flush_superblock()
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
+}
+
+/// Rename a file or directory to a new name within the SAME parent directory
+/// (full-os guide Part II.5): the node keeps its kind, mode, owner, data blocks
+/// and size -- only its name changes. Fails if the source is missing, or the new
+/// name is empty / too long / slash-bearing / already names a sibling. The
+/// node-table write is journaled atomically with the superblock, exactly like
+/// vfs_mkdir/vfs_unlink, so a crash never leaves a half-renamed entry.
+pub(crate) unsafe fn vfs_rename(path: &[u8], new_name: &[u8]) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_rename_inner(path, new_name);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_rename_inner(path: &[u8], new_name: &[u8]) -> bool {
+    if !VFS.ready || new_name.is_empty() || new_name.len() > NAME_MAX {
+        return false;
+    }
+    if new_name.iter().any(|&c| c == b'/') {
+        return false; // a leaf name only -- rename does not move across directories
+    }
+    let Some((parent, Some(idx), _)) = resolve(path) else {
+        return false;
+    };
+    if find_child(parent, new_name).is_some() {
+        return false; // the target name is already used in this directory
+    }
+    // txn_begin before the mutation so the rollback snapshot is pristine.
+    txn_begin();
+    set_node_name(idx, new_name);
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
+}
+
+/// Boot self-test for rename (full-os guide Part II.5): create a scratch file,
+/// write a marker, rename it within /data, and confirm the NEW name resolves to
+/// the SAME node with the content intact while the OLD name is gone -- then remove
+/// it, so the on-disk FS is left exactly as found (net-neutral: the scratch node
+/// and its block are freed, so the persisted-VFS tests that reuse the disk are
+/// unaffected). The scratch names are used by nothing else.
+pub(crate) unsafe fn vfs_rename_selftest() -> bool {
+    if !VFS.ready {
+        return false;
+    }
+    // Defensive: clear any residue from a crashed prior boot.
+    let _ = vfs_unlink(b"/.rnsrc");
+    let _ = vfs_unlink(b"/.rndst");
+    let payload = b"rename-payload-42";
+    let pass = (|| -> Option<()> {
+        let src = vfs_open(b"/.rnsrc", true)?; // create the scratch file
+        if vfs_write(src, 0, payload) != payload.len() {
+            return None;
+        }
+        if !vfs_rename(b"/.rnsrc", b".rndst") {
+            return None;
+        }
+        if vfs_lookup(b"/.rnsrc").is_some() {
+            return None; // the old name must no longer resolve
+        }
+        let dst = vfs_lookup(b"/.rndst")?; // the new name resolves...
+        if dst != src {
+            return None; // ...to the very same underlying node
+        }
+        let mut buf = [0u8; 32];
+        let n = vfs_read(dst, 0, &mut buf);
+        if &buf[..n] != payload {
+            return None; // content preserved across the rename
+        }
+        Some(())
+    })();
+    // Always clean up so the FS is byte-equivalent to before (net-neutral).
+    let _ = vfs_unlink(b"/.rndst");
+    let _ = vfs_unlink(b"/.rnsrc");
+    if pass.is_some() {
+        serial_write(b"VFS: rename ok\n");
+        true
+    } else {
+        serial_write(b"VFS: rename fail\n");
+        false
+    }
+}
+
+/// Truncate a file to `new_size` bytes (full-os guide Part II.5): SHRINK only --
+/// release the trailing data blocks no longer covered and update the size. A grow
+/// request (new_size > current) is rejected in v1 (a write is what extends a file).
+/// The freed bitmap + the node entry are journaled atomically (so a crash never
+/// leaves a block freed while the node still claims it, or vice versa). Fails on a
+/// missing path, a directory, or a grow.
+pub(crate) unsafe fn vfs_truncate(path: &[u8], new_size: usize) -> bool {
+    let g = crate::fs_io_enter();
+    let r = vfs_truncate_inner(path, new_size);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_truncate_inner(path: &[u8], new_size: usize) -> bool {
+    if !VFS.ready {
+        return false;
+    }
+    let Some((_, Some(idx), _)) = resolve(path) else {
+        return false;
+    };
+    if node_kind(idx) != KIND_FILE {
+        return false;
+    }
+    let old_size = node_size(idx);
+    if new_size > old_size {
+        return false; // shrink-only in v1
+    }
+    if new_size == old_size {
+        return true; // nothing to do
+    }
+    let start = node_start(idx);
+    let old_blocks = blocks_for(old_size);
+    let new_blocks = blocks_for(new_size);
+    txn_begin();
+    if new_blocks < old_blocks {
+        free_blocks(start + new_blocks, old_blocks - new_blocks);
+        if !flush_bitmap() {
+            txn_abort();
+            return false;
+        }
+    }
+    set_node_size(idx, new_size as u32);
+    if flush_node_sector(idx) && flush_superblock() {
+        txn_commit()
+    } else {
+        txn_abort();
+        false
+    }
+}
+
+/// Boot self-test for truncate (full-os guide Part II.5): create a 3-block scratch
+/// file with a per-byte pattern, shrink it to one block, and confirm the size, the
+/// surviving first block's bytes, that reads past the new size are empty, AND that
+/// exactly the two trailing blocks were returned to the free bitmap -- then remove
+/// it, leaving the FS net-neutral (safe on the reused persisted-VFS disk).
+pub(crate) unsafe fn vfs_truncate_selftest() -> bool {
+    if !VFS.ready {
+        return false;
+    }
+    let _ = vfs_unlink(b"/.trunc");
+    let pass = (|| -> Option<()> {
+        let idx = vfs_open(b"/.trunc", true)?;
+        let mut data = [0u8; 1536]; // 3 blocks
+        let mut i = 0;
+        while i < data.len() {
+            data[i] = (i & 0xFF) as u8;
+            i += 1;
+        }
+        if vfs_write(idx, 0, &data) != data.len() || node_size(idx) != 1536 {
+            return None;
+        }
+        let free_before = count_free_blocks();
+        if !vfs_truncate(b"/.trunc", 512) || node_size(idx) != 512 {
+            return None;
+        }
+        // blocks_for(1536)=3 -> blocks_for(512)=1, so exactly 2 blocks freed.
+        if count_free_blocks() != free_before + 2 {
+            return None;
+        }
+        let mut buf = [0u8; 600];
+        if vfs_read(idx, 0, &mut buf) != 512 {
+            return None;
+        }
+        let mut k = 0;
+        while k < 512 {
+            if buf[k] != (k & 0xFF) as u8 {
+                return None; // surviving first block content preserved
+            }
+            k += 1;
+        }
+        if vfs_read(idx, 512, &mut buf) != 0 {
+            return None; // the truncated-away region reads empty
+        }
+        Some(())
+    })();
+    let _ = vfs_unlink(b"/.trunc");
+    if pass.is_some() {
+        serial_write(b"VFS: truncate ok\n");
+        true
+    } else {
+        serial_write(b"VFS: truncate fail\n");
+        false
+    }
 }
 
 /// stat: returns (kind, size).
 pub(crate) unsafe fn vfs_stat(path: &[u8]) -> Option<(u8, usize)> {
+    let g = crate::fs_io_enter();
+    let r = vfs_stat_inner(path);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_stat_inner(path: &[u8]) -> Option<(u8, usize)> {
     if !VFS.ready {
         return None;
     }
@@ -421,6 +928,12 @@ pub(crate) unsafe fn vfs_stat(path: &[u8]) -> Option<(u8, usize)> {
 }
 
 pub(crate) unsafe fn vfs_read(idx: usize, offset: usize, dst: &mut [u8]) -> usize {
+    let g = crate::fs_io_enter();
+    let r = vfs_read_inner(idx, offset, dst);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_read_inner(idx: usize, offset: usize, dst: &mut [u8]) -> usize {
     if !VFS.ready || node_kind(idx) != KIND_FILE {
         return 0;
     }
@@ -447,6 +960,12 @@ pub(crate) unsafe fn vfs_read(idx: usize, offset: usize, dst: &mut [u8]) -> usiz
 }
 
 pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
+    let g = crate::fs_io_enter();
+    let r = vfs_write_inner(idx, offset, src);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_write_inner(idx: usize, offset: usize, src: &[u8]) -> usize {
     if !VFS.ready || node_kind(idx) != KIND_FILE {
         return 0;
     }
@@ -461,9 +980,15 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
     let cur_blocks = blocks_for(size);
     let need_blocks = blocks_for(end);
     let mut start = node_start(idx);
+    // Journal this write's METADATA updates (the bitmap on a realloc + the node
+    // entry) atomically; the data blocks below stay write-through (ordered mode).
+    // (full-os guide Part II.5.) Every early exit after this aborts the txn, leaving
+    // the on-disk structure exactly as it was.
+    txn_begin();
     if need_blocks > cur_blocks {
         // Grow by reallocating a fresh contiguous run and copying.
         let Some(new_start) = alloc_blocks(need_blocks) else {
+            txn_abort();
             return 0;
         };
         let mut b = 0;
@@ -473,6 +998,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
                 || !write_sector(DATA_SECTOR + (new_start + b) as u64, &sec)
             {
                 free_blocks(new_start, need_blocks);
+                txn_abort();
                 return 0;
             }
             b += 1;
@@ -481,6 +1007,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
         start = new_start;
         set_node_start(idx, start as u32);
         if !flush_bitmap() {
+            txn_abort();
             return 0;
         }
     }
@@ -495,6 +1022,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
             && pos < size
             && !read_sector(DATA_SECTOR + block as u64, &mut sec)
         {
+            txn_abort();
             return done;
         }
         if in_off != 0 || n < BLOCK_SIZE {
@@ -503,6 +1031,7 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
         }
         sec[in_off..in_off + n].copy_from_slice(&src[done..done + n]);
         if !write_sector(DATA_SECTOR + block as u64, &sec) {
+            txn_abort();
             return done;
         }
         done += n;
@@ -511,6 +1040,10 @@ pub(crate) unsafe fn vfs_write(idx: usize, offset: usize, src: &[u8]) -> usize {
         set_node_size(idx, end as u32);
     }
     if !flush_node_sector(idx) {
+        txn_abort();
+        return 0;
+    }
+    if !txn_commit() {
         return 0;
     }
     done
@@ -524,6 +1057,12 @@ pub(crate) unsafe fn vfs_readdir(
     cursor: usize,
     dst: &mut [u8],
 ) -> (usize, usize) {
+    let g = crate::fs_io_enter();
+    let r = vfs_readdir_inner(dir, cursor, dst);
+    crate::fs_io_exit(g);
+    r
+}
+unsafe fn vfs_readdir_inner(dir: usize, cursor: usize, dst: &mut [u8]) -> (usize, usize) {
     if !VFS.ready {
         return (0, cursor);
     }

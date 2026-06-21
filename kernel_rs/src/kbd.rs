@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use crate::arch_x86::inb;
+use crate::arch_x86::{inb, outb};
 
 const QUEUE: usize = 64;
 
@@ -99,4 +99,345 @@ pub(crate) unsafe fn kbd_pop() -> Option<u8> {
 pub(crate) unsafe fn kbd_has_input() -> bool {
     kbd_poll();
     KBD.tail != KBD.head
+}
+
+// ---------------- PS/2 mouse (full-os guide Part III input) ----------------
+//
+// The i8042 hosts a second PS/2 port (the mouse) alongside the keyboard. v1
+// brings the mouse up: enable the aux port, reset it, and read its BAT result +
+// device ID, proving the OS can talk to the pointing device. Continuous movement
+// reporting (and a compositor consuming it) is carry-forward — movement packets
+// need QMP input injection to exercise, and the keyboard poll already drains any
+// stray aux bytes (status bit 5) so an enabled mouse never disturbs the console.
+
+/// Wait until the i8042 input buffer is empty (ready to accept a write).
+unsafe fn ctrl_wait_write() -> bool {
+    let mut spins = 0u32;
+    while inb(0x64) & 0x02 != 0 {
+        spins += 1;
+        if spins > 200_000 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Read the next byte the mouse (aux) sent, draining any interleaved keyboard
+/// bytes (distinguished by status bit 5). None on timeout.
+unsafe fn mouse_read() -> Option<u8> {
+    let mut spins = 0u32;
+    loop {
+        let st = inb(0x64);
+        if st & 0x01 != 0 {
+            let b = inb(0x60);
+            if st & 0x20 != 0 {
+                return Some(b); // an aux (mouse) byte
+            }
+            // a keyboard byte: ignore and keep waiting for the mouse reply
+        }
+        spins += 1;
+        if spins > 4_000_000 {
+            return None;
+        }
+    }
+}
+
+/// Send one command byte to the mouse (0xD4 routes the next data byte to the aux
+/// port) and consume its ACK (0xFA). Returns true on ACK.
+unsafe fn mouse_cmd(cmd: u8) -> bool {
+    if !ctrl_wait_write() {
+        return false;
+    }
+    outb(0x64, 0xD4); // next 0x60 write goes to the aux device
+    if !ctrl_wait_write() {
+        return false;
+    }
+    outb(0x60, cmd);
+    matches!(mouse_read(), Some(0xFA))
+}
+
+/// Mouse init self-test (full-os guide Part III): enable the aux port, reset the
+/// mouse, and read its Basic Assurance Test result (0xAA) + device ID (0x00 for a
+/// standard PS/2 mouse). Returns 1 on success. Runs at boot with interrupts off,
+/// so the keyboard poll cannot race the reply bytes.
+pub(crate) unsafe fn mouse_selftest() -> u64 {
+    // Enable the auxiliary (mouse) device on the i8042.
+    if !ctrl_wait_write() {
+        return 0;
+    }
+    outb(0x64, 0xA8);
+    // Reset: 0xFF -> ACK(0xFA), then BAT(0xAA), then device ID(0x00).
+    if !mouse_cmd(0xFF) {
+        return 0;
+    }
+    let bat = match mouse_read() {
+        Some(b) => b,
+        None => return 0,
+    };
+    let id = match mouse_read() {
+        Some(b) => b,
+        None => return 0,
+    };
+    if bat != 0xAA {
+        return 0;
+    }
+    crate::serial_write(b"MOUSE: reset bat=0x");
+    crate::serial_write_hex(bat as u64);
+    crate::serial_write(b" id=0x");
+    crate::serial_write_hex(id as u64);
+    crate::serial_write(b" ok\n");
+    1
+}
+
+/// Decode a standard 3-byte PS/2 mouse movement packet into signed (dx, dy) and
+/// the button bitmap (bit0 left, bit1 right, bit2 middle). byte0 holds the button
+/// + sign + overflow flags; byte1/byte2 are 9-bit two's-complement movement whose
+/// high bit lives in byte0 (X sign = bit4, Y sign = bit5). Returns None if the
+/// sync bit (byte0 bit3) is clear (an out-of-sync / invalid packet).
+fn mouse_decode(p: [u8; 3]) -> Option<(i32, i32, u8)> {
+    let b0 = p[0];
+    if b0 & 0x08 == 0 {
+        return None; // sync bit must be set on a valid first packet byte
+    }
+    let mut dx = p[1] as i32;
+    let mut dy = p[2] as i32;
+    if b0 & 0x10 != 0 {
+        dx -= 256; // X sign -> negative
+    }
+    if b0 & 0x20 != 0 {
+        dy -= 256; // Y sign -> negative
+    }
+    Some((dx, dy, b0 & 0x07))
+}
+
+/// Mouse movement-packet self-test (full-os guide Part III input): decode a
+/// sequence of synthetic PS/2 packets, accumulate a cursor position + button
+/// state, and verify the signed movement (including negative via the sign bits),
+/// the button bitmap, and that an out-of-sync packet (sync bit clear) is
+/// rejected. v1: the packet parser + cursor accumulation; live IRQ12 delivery and
+/// QMP-injected movement are carry-forward. Emits `MOUSE: packet ok` / `fail`.
+pub(crate) unsafe fn mouse_packet_selftest() -> u64 {
+    let mut x = 0i32;
+    let mut y = 0i32;
+    let mut buttons = 0u8;
+
+    // 1) +5, +3 with the left button held. byte0 = sync(0x08) | left(0x01) = 0x09.
+    match mouse_decode([0x09, 5, 3]) {
+        Some((dx, dy, b)) if dx == 5 && dy == 3 && b == 0x01 => {
+            x += dx;
+            y += dy;
+            buttons = b;
+        }
+        _ => {
+            crate::serial_write(b"MOUSE: packet fail\n");
+            return 0;
+        }
+    }
+    // 2) -2, -1 with no buttons. byte0 = sync | X sign(0x10) | Y sign(0x20) = 0x38;
+    // byte1 = 254 (-2), byte2 = 255 (-1).
+    match mouse_decode([0x38, 254, 255]) {
+        Some((dx, dy, b)) if dx == -2 && dy == -1 && b == 0x00 => {
+            x += dx;
+            y += dy;
+            buttons = b;
+        }
+        _ => {
+            crate::serial_write(b"MOUSE: packet fail\n");
+            return 0;
+        }
+    }
+    // 3) An out-of-sync packet (sync bit clear) must be rejected.
+    if mouse_decode([0x00, 9, 9]).is_some() {
+        crate::serial_write(b"MOUSE: packet fail\n");
+        return 0;
+    }
+    // The cursor accumulated to (5-2, 3-1) = (3, 2); buttons cleared in packet 2.
+    if x != 3 || y != 2 || buttons != 0 {
+        crate::serial_write(b"MOUSE: packet fail\n");
+        return 0;
+    }
+    crate::serial_write(b"MOUSE: packet ok x=0x");
+    crate::serial_write_hex(x as u64);
+    crate::serial_write(b" y=0x");
+    crate::serial_write_hex(y as u64);
+    crate::serial_write(b"\n");
+    1
+}
+
+// ---- live mouse via IRQ12 (full-os guide Part III input) ----
+//
+// Enable continuous data reporting + the i8042 aux interrupt, unmask IRQ12, and
+// assemble inbound 3-byte movement packets in the IRQ handler, accumulating a
+// cursor. This is the live counterpart to the synthetic-packet parser self-test.
+
+/// Raw read of the i8042 output buffer (port 0x60) once data is available — used
+/// for controller responses (e.g. the command byte), which are not aux bytes.
+unsafe fn ctrl_read() -> Option<u8> {
+    let mut spins = 0u32;
+    while inb(0x64) & 0x01 == 0 {
+        spins += 1;
+        if spins > 200_000 {
+            return None;
+        }
+    }
+    Some(inb(0x60))
+}
+
+static mut MOUSE_PKT: [u8; 3] = [0; 3];
+static mut MOUSE_IDX: usize = 0;
+static mut MOUSE_X: i32 = 0;
+static mut MOUSE_Y: i32 = 0;
+static mut MOUSE_REPORTED: bool = false;
+
+/// Enable live mouse input: set the i8042 command-byte aux-IRQ bit (and clear the
+/// aux clock-disable), turn on the mouse's data reporting (0xF4), and unmask the
+/// cascade (IRQ2) + IRQ12 on the PICs. Called once when the go runtime brings up
+/// interrupts (after the keyboard IRQ is unmasked).
+pub(crate) unsafe fn mouse_enable_irq() {
+    if !ctrl_wait_write() {
+        return;
+    }
+    outb(0x64, 0x20); // read the i8042 command byte
+    let cmd = match ctrl_read() {
+        Some(c) => c,
+        None => return,
+    };
+    if !ctrl_wait_write() {
+        return;
+    }
+    outb(0x64, 0x60); // write the command byte
+    if !ctrl_wait_write() {
+        return;
+    }
+    // bit 1 = enable aux (mouse) IRQ12; bit 5 = aux clock disable -> clear it.
+    outb(0x60, (cmd | 0x02) & !0x20);
+    let _ = mouse_cmd(0xF4); // enable data reporting (-> ACK 0xFA)
+    // Unmask IRQ2 (the cascade) on PIC1 and IRQ12 (line 4) on PIC2.
+    let m1 = inb(0x21);
+    outb(0x21, m1 & !(1 << 2));
+    let m2 = inb(0xA1);
+    outb(0xA1, m2 & !(1 << 4));
+    crate::serial_write(b"MOUSE: irq enabled\n");
+}
+
+/// IRQ12 service routine: read the aux byte, assemble a 3-byte packet (resyncing
+/// on the sync bit), decode it, accumulate the cursor, and log the first real
+/// movement. Called from trap_handler vector 44.
+pub(crate) unsafe fn mouse_irq() {
+    let st = inb(0x64);
+    if st & 0x01 == 0 {
+        return; // no data pending
+    }
+    let b = inb(0x60);
+    if st & 0x20 == 0 {
+        return; // not an aux byte (a keyboard byte slipped onto this line)
+    }
+    if MOUSE_IDX == 0 && b & 0x08 == 0 {
+        return; // resync: a valid packet's first byte has the sync bit set
+    }
+    MOUSE_PKT[MOUSE_IDX] = b;
+    MOUSE_IDX += 1;
+    if MOUSE_IDX >= 3 {
+        MOUSE_IDX = 0;
+        if let Some((dx, dy, btn)) = mouse_decode(MOUSE_PKT) {
+            MOUSE_X = MOUSE_X.wrapping_add(dx);
+            MOUSE_Y = MOUSE_Y.wrapping_add(dy);
+            // Route the decoded movement into the input event queue so a
+            // compositor / app can poll it (sys_ioctl op 5), not just the log.
+            input_enqueue(1, btn as u32, MOUSE_X, MOUSE_Y);
+            if !MOUSE_REPORTED && (dx != 0 || dy != 0 || btn != 0) {
+                MOUSE_REPORTED = true;
+                crate::serial_write(b"MOUSE: irq dx=0x");
+                crate::serial_write_hex((dx as i64 as u64) & 0xFFFF);
+                crate::serial_write(b" dy=0x");
+                crate::serial_write_hex((dy as i64 as u64) & 0xFFFF);
+                crate::serial_write(b" btn=0x");
+                crate::serial_write_hex(btn as u64);
+                crate::serial_write(b"\n");
+            }
+        }
+    }
+}
+
+// ---- input event queue (full-os guide Part III input) ----
+//
+// A small ring the IRQ handlers enqueue into and userspace drains via
+// sys_ioctl op 5. Single core + IF=0 in the kernel, so producer (IRQ) and
+// consumer (syscall) never run concurrently -> no lock needed. Wire layout per
+// event (INPUT_EVENT_SIZE bytes): kind u8 @0, data u32 @4, x i32 @8, y i32 @12.
+// kind 1 = mouse (data = button bitmap, x/y = accumulated cursor); 2 = key
+// (data = scancode). Oldest events are overwritten when the ring is full.
+pub(crate) const INPUT_EVENT_SIZE: usize = 16;
+const INPUT_RING_CAP: usize = 64;
+static mut INPUT_RING: [[u8; INPUT_EVENT_SIZE]; INPUT_RING_CAP] =
+    [[0; INPUT_EVENT_SIZE]; INPUT_RING_CAP];
+static mut INPUT_READ: usize = 0;
+static mut INPUT_WRITE: usize = 0;
+static mut INPUT_COUNT: usize = 0;
+
+/// Enqueue one input event (called from IRQ context).
+pub(crate) unsafe fn input_enqueue(kind: u8, data: u32, x: i32, y: i32) {
+    let mut ev = [0u8; INPUT_EVENT_SIZE];
+    ev[0] = kind;
+    ev[4..8].copy_from_slice(&data.to_le_bytes());
+    ev[8..12].copy_from_slice(&x.to_le_bytes());
+    ev[12..16].copy_from_slice(&y.to_le_bytes());
+    INPUT_RING[INPUT_WRITE] = ev;
+    INPUT_WRITE = (INPUT_WRITE + 1) % INPUT_RING_CAP;
+    if INPUT_COUNT < INPUT_RING_CAP {
+        INPUT_COUNT += 1;
+    } else {
+        INPUT_READ = (INPUT_READ + 1) % INPUT_RING_CAP; // dropped the oldest
+    }
+}
+
+/// Drain up to `max` pending events into `out` (INPUT_EVENT_SIZE bytes each).
+/// Returns the number of events copied.
+pub(crate) unsafe fn input_drain(out: &mut [u8], max: usize) -> usize {
+    let mut n = 0usize;
+    while n < max && INPUT_COUNT > 0 && (n + 1) * INPUT_EVENT_SIZE <= out.len() {
+        let ev = INPUT_RING[INPUT_READ];
+        out[n * INPUT_EVENT_SIZE..(n + 1) * INPUT_EVENT_SIZE].copy_from_slice(&ev);
+        INPUT_READ = (INPUT_READ + 1) % INPUT_RING_CAP;
+        INPUT_COUNT -= 1;
+        n += 1;
+    }
+    n
+}
+
+/// Boot self-test: enqueue two synthetic events (a mouse move + a key) and drain
+/// them back, verifying the ring + the wire encoding round-trip exactly.
+pub(crate) unsafe fn input_event_selftest() -> u64 {
+    INPUT_READ = 0;
+    INPUT_WRITE = 0;
+    INPUT_COUNT = 0;
+    input_enqueue(1, 0x05, 100, -7); // mouse: buttons=5, cursor (100, -7)
+    input_enqueue(2, 0x41, 0, 0); // key: scancode 0x41
+    let mut buf = [0u8; INPUT_EVENT_SIZE * 4];
+    let n = input_drain(&mut buf, 4);
+    let m_data = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+    let m_x = i32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let m_y = i32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+    let k_kind = buf[INPUT_EVENT_SIZE];
+    let k_data = u32::from_le_bytes([
+        buf[INPUT_EVENT_SIZE + 4],
+        buf[INPUT_EVENT_SIZE + 5],
+        buf[INPUT_EVENT_SIZE + 6],
+        buf[INPUT_EVENT_SIZE + 7],
+    ]);
+    let ok = n == 2
+        && buf[0] == 1
+        && m_data == 0x05
+        && m_x == 100
+        && m_y == -7
+        && k_kind == 2
+        && k_data == 0x41
+        && INPUT_COUNT == 0;
+    if ok {
+        crate::serial_write(b"INPUT: event queue ok\n");
+        1
+    } else {
+        crate::serial_write(b"INPUT: event queue FAIL\n");
+        0
+    }
 }

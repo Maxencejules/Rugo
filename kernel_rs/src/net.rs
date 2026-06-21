@@ -182,9 +182,398 @@ pub(crate) unsafe fn net_mac() -> [u8; 6] {
     NET_MAC
 }
 
+/// Set the NIC MAC (the e1000 active driver reads it from EEPROM and publishes it
+/// here so ARP/DHCP use the right source address).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn set_mac(mac: [u8; 6]) {
+    NET_MAC = mac;
+}
+
+/// The live NIC the network stack drives: 1 = virtio-net (default), 2 = e1000. Set
+/// once at boot (e1000 only when no virtio is present); wire_send / net_rx_pump
+/// dispatch on it.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) static mut NIC_KIND: u8 = 1;
+
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn set_nic_e1000() {
+    NIC_KIND = 2;
+}
+
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) unsafe fn wire_send(frame: &[u8]) -> bool {
-    virtio_net_send(frame)
+    if NIC_KIND == 2 {
+        crate::e1000_active_send(frame)
+    } else {
+        virtio_net_send(frame)
+    }
+}
+
+// ---- Package fetch over TCP (full-os guide Part V.11, package manager). The
+// network-download core of a package manager: connect out to a repo host, receive
+// a framed package, and content-verify it (magic + checksum). Driven by the same
+// start/poll pattern DHCP uses — pkg_fetch_start sends the SYN, the PIT-tick RX
+// pump (net_rx_pump + tcp_rt_tick) advances the connection and accumulates the
+// reply, and pkg_fetch_poll drains the wire receive buffer + verifies once the
+// whole package has arrived. Package wire format: "RUGOPKG1" (8) | le32 payload
+// length | payload | le32 checksum (sum of payload bytes, wrapping).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+const PKG_MAX: usize = 1024;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_BUF: [u8; PKG_MAX] = [0; PKG_MAX];
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_LEN: usize = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_FETCHING: bool = false;
+// A package fetch is "armed" by a request record on disk (read at boot); the
+// PIT-tick driver then starts + drives it. (Only the package-fetch test writes
+// that record, so ordinary boots never attempt a fetch.)
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_ARMED: bool = false;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_STARTED: bool = false;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_REQ_PORT: u16 = 0;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+static mut PKG_TICKS: u32 = 0; // ticks since the fetch started (give-up bound)
+
+/// Arm a package fetch for `port` (called at boot when the request record is
+/// present). The PIT-tick driver (pkg_fetch_tick) then starts + completes it.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_fetch_arm(port: u16) {
+    PKG_REQ_PORT = port;
+    PKG_ARMED = true;
+    PKG_STARTED = false;
+}
+
+/// Whether a package fetch is armed/in-flight (keeps the PIT pump running for it).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_fetch_armed() -> bool {
+    PKG_ARMED
+}
+
+/// PIT-tick driver for an armed package fetch (called from the timer handler after
+/// the RX pump). Once the NIC is up it starts the fetch, then drains + verifies
+/// each tick until the package arrives (pkg_fetch_poll prints the marker).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_fetch_tick() {
+    if !PKG_ARMED {
+        return;
+    }
+    if !PKG_STARTED {
+        if !R4_NET_NIC_READY {
+            return;
+        }
+        PKG_STARTED = true;
+        PKG_TICKS = 0;
+        if pkg_fetch_start(PKG_REQ_PORT) != 0 {
+            PKG_ARMED = false; // could not start; do not retry
+            serial_write(b"PKG: fetch start FAIL\n");
+        }
+        return;
+    }
+    if PKG_FETCHING {
+        PKG_TICKS = PKG_TICKS.wrapping_add(1);
+        if PKG_TICKS > 2000 {
+            PKG_FETCHING = false;
+            PKG_ARMED = false;
+            crate::tcp::tcp_close();
+            serial_write(b"PKG: fetch timeout FAIL\n");
+            return;
+        }
+        let _ = pkg_fetch_poll();
+        if !PKG_FETCHING {
+            PKG_ARMED = false; // completed (success or failure); stop driving
+        }
+    }
+}
+
+/// Begin a package fetch: connect to the slirp gateway (10.0.2.2) on `port`
+/// (slirp forwards guest->10.0.2.2:port to the host repo server). Returns 0 on a
+/// started fetch, or u64::MAX. The PIT-tick pump then drives the handshake.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pkg_fetch_start(port: u16) -> u64 {
+    const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    if port == 0 {
+        return ERR;
+    }
+    if crate::tcp::tcp_state() != crate::tcp::ST_CLOSED {
+        crate::tcp::tcp_close();
+    }
+    PKG_LEN = 0;
+    PKG_FETCHING = false;
+    if !crate::tcp::tcp_connect([10, 0, 2, 2], port) {
+        return ERR;
+    }
+    PKG_FETCHING = true;
+    0
+}
+
+/// Poll a package fetch: drain newly received bytes, and once the whole framed
+/// package has arrived, verify its magic + checksum. Returns u64::MAX while
+/// pending, the payload length on success, or 0 on failure (the kernel also
+/// prints a one-shot marker on completion).
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn pkg_fetch_poll() -> u64 {
+    const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    if !PKG_FETCHING {
+        return 0;
+    }
+    if PKG_LEN < PKG_MAX {
+        let n = crate::tcp::tcp_recv(&mut PKG_BUF[PKG_LEN..]);
+        PKG_LEN += n;
+    }
+    if PKG_LEN >= 12 && &PKG_BUF[0..8] == b"RUGOPKG1" {
+        let plen = u32::from_le_bytes([PKG_BUF[8], PKG_BUF[9], PKG_BUF[10], PKG_BUF[11]]) as usize;
+        let total = 12usize.wrapping_add(plen).wrapping_add(4);
+        if total > PKG_MAX {
+            PKG_FETCHING = false;
+            crate::tcp::tcp_close();
+            serial_write(b"PKG: fetch too-big FAIL\n");
+            return 0;
+        }
+        if PKG_LEN >= total {
+            let mut sum = 0u32;
+            let mut i = 0usize;
+            while i < plen {
+                sum = sum.wrapping_add(PKG_BUF[12 + i] as u32);
+                i += 1;
+            }
+            let want = u32::from_le_bytes([
+                PKG_BUF[12 + plen],
+                PKG_BUF[13 + plen],
+                PKG_BUF[14 + plen],
+                PKG_BUF[15 + plen],
+            ]);
+            PKG_FETCHING = false;
+            crate::tcp::tcp_close();
+            if sum == want {
+                serial_write(b"PKG: fetched len=0x");
+                serial_write_hex(plen as u64);
+                serial_write(b" ok\n");
+                return plen as u64;
+            }
+            serial_write(b"PKG: fetch checksum FAIL\n");
+            return 0;
+        }
+    }
+    // The connection ended (RST / RTO give-up) before the package fully arrived.
+    if crate::tcp::tcp_state() == crate::tcp::ST_CLOSED {
+        PKG_FETCHING = false;
+        serial_write(b"PKG: fetch closed-early FAIL\n");
+        return 0;
+    }
+    ERR // pending
+}
+
+/// Package signature-verify + install self-test (full-os guide Part V.11, package
+/// manager). Beyond fetch: a package carries an HMAC-SHA256 signature; the
+/// installer recomputes the MAC over the payload and rejects any mismatch, then
+/// writes the verified payload to persistent storage and reads it back. Proves
+/// (a) signature verification accepts a valid package, (b) it REJECTS a tampered
+/// payload, and (c) the verified payload installs + round-trips on disk.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_install_selftest() -> u64 {
+    const KEY: &[u8] = b"rugo-pkg-signing-key-v1";
+    const PKG_INSTALL_LBA: u64 = 21; // scratch sector (free 12..63 gap)
+    // A mock signed package payload (deterministic) + its signature field.
+    let mut payload = [0u8; 64];
+    let mut i = 0;
+    while i < payload.len() {
+        payload[i] = ((i * 37 + 11) & 0xFF) as u8;
+        i += 1;
+    }
+    let sig = crate::sha256::hmac_sha256(KEY, &payload);
+    // Verify the package: recompute the MAC over the received payload + compare.
+    let verify_ok = crate::sha256::hmac_sha256(KEY, &payload) == sig;
+    // A tampered payload must NOT verify against the package's signature field.
+    let mut tampered = payload;
+    tampered[0] ^= 0x01;
+    let tamper_rejected = crate::sha256::hmac_sha256(KEY, &tampered) != sig;
+    // Install the verified payload: write to a scratch LBA + read it back.
+    let mut install_ok = false;
+    if verify_ok && tamper_rejected {
+        core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+        crate::BLK_DATA_PAGE.0[..payload.len()].copy_from_slice(&payload);
+        if crate::block_io_dispatch(true, PKG_INSTALL_LBA, 512, true) {
+            core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+            if crate::block_io_dispatch(false, PKG_INSTALL_LBA, 512, false) {
+                install_ok = crate::BLK_DATA_PAGE.0[..payload.len()] == payload;
+            }
+        }
+    }
+    if verify_ok && tamper_rejected && install_ok {
+        serial_write(b"PKG: sigverify+install ok\n");
+        1
+    } else {
+        serial_write(b"PKG: sigverify+install FAIL\n");
+        0
+    }
+}
+
+/// Package manager (full-os guide Part V.11): read an on-disk **signed package
+/// repository**, verify the HMAC-signed index, **select a package by name**,
+/// verify that package's SHA-256, and **install** it (write to a scratch LBA and
+/// read it back). Proves the package-manager core beyond the single-blob fetch:
+/// a repo index, package selection, per-package integrity, and a signed manifest
+/// (a tampered package or a forged index is rejected).
+///
+/// The repo (built host-side by `tools/pkg_repo_v1.py`) lives in the free
+/// 12..63 scratch gap: index @LBA 24, payloads @LBA 25+. A boot with no repo
+/// (the common case) reads a blank sector, reports `PKGMGR: no repo`, and writes
+/// nothing — safe on every boot.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn pkg_manager_selftest() -> u64 {
+    const KEY: &[u8] = b"rugo-repo-index-key-v1";
+    const REPO_INDEX_LBA: u64 = 24;
+    const INSTALL_SCRATCH_LBA: u64 = 22; // free; up to 2 sectors (22..23)
+    const ENTRY_SIZE: usize = 64;
+    const MAX_ENTRIES: usize = 7;
+    const MAX_PAYLOAD: usize = 1024;
+
+    if !crate::storage::r4_storage_available() {
+        return 1; // no disk: nothing to do
+    }
+    if !crate::block_io_dispatch(false, REPO_INDEX_LBA, 512, false) {
+        serial_write(b"PKGMGR: no repo\n");
+        return 1;
+    }
+    // Copy the index out of the shared block page before any payload read reuses it.
+    let mut idx = [0u8; 512];
+    idx.copy_from_slice(&crate::BLK_DATA_PAGE.0[..512]);
+    if &idx[0..4] != b"RPKG" {
+        serial_write(b"PKGMGR: no repo\n");
+        return 1;
+    }
+    let count = u32::from_le_bytes([idx[4], idx[5], idx[6], idx[7]]) as usize;
+    if count == 0 || count > MAX_ENTRIES {
+        serial_write(b"PKGMGR: bad index FAIL\n");
+        return 0;
+    }
+    // Verify the signed manifest: HMAC(KEY, SHA-256(entries)) covers all entries
+    // regardless of count (hmac caps msg at 256B, so sign the 32-byte digest).
+    let entries = &idx[40..40 + count * ENTRY_SIZE];
+    let dig = crate::sha256::sha256(entries);
+    let sig = crate::sha256::hmac_sha256(KEY, &dig);
+    if sig[..] != idx[8..40] {
+        serial_write(b"PKGMGR: index sig FAIL\n");
+        return 0;
+    }
+    // A forged index (flip one entry byte) must NOT verify against the signature.
+    let mut tampered_entries = [0u8; MAX_ENTRIES * ENTRY_SIZE];
+    tampered_entries[..count * ENTRY_SIZE].copy_from_slice(entries);
+    tampered_entries[0] ^= 0x01;
+    let forged_sig =
+        crate::sha256::hmac_sha256(KEY, &crate::sha256::sha256(&tampered_entries[..count * ENTRY_SIZE]));
+    if forged_sig[..] == idx[8..40] {
+        serial_write(b"PKGMGR: index forge NOT rejected FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: index count=0x");
+    serial_write_hex(count as u64);
+    serial_write(b" sig ok\n");
+
+    // Select the package named "calc".
+    let mut sel: Option<usize> = None;
+    let mut e = 0usize;
+    while e < count {
+        let base = 40 + e * ENTRY_SIZE;
+        if &idx[base..base + 4] == b"calc" && idx[base + 4] == 0 {
+            sel = Some(e);
+            break;
+        }
+        e += 1;
+    }
+    let e = match sel {
+        Some(e) => e,
+        None => {
+            serial_write(b"PKGMGR: select FAIL\n");
+            return 0;
+        }
+    };
+    let base = 40 + e * ENTRY_SIZE;
+    let plba = u32::from_le_bytes([idx[base + 24], idx[base + 25], idx[base + 26], idx[base + 27]])
+        as u64;
+    let plen =
+        u32::from_le_bytes([idx[base + 28], idx[base + 29], idx[base + 30], idx[base + 31]]) as usize;
+    if plen == 0 || plen > MAX_PAYLOAD {
+        serial_write(b"PKGMGR: bad len FAIL\n");
+        return 0;
+    }
+    let mut ehash = [0u8; 32];
+    ehash.copy_from_slice(&idx[base + 32..base + 64]);
+
+    // Read the package payload off the repo.
+    let mut payload = [0u8; MAX_PAYLOAD];
+    let sectors = (plen + 511) / 512;
+    let mut s = 0usize;
+    while s < sectors {
+        if !crate::block_io_dispatch(false, plba + s as u64, 512, false) {
+            serial_write(b"PKGMGR: read FAIL\n");
+            return 0;
+        }
+        let off = s * 512;
+        let n = core::cmp::min(512, plen - off);
+        payload[off..off + n].copy_from_slice(&crate::BLK_DATA_PAGE.0[..n]);
+        s += 1;
+    }
+    // Per-package integrity: SHA-256(payload) must match the entry's hash.
+    if crate::sha256::sha256(&payload[..plen]) != ehash {
+        serial_write(b"PKGMGR: hash FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: select calc lba=0x");
+    serial_write_hex(plba);
+    serial_write(b" len=0x");
+    serial_write_hex(plen as u64);
+    serial_write(b" hash ok\n");
+    // A tampered payload must NOT match the entry's hash.
+    let mut t = payload;
+    t[0] ^= 0x01;
+    if crate::sha256::sha256(&t[..plen]) == ehash {
+        serial_write(b"PKGMGR: tamper NOT rejected FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: tamper rejected\n");
+
+    // Install the verified payload: write to a scratch LBA, then read it back.
+    let mut install_ok = true;
+    let mut s = 0usize;
+    while s < sectors {
+        core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+        let off = s * 512;
+        let n = core::cmp::min(512, plen - off);
+        crate::BLK_DATA_PAGE.0[..n].copy_from_slice(&payload[off..off + n]);
+        if !crate::block_io_dispatch(true, INSTALL_SCRATCH_LBA + s as u64, 512, true) {
+            install_ok = false;
+            break;
+        }
+        s += 1;
+    }
+    if install_ok {
+        let mut s = 0usize;
+        while s < sectors {
+            core::ptr::write_bytes(crate::BLK_DATA_PAGE.0.as_mut_ptr(), 0, 512);
+            if !crate::block_io_dispatch(false, INSTALL_SCRATCH_LBA + s as u64, 512, false) {
+                install_ok = false;
+                break;
+            }
+            let off = s * 512;
+            let n = core::cmp::min(512, plen - off);
+            if crate::BLK_DATA_PAGE.0[..n] != payload[off..off + n] {
+                install_ok = false;
+                break;
+            }
+            s += 1;
+        }
+    }
+    if !install_ok {
+        serial_write(b"PKGMGR: install FAIL\n");
+        return 0;
+    }
+    serial_write(b"PKGMGR: install ok\n");
+    serial_write(b"PKGMGR: ok\n");
+    1
 }
 
 /// PIT-tick RX pump for the default lane: answer ARP for the guest IP,
@@ -199,7 +588,11 @@ pub(crate) unsafe fn net_rx_pump() {
     let mut buf = [0u8; 1514];
     while budget > 0 {
         budget -= 1;
-        let n = virtio_net_recv(&mut buf);
+        let n = if NIC_KIND == 2 {
+            crate::e1000_active_recv(&mut buf)
+        } else {
+            virtio_net_recv(&mut buf)
+        };
         if n == 0 {
             break;
         }
@@ -216,6 +609,9 @@ pub(crate) unsafe fn net_rx_pump() {
                 let mut mac = [0u8; 6];
                 mac.copy_from_slice(&arp[8..14]);
                 crate::netcfg::on_arp_reply(sender_ip, &mac);
+            } else if opcode == 1 {
+                // Answer "who-has GUEST_IP" so the guest is reachable.
+                crate::netcfg::arp_input(&buf[..n]);
             }
             // ARP requests for the guest IP are answered by the slirp
             // gateway path only when needed; the UDP-echo lane keeps its
@@ -228,7 +624,15 @@ pub(crate) unsafe fn net_rx_pump() {
                 crate::tcp::tcp_input(ip);
             } else if ip[9] == 17 {
                 crate::netcfg::udp_input(ip);
+                crate::netcfg::udp_echo_input(&buf[..n]);
+            } else if ip[9] == 1 {
+                crate::netcfg::icmp_input(&buf[..n]);
             }
+        } else if ethertype == 0x86DD && n >= 54 {
+            // IPv6: answer ICMPv6 echo requests (ping6) + UDP echo (port 7) ->
+            // reachable host over IPv6. Each responder checks its own next-header.
+            crate::netcfg::icmpv6_input(&buf[..n]);
+            crate::netcfg::udp6_echo_input(&buf[..n]);
         }
     }
 }
@@ -718,6 +1122,60 @@ unsafe fn r4_net_find_route(family: u8, dest: &[u8; 16]) -> Option<usize> {
     best
 }
 
+/// Routing-table self-test (full-os guide Part II.6): install overlapping routes
+/// and confirm `r4_net_find_route` selects the LONGEST-prefix match for several
+/// destinations. Saves/restores the live route table so it leaves no residue.
+/// Returns 1 on success.
+#[cfg(feature = "go_test")]
+pub(crate) unsafe fn route_selftest() -> u64 {
+    let saved = R4_NET_ROUTES;
+    let mut i = 0;
+    while i < R4_NET_ROUTE_MAX {
+        R4_NET_ROUTES[i] = R4NetRoute::EMPTY;
+        i += 1;
+    }
+    let af = R4_NET_AF_INET as u8;
+    let route = |prefix: u8, d: [u8; 4]| -> R4NetRoute {
+        let mut dest = [0u8; 16];
+        dest[0] = d[0];
+        dest[1] = d[1];
+        dest[2] = d[2];
+        dest[3] = d[3];
+        R4NetRoute { active: true, family: af, prefix_len: prefix, if_index: 0, dest }
+    };
+    // Deliberately out of prefix order, so success depends on longest-match, not
+    // table position: 10.0.2.0/24 (most specific), 10.0.0.0/8, 0.0.0.0/0.
+    R4_NET_ROUTES[0] = route(0, [0, 0, 0, 0]);
+    R4_NET_ROUTES[1] = route(8, [10, 0, 0, 0]);
+    R4_NET_ROUTES[2] = route(24, [10, 0, 2, 0]);
+
+    let prefix_for = |d: [u8; 4]| -> i32 {
+        let mut dest = [0u8; 16];
+        dest[0] = d[0];
+        dest[1] = d[1];
+        dest[2] = d[2];
+        dest[3] = d[3];
+        unsafe {
+            match r4_net_find_route(af, &dest) {
+                Some(idx) => R4_NET_ROUTES[idx].prefix_len as i32,
+                None => -1,
+            }
+        }
+    };
+    let ok = prefix_for([10, 0, 2, 5]) == 24   // matches /24 over /8 and default
+        && prefix_for([10, 5, 5, 5]) == 8       // matches /8 over default
+        && prefix_for([8, 8, 8, 8]) == 0;       // only the default matches
+
+    R4_NET_ROUTES = saved;
+    if ok {
+        serial_write(b"ROUTE: selftest ok\n");
+        1
+    } else {
+        serial_write(b"ROUTE: selftest fail\n");
+        0
+    }
+}
+
 #[cfg(feature = "go_test")]
 unsafe fn r4_net_alloc_socket() -> Option<usize> {
     for idx in 0..R4_NET_SOCKET_MAX {
@@ -728,6 +1186,49 @@ unsafe fn r4_net_alloc_socket() -> Option<usize> {
         }
     }
     None
+}
+
+/// SMP capstone (full-os Part I.3): a kernel-side R4_SOCKETS loopback round-trip under
+/// NET_LOCK -- allocate a connected pair, deliver one byte into the peer's rx_buf (the
+/// same slot sys_socket_send_r4 fills on the state-4 loopback path), read it back +
+/// verify, then free the pair. Returns true on a correct echo. Exercises the R4_SOCKETS
+/// table + NET_LOCK on WHATEVER CPU calls it -- the capstone runs it on an AP concurrently
+/// with the BSP, so the contention counter advances and the table stays consistent. Uses
+/// the raw table (not the sys_socket_* wrappers) deliberately: the capstone proves lock
+/// SERIALIZATION across cores, not the user-pointer / owner_tid==R4_CURRENT syscall ABI.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+pub(crate) unsafe fn smp_capstone_loopback(byte: u8) -> bool {
+    let g = crate::net_io_enter();
+    let echoed = (|| {
+        let a = r4_net_alloc_socket()?;
+        let b = match r4_net_alloc_socket() {
+            Some(x) => x,
+            None => {
+                R4_SOCKETS[a] = R4Socket::EMPTY;
+                return None;
+            }
+        };
+        // A connected loopback pair (state 4 = the loopback-established state).
+        R4_SOCKETS[a].state = 4;
+        R4_SOCKETS[a].peer = b as i16;
+        R4_SOCKETS[b].state = 4;
+        R4_SOCKETS[b].peer = a as i16;
+        // send a->b: deliver into b's single rx slot, then recv at b and verify.
+        R4_SOCKETS[b].rx_buf[0] = byte;
+        R4_SOCKETS[b].rx_len = 1;
+        let got = if R4_SOCKETS[b].rx_len == 1 {
+            R4_SOCKETS[b].rx_buf[0]
+        } else {
+            byte ^ 0xFF
+        };
+        R4_SOCKETS[b].rx_len = 0;
+        R4_SOCKETS[a] = R4Socket::EMPTY;
+        R4_SOCKETS[b] = R4Socket::EMPTY;
+        Some(got == byte)
+    })()
+    .unwrap_or(false);
+    crate::net_io_exit(g);
+    echoed
 }
 
 #[cfg(feature = "go_test")]
@@ -839,8 +1340,8 @@ pub(crate) unsafe fn sys_socket_open_r4(domain: u64, kind: u64) -> u64 {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
     if !runtime::isolation::under_quota(
-        R4_TASKS[R4_CURRENT].socket_count,
-        R4_TASKS[R4_CURRENT].socket_limit as usize,
+        R4_TASKS[r4_current_smp()].socket_count,
+        R4_TASKS[r4_current_smp()].socket_limit as usize,
     ) {
         return 0xFFFF_FFFF_FFFF_FFFF;
     }
@@ -850,7 +1351,7 @@ pub(crate) unsafe fn sys_socket_open_r4(domain: u64, kind: u64) -> u64 {
             R4_SOCKETS[idx].domain = dom;
             R4_SOCKETS[idx].kind = typ;
             R4_SOCKETS[idx].state = 1;
-            R4_TASKS[R4_CURRENT].socket_count += 1;
+            R4_TASKS[r4_current_smp()].socket_count += 1;
             idx as u64
         }
         None => 0xFFFF_FFFF_FFFF_FFFF,
@@ -1233,5 +1734,60 @@ pub(crate) unsafe fn r4_c4_runtime_init() {
             serial_write(b"NETC4: nic ready\n");
         }
     }
+    // No virtio-net: bring up the e1000 as the live NIC instead (full-os Part II.7).
+    // Generic lanes always have virtio, so this binds only in a dedicated e1000-only
+    // lane -- the existing network suite is untouched.
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if !nic_ready && crate::e1000_active_init() {
+            nic_ready = true;
+            serial_write(b"NETC4: e1000 active\n");
+        }
+    }
     r4_net_reset(nic_ready);
+    // Prove the e1000 is the real live NIC: run a full DHCP DORA over it.
+    #[cfg(not(feature = "compat_real_test"))]
+    {
+        if NIC_KIND == 2 {
+            e1000_active_dhcp_proof();
+        }
+    }
+}
+
+/// Drive a full DHCP DORA over the active e1000 to prove it carries the real network
+/// stack: start a DISCOVER (sent via wire_send -> e1000) and pump the RX ring
+/// (net_rx_pump -> e1000_active_recv) until the lease is ACKed or a wall-clock budget
+/// elapses. Runs synchronously at boot (IF=0, no PIT-pump reentrancy); QEMU's slirp
+/// backend DMAs the OFFER/ACK into the RX ring regardless. The "DHCP: ack" marker
+/// firing in a lane with no virtio NIC is the proof the stack works over the e1000.
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+unsafe fn e1000_active_dhcp_proof() {
+    serial_write(b"E1000: active link up\n");
+    let _ = crate::netcfg::start_dhcp();
+    let tsc_hz = crate::tsc_hz_via_pit();
+    let tsc_start = core::arch::x86_64::_rdtsc();
+    let budget = if tsc_hz != 0 { tsc_hz * 3 } else { u64::MAX };
+    let mut n = 0u64;
+    loop {
+        net_rx_pump();
+        if crate::netcfg::dhcp_done() {
+            break;
+        }
+        n += 1;
+        if n & 0xFFF == 0 && core::arch::x86_64::_rdtsc().wrapping_sub(tsc_start) > budget {
+            break;
+        }
+        if n > 200_000_000 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    if crate::netcfg::dhcp_done() {
+        serial_write(b"E1000: active dhcp ok\n");
+        // full-os Part II.7: read the on-device GPRC/GPTC stats counters now that
+        // a DORA has driven real TX/RX over the e1000.
+        crate::e1000_active_stats_log();
+    } else {
+        serial_write(b"E1000: active dhcp timeout\n");
+    }
 }

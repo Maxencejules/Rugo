@@ -9,6 +9,10 @@ size_t rugo_args_len;
 long rugo_stdin_fd;
 long rugo_stdout_fd;
 
+/* rlibc v2 (full-os guide Part V.11): errno, set by the syscall wrappers when a
+ * call fails (the kernel ABI returns RUGO_ERR / -1 on error). */
+int errno;
+
 /* mingw gcc emits a call to __main at the top of main() as a
  * constructor hook; freestanding programs stub it out. */
 void __main(void) {}
@@ -16,15 +20,24 @@ void __main(void) {}
 /* ---- unistd-ish ---- */
 
 long open(const char *path, long flags, long mode) {
-    return rugo_syscall3(SYS_OPEN, (long)path, flags, mode);
+    long r = rugo_syscall3(SYS_OPEN, (long)path, flags, mode);
+    if (r == RUGO_ERR)
+        errno = EIO;
+    return r;
 }
 
 ssize_t read(long fd, void *buf, size_t len) {
-    return rugo_syscall3(SYS_READ, fd, (long)buf, (long)len);
+    ssize_t r = rugo_syscall3(SYS_READ, fd, (long)buf, (long)len);
+    if (r == RUGO_ERR)
+        errno = EIO;
+    return r;
 }
 
 ssize_t write(long fd, const void *buf, size_t len) {
-    return rugo_syscall3(SYS_WRITE, fd, (long)buf, (long)len);
+    ssize_t r = rugo_syscall3(SYS_WRITE, fd, (long)buf, (long)len);
+    if (r == RUGO_ERR)
+        errno = EIO;
+    return r;
 }
 
 long close(long fd) { return rugo_syscall3(SYS_CLOSE, fd, 0, 0); }
@@ -162,6 +175,57 @@ int memcmp(const void *a, const void *b, size_t n) {
         y++;
     }
     return 0;
+}
+
+/* ---- rlibc v2 string helpers (full-os guide Part V.11) ---- */
+
+char *strcpy(char *dst, const char *src) {
+    char *d = dst;
+    while ((*d++ = *src++)) {
+    }
+    return dst;
+}
+
+char *strncpy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i]; i++)
+        dst[i] = src[i];
+    for (; i < n; i++)
+        dst[i] = 0;
+    return dst;
+}
+
+char *strcat(char *dst, const char *src) {
+    char *d = dst + strlen(dst);
+    while ((*d++ = *src++)) {
+    }
+    return dst;
+}
+
+char *strchr(const char *s, int c) {
+    for (;; s++) {
+        if (*s == (char)c)
+            return (char *)s;
+        if (!*s)
+            return NULL;
+    }
+}
+
+int atoi(const char *s) {
+    int sign = 1, v = 0;
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if (*s == '-') {
+        sign = -1;
+        s++;
+    } else if (*s == '+') {
+        s++;
+    }
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return sign * v;
 }
 
 /* ---- stdio subset ---- */

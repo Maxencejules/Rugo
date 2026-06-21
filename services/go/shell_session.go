@@ -192,6 +192,30 @@ func shellHandleCommand(cmd string, replyEP uintptr, timeEP uintptr, diagEP uint
 	if cmd == "sigprobe" {
 		return false, spawnRun(appNameSigprobe, "")
 	}
+	if cmd == "asconc" {
+		// Per-process address-space proof: two probes run concurrently,
+		// each isolated in its own address space.
+		return false, asConc()
+	}
+	if cmd == "forkprobe" {
+		// Copy-on-write fork proof: the probe forks itself; the child's
+		// write to a shared global does not disturb the parent's copy.
+		return false, spawnRun(appNameForkprobe, "")
+	}
+	if cmd == "poweroff" {
+		// Graceful ACPI power-off (full-os guide Part IV.9). uid 0 only;
+		// the call does not return.
+		sysPower(0)
+		return false, true
+	}
+	if len(cmd) > 6 && cmd[:6] == "probe " {
+		// Generic probe runner: spawn any app in the package store by
+		// name with the remaining argument string. Probes carry their own
+		// verdict markers; spawn+reap success is reported regardless.
+		name, pargs := splitFirstWord(cmd[6:])
+		spawnRun([]byte(name), pargs)
+		return false, true
+	}
 	switch cmd {
 	case "help":
 		log(msgShellHelp)

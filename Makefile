@@ -55,7 +55,7 @@ endif
        build-go-std image-go-std \
        build-sec-rights image-sec-rights \
        build-sec-filter image-sec-filter \
-       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-tcp-v1 test-netcfg-v1 test-console-v1 test-coreutils-v1 test-pipes-v1 test-libc-v1 test-wx-v1 test-signals-v1 test-users-v1 test-smp-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
+       test-security-baseline test-runtime-maturity test-mm-foundation-v1 test-sched-preempt-v1 test-dynamic-tasks-v1 test-exec-v1 test-vfs-v1 test-tcp-v1 test-netcfg-v1 test-console-v1 test-coreutils-v1 test-pipes-v1 test-concurrent-exec-v1 test-fork-v1 test-mmap-v1 test-clock-v1 test-rng-v1 test-rng-hwseed-v1 test-sandbox-v1 test-devfs-v1 test-sysinfo-v1 test-power-v1 test-futex-v1 test-proc-v1 test-proc-tid-v1 test-dhcp-dora-v1 test-icmp-v1 test-arp-v1 test-icmpv6-v1 test-udp-echo-v1 test-tcp-listen-v1 test-page3-v1 test-bigc-v1 test-pkgmgr-v1 test-beep-v1 test-audit-v1 test-crypt-v1 test-journal-v1 test-userid-v1 test-dmesg-v1 test-pty-v1 test-partitions-v1 test-fat16-v1 test-lseek-v1 test-nanosleep-v1 test-graphics-v1 test-input-events-v1 test-fb-alpha-v1 test-surface-v1 test-waitpid-v1 test-timerfd-v1 test-drivers-v1 test-aslr-v1 test-tmpfs-v1 test-libc-v1 test-wx-v1 test-signals-v1 test-users-v1 test-smp-v1 test-smp-syscall-v1 test-xhci-hid-v1 test-xhci-hid-input-v1 test-pkgfetch-v1 test-secure-boot-v1 test-pkg-install-v1 test-process-scheduler-v2 test-compat-v2 test-real-compat-runtime-v1 test-network-stack-v1 test-network-stack-v2 \
        test-storage-reliability-v1 test-storage-reliability-v2 test-release-engineering-v1 test-release-ops-v2 test-abi-stability-v3 test-kernel-reliability-v1 \
        test-firmware-attestation-v1 test-perf-regression-v1 test-userspace-model-v2 test-connected-runtime-c4 test-reliable-isolated-runtime-c5 test-pkg-ecosystem-v3 test-update-trust-v1 test-app-compat-v3 test-security-hardening-v3 test-vuln-response-v1 \
        test-observability-v2 test-crash-dump-v1 test-ops-ux-v3 test-release-lifecycle-v2 test-supply-chain-revalidation-v1 test-conformance-v1 test-fleet-ops-v1 test-fleet-rollout-safety-v1 test-maturity-qual-v1 test-desktop-stack-v1 test-gui-app-compat-v1 \
@@ -187,20 +187,33 @@ $(X1_PROC_SOCK_ELF): $(OUT)/x1-proc-sock.o services/compat/linker.ld | $(OUT)
 	$(LD) -nostdlib -static -T services/compat/linker.ld -o $@ $<
 
 APP_BASE_SHELL_ELF = $(OUT)/app-base-shell.elf
-COREUTILS_ELFS = $(OUT)/app-echo.elf $(OUT)/app-cat.elf $(OUT)/app-ls.elf $(OUT)/app-ps.elf $(OUT)/app-wc.elf $(OUT)/app-nxprobe.elf $(OUT)/app-sigprobe.elf $(OUT)/app-fsperm.elf
-APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf
+COREUTILS_ELFS = $(OUT)/app-echo.elf $(OUT)/app-cat.elf $(OUT)/app-ls.elf $(OUT)/app-ps.elf $(OUT)/app-wc.elf $(OUT)/app-nxprobe.elf $(OUT)/app-sigprobe.elf $(OUT)/app-fsperm.elf $(OUT)/app-asprobe.elf $(OUT)/app-forkprobe.elf $(OUT)/app-vmprobe.elf $(OUT)/app-timeprobe.elf $(OUT)/app-rngprobe.elf $(OUT)/app-sandboxprobe.elf $(OUT)/app-devprobe.elf $(OUT)/app-sysinfoprobe.elf $(OUT)/app-futexprobe.elf $(OUT)/app-lseekprobe.elf $(OUT)/app-sleepprobe.elf $(OUT)/app-gfxprobe.elf $(OUT)/app-waitprobe.elf $(OUT)/app-timerfdprobe.elf $(OUT)/app-dmesgprobe.elf $(OUT)/app-ptyprobe.elf $(OUT)/app-partprobe.elf $(OUT)/app-fatprobe.elf $(OUT)/app-page3probe.elf $(OUT)/app-beepprobe.elf $(OUT)/app-auditprobe.elf $(OUT)/app-fatlsprobe.elf $(OUT)/app-cryptprobe.elf $(OUT)/app-journalprobe.elf $(OUT)/app-userprobe.elf $(OUT)/app-compositorprobe.elf $(OUT)/app-dlprobe.elf $(OUT)/app-fatwrprobe.elf $(OUT)/app-fatbigprobe.elf $(OUT)/app-loginprobe.elf $(OUT)/app-cowfixprobe.elf $(OUT)/app-clonebrkprobe.elf $(OUT)/app-ondlprobe.elf $(OUT)/app-surfprobe.elf
+APP_ELFS = $(APP_BASE_SHELL_ELF) $(COREUTILS_ELFS) $(OUT)/app-hello.elf $(OUT)/app-bigcprobe.elf
 
 $(OUT)/app-base-shell.o: apps/base-shell/base_shell.asm | $(OUT)
 	$(NASM) $(NASMFLAGS) $< -o $@
 
-$(APP_BASE_SHELL_ELF): $(OUT)/app-base-shell.o apps/base-shell/linker.ld | $(OUT)
-	$(LD) -nostdlib -static -T apps/base-shell/linker.ld -o $@ $<
+# base-shell is built as ET_DYN (PIE) for code-base ASLR (full-os Part IV.10): the kernel
+# loads it at a random base each spawn. base_shell.asm is RIP-relative (default rel), so it
+# has no relocations and runs at any base. Coreutils stay ET_EXEC (the rule below).
+$(APP_BASE_SHELL_ELF): $(OUT)/app-base-shell.o apps/base-shell/linker-pie.ld | $(OUT)
+	$(LD) -nostdlib -shared --strip-all -T apps/base-shell/linker-pie.ld -o $@ $<
 
 $(OUT)/app-%.o: apps/coreutils/%.asm | $(OUT)
 	$(NASM) $(NASMFLAGS) $< -o $@
 
 $(OUT)/app-%.elf: $(OUT)/app-%.o apps/base-shell/linker.ld | $(OUT)
 	$(LD) -nostdlib -static -T apps/base-shell/linker.ld -o $@ $<
+
+# Regenerate the embedded dynamic-loader ELF .so (committed at
+# kernel_rs/src/dl_module.so; the kernel include_bytes!'s it). Run after editing
+# apps/dl/libdl.asm, then commit the regenerated .so. Built as a real ELF shared
+# object via nasm + rust-lld -shared (sidesteps the blocked mingw PE->ELF path).
+.PHONY: dl-module
+dl-module: | $(OUT)
+	$(NASM) -f elf64 apps/dl/libdl.asm -o $(OUT)/libdl.o
+	$(NASM) -f elf64 apps/dl/libdl2.asm -o $(OUT)/libdl2.o
+	$(LD) -shared -o kernel_rs/src/dl_module.so $(OUT)/libdl.o $(OUT)/libdl2.o
 
 # --- rlibc: C programs, linked in PE then rewrapped as ELF -------------------
 # The host gcc/ld only target PE-COFF, and objcopy mistranslates PE
@@ -213,6 +226,7 @@ $(OUT)/app-%.elf: $(OUT)/app-%.o apps/base-shell/linker.ld | $(OUT)
 RLIBC_CFLAGS = -ffreestanding -nostdlib -mabi=sysv -mno-red-zone \
                -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx \
                -fno-asynchronous-unwind-tables -fno-unwind-tables \
+               -ffunction-sections -fdata-sections \
                -fno-builtin -Ilibc/include -Wall -Wextra -O2 -c
 MINGW_LD = /c/mingw64/mingw64/bin/ld.exe
 
@@ -226,8 +240,18 @@ $(OUT)/app-hello-main-pe.o: apps/hello-c/hello.c libc/include/rugo/libc.h | $(OU
 	$(CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
-	$(MINGW_LD) -m i386pep --image-base 0x1400000 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
+	$(MINGW_LD) -m i386pep --gc-sections --dynamicbase --image-base 0x0 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
 	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-hello.pe $@
+
+# bigcprobe: a C program that spans MORE THAN TWO pages (a ~8 KiB const table
+# in .rdata + an 8 KiB .bss array), proving the PE->ELF toolchain and the exec
+# loader handle a multi-page C image end to end (companion to the asm page3probe).
+$(OUT)/app-bigcprobe-main-pe.o: apps/c-bigprobe/bigprobe.c libc/include/rugo/libc.h | $(OUT)
+	$(CC) $(RLIBC_CFLAGS) $< -o $@
+
+$(OUT)/app-bigcprobe.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
+	$(MINGW_LD) -m i386pep --gc-sections --dynamicbase --image-base 0x0 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-bigcprobe.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o
+	$(PYTHON) tools/pe_to_elf_v1.py $(OUT)/app-bigcprobe.pe $@
 
 # --- Rust kernel --------------------------------------------------------------
 
@@ -863,6 +887,9 @@ test-exec-v1: image-go
 test-vfs-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_vfs_runtime_v1.py -v --junitxml=$(OUT)/pytest-vfs-v1.xml
 
+test-vfs-journal-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_vfs_journal_v1.py -v --junitxml=$(OUT)/pytest-vfs-journal-v1.xml
+
 test-tcp-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_runtime_v1.py -v --junitxml=$(OUT)/pytest-tcp-v1.xml
 
@@ -884,6 +911,9 @@ test-users-v1: image-go
 test-smp-v1: image image-go
 	$(PYTHON) -m pytest tests/runtime/test_smp_runtime_v1.py -v --junitxml=$(OUT)/pytest-smp-v1.xml
 
+test-smp-syscall-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_smp_syscall_v1.py -v --junitxml=$(OUT)/pytest-smp-syscall-v1.xml
+
 test-console-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_console_runtime_v1.py -v --junitxml=$(OUT)/pytest-console-v1.xml
 
@@ -892,6 +922,252 @@ test-coreutils-v1: image-go
 
 test-pipes-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_pipes_runtime_v1.py -v --junitxml=$(OUT)/pytest-pipes-v1.xml
+
+test-concurrent-exec-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_concurrent_exec_v1.py -v --junitxml=$(OUT)/pytest-concurrent-exec-v1.xml
+
+test-fork-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_fork_v1.py -v --junitxml=$(OUT)/pytest-fork-v1.xml
+
+test-mmap-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mmap_v1.py -v --junitxml=$(OUT)/pytest-mmap-v1.xml
+
+test-clock-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_clock_v1.py -v --junitxml=$(OUT)/pytest-clock-v1.xml
+
+test-rng-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_rng_v1.py -v --junitxml=$(OUT)/pytest-rng-v1.xml
+
+test-rng-hwseed-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_rng_hwseed_v1.py -v --junitxml=$(OUT)/pytest-rng-hwseed-v1.xml
+
+test-sandbox-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_sandbox_v1.py -v --junitxml=$(OUT)/pytest-sandbox-v1.xml
+
+test-devfs-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_devfs_v1.py -v --junitxml=$(OUT)/pytest-devfs-v1.xml
+
+test-sysinfo-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_sysinfo_v1.py -v --junitxml=$(OUT)/pytest-sysinfo-v1.xml
+
+test-power-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_power_v1.py -v --junitxml=$(OUT)/pytest-power-v1.xml
+
+test-futex-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_futex_v1.py -v --junitxml=$(OUT)/pytest-futex-v1.xml
+
+test-proc-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_proc_v1.py -v --junitxml=$(OUT)/pytest-proc-v1.xml
+
+test-proc-tid-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_proc_tid_v1.py -v --junitxml=$(OUT)/pytest-proc-tid-v1.xml
+
+test-dhcp-dora-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_dhcp_dora_v1.py -v --junitxml=$(OUT)/pytest-dhcp-dora-v1.xml
+
+test-icmp-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_icmp_v1.py -v --junitxml=$(OUT)/pytest-icmp-v1.xml
+
+test-arp-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_arp_v1.py -v --junitxml=$(OUT)/pytest-arp-v1.xml
+
+test-icmpv6-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_icmpv6_v1.py -v --junitxml=$(OUT)/pytest-icmpv6-v1.xml
+
+test-udp-echo-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_udp_echo_v1.py -v --junitxml=$(OUT)/pytest-udp-echo-v1.xml
+
+test-ndp-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_ndp_v1.py -v --junitxml=$(OUT)/pytest-ndp-v1.xml
+
+test-ndp-dad-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_ndp_dad_v1.py -v --junitxml=$(OUT)/pytest-ndp-dad-v1.xml
+
+test-xhci-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_xhci_v1.py -v --junitxml=$(OUT)/pytest-xhci-v1.xml
+
+test-xhci-hid-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_xhci_hid_v1.py -v --junitxml=$(OUT)/pytest-xhci-hid-v1.xml
+
+test-xhci-hid-input-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_xhci_hid_input_v1.py -v --junitxml=$(OUT)/pytest-xhci-hid-input-v1.xml
+
+test-pkgfetch-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_pkgfetch_v1.py -v --junitxml=$(OUT)/pytest-pkgfetch-v1.xml
+
+test-secure-boot-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_secure_boot_v1.py -v --junitxml=$(OUT)/pytest-secure-boot-v1.xml
+
+test-pkg-install-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_pkg_install_v1.py -v --junitxml=$(OUT)/pytest-pkg-install-v1.xml
+
+test-mouse-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mouse_v1.py -v --junitxml=$(OUT)/pytest-mouse-v1.xml
+
+test-installer-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_installer_v1.py -v --junitxml=$(OUT)/pytest-installer-v1.xml
+
+test-compositor-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_compositor_v1.py -v --junitxml=$(OUT)/pytest-compositor-v1.xml
+
+test-uefi-boot-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_uefi_boot_v1.py -v --junitxml=$(OUT)/pytest-uefi-boot-v1.xml
+
+test-dynlink-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_dynlink_v1.py -v --junitxml=$(OUT)/pytest-dynlink-v1.xml
+
+test-dlopen-ondisk-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_dlopen_ondisk_v1.py -v --junitxml=$(OUT)/pytest-dlopen-ondisk-v1.xml
+
+test-fatwrite-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_fatwrite_v1.py -v --junitxml=$(OUT)/pytest-fatwrite-v1.xml
+
+test-tcp-listen-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp-listen-v1.xml
+
+test-tcp-rto-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_rto_v1.py -v --junitxml=$(OUT)/pytest-tcp-rto-v1.xml
+
+test-tcp-rtt-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_rtt_v1.py -v --junitxml=$(OUT)/pytest-tcp-rtt-v1.xml
+
+test-tcp-cc-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_cc_v1.py -v --junitxml=$(OUT)/pytest-tcp-cc-v1.xml
+
+test-dma-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_dma_v1.py -v --junitxml=$(OUT)/pytest-dma-v1.xml
+
+test-e1000-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_e1000_v1.py -v --junitxml=$(OUT)/pytest-e1000-v1.xml
+
+test-fat16-chain-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_fat16_chain_v1.py -v --junitxml=$(OUT)/pytest-fat16-chain-v1.xml
+
+test-hda-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_hda_v1.py -v --junitxml=$(OUT)/pytest-hda-v1.xml
+
+test-hda-codec-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_hda_codec_v1.py -v --junitxml=$(OUT)/pytest-hda-codec-v1.xml
+
+test-login-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_login_v1.py -v --junitxml=$(OUT)/pytest-login-v1.xml
+
+test-blockcache-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_blockcache_v1.py -v --junitxml=$(OUT)/pytest-blockcache-v1.xml
+
+test-aes-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_aes_v1.py -v --junitxml=$(OUT)/pytest-aes-v1.xml
+
+test-routing-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_routing_v1.py -v --junitxml=$(OUT)/pytest-routing-v1.xml
+
+test-ecam-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_ecam_v1.py -v --junitxml=$(OUT)/pytest-ecam-v1.xml
+
+test-nud-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_nud_v1.py -v --junitxml=$(OUT)/pytest-nud-v1.xml
+
+test-hugepage-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_hugepage_v1.py -v --junitxml=$(OUT)/pytest-hugepage-v1.xml
+
+test-tty-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tty_v1.py -v --junitxml=$(OUT)/pytest-tty-v1.xml
+
+test-msix-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_msix_v1.py -v --junitxml=$(OUT)/pytest-msix-v1.xml
+
+test-gpt-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_gpt_v1.py -v --junitxml=$(OUT)/pytest-gpt-v1.xml
+
+test-mount-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mount_v1.py -v --junitxml=$(OUT)/pytest-mount-v1.xml
+
+test-sha256-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_sha256_v1.py -v --junitxml=$(OUT)/pytest-sha256-v1.xml
+
+test-slaac-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_slaac_v1.py -v --junitxml=$(OUT)/pytest-slaac-v1.xml
+
+test-tcp-fastrexmit-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_fastrexmit_v1.py -v --junitxml=$(OUT)/pytest-tcp-fastrexmit-v1.xml
+
+test-mouse-packet-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mouse_packet_v1.py -v --junitxml=$(OUT)/pytest-mouse-packet-v1.xml
+
+test-udp6-echo-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_udp6_echo_v1.py -v --junitxml=$(OUT)/pytest-udp6-echo-v1.xml
+
+test-swap-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_swap_v1.py -v --junitxml=$(OUT)/pytest-swap-v1.xml
+
+test-page3-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_page3_v1.py -v --junitxml=$(OUT)/pytest-page3-v1.xml
+
+test-bigc-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_bigc_v1.py -v --junitxml=$(OUT)/pytest-bigc-v1.xml
+
+test-pkgmgr-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_pkgmgr_v1.py -v --junitxml=$(OUT)/pytest-pkgmgr-v1.xml
+
+test-beep-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_beep_v1.py -v --junitxml=$(OUT)/pytest-beep-v1.xml
+
+test-audit-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_audit_v1.py -v --junitxml=$(OUT)/pytest-audit-v1.xml
+
+test-crypt-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_crypt_v1.py -v --junitxml=$(OUT)/pytest-crypt-v1.xml
+
+test-journal-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_journal_v1.py -v --junitxml=$(OUT)/pytest-journal-v1.xml
+
+test-userid-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_userid_v1.py -v --junitxml=$(OUT)/pytest-userid-v1.xml
+
+test-dmesg-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_dmesg_v1.py -v --junitxml=$(OUT)/pytest-dmesg-v1.xml
+
+test-pty-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_pty_v1.py -v --junitxml=$(OUT)/pytest-pty-v1.xml
+
+test-partitions-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_partitions_v1.py -v --junitxml=$(OUT)/pytest-partitions-v1.xml
+
+test-fat16-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_fat16_v1.py -v --junitxml=$(OUT)/pytest-fat16-v1.xml
+
+test-lseek-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_lseek_v1.py -v --junitxml=$(OUT)/pytest-lseek-v1.xml
+
+test-nanosleep-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_nanosleep_v1.py -v --junitxml=$(OUT)/pytest-nanosleep-v1.xml
+
+test-graphics-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_graphics_v1.py -v --junitxml=$(OUT)/pytest-graphics-v1.xml
+
+test-input-events-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_input_events_v1.py -v --junitxml=$(OUT)/pytest-input-events-v1.xml
+
+test-fb-alpha-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_fb_alpha_v1.py -v --junitxml=$(OUT)/pytest-fb-alpha-v1.xml
+
+test-surface-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_surface_v1.py -v --junitxml=$(OUT)/pytest-surface-v1.xml
+
+test-waitpid-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_waitpid_v1.py -v --junitxml=$(OUT)/pytest-waitpid-v1.xml
+
+test-timerfd-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_timerfd_v1.py -v --junitxml=$(OUT)/pytest-timerfd-v1.xml
+
+test-drivers-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_drivers_v1.py -v --junitxml=$(OUT)/pytest-drivers-v1.xml
+
+test-aslr-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_aslr_v1.py -v --junitxml=$(OUT)/pytest-aslr-v1.xml
+
+test-tmpfs-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tmpfs_v1.py -v --junitxml=$(OUT)/pytest-tmpfs-v1.xml
 
 test-connected-runtime-c4: image-go
 	$(PYTHON) -m pytest tests/runtime/test_connected_runtime_c4.py tests/runtime/test_c4_status_docs.py -v --junitxml=$(OUT)/pytest-connected-runtime-c4.xml
@@ -1300,3 +1576,12 @@ docker-legacy:
 		  -o -name "*.cfg" -o -name "*.conf" -o -name "*.go" \) \
 		  -exec sed -i "s/\r$$//" {} + \
 		&& make -C legacy clean build image test-qemu'
+
+test-tcp6-listen-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp6_listen_v1.py -v --junitxml=$(OUT)/pytest-tcp6-listen-v1.xml
+
+test-mouse-irq-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_mouse_irq_v1.py -v --junitxml=$(OUT)/pytest-mouse-irq-v1.xml
+
+test-tcp-sndwin-v1: image-go
+	$(PYTHON) -m pytest tests/runtime/test_tcp_sndwin_v1.py -v --junitxml=$(OUT)/pytest-tcp-sndwin-v1.xml

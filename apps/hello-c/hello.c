@@ -33,6 +33,17 @@ int main(void) {
         printf("HELLOC: file[%d]=%s\n", (long)n, buf);
     }
 
+    /* rlibc v2 (full-os guide Part V.11): errno + string helpers. */
+    errno = 0;
+    long bad = open("/no/such/file", O_RDONLY, 0);
+    printf("HELLOC: errno bad=%d errno=%d\n", (long)bad, (long)errno);
+
+    char dst[16];
+    strcpy(dst, "ru");
+    strcat(dst, "go");
+    char *chr = strchr(dst, 'g');
+    printf("HELLOC: v2 cpy=%s chr=%s atoi=%d\n", dst, chr, (long)atoi("  -123x"));
+
     puts("HELLOC: done");
     return 0;
 }

@@ -86,6 +86,269 @@ pub fn fb_size() -> (u64, u64) {
     unsafe { (FB.width, FB.height) }
 }
 
+/// Fill a rectangle in the framebuffer with a 32-bpp XRGB color, clamped to
+/// the screen bounds (full-os guide Part III graphics). Returns false if no
+/// framebuffer is present or the origin is off-screen.
+pub fn fb_blit_rect(x: u64, y: u64, w: u64, h: u64, color: u32) -> bool {
+    unsafe {
+        if !FB.ready || x >= FB.width || y >= FB.height {
+            return false;
+        }
+        let x_end = core::cmp::min(x + w, FB.width);
+        let y_end = core::cmp::min(y + h, FB.height);
+        let mut yy = y;
+        while yy < y_end {
+            let line = (FB.addr + yy * FB.pitch) as *mut u32;
+            let mut xx = x;
+            while xx < x_end {
+                *line.add(xx as usize) = color;
+                xx += 1;
+            }
+            yy += 1;
+        }
+        true
+    }
+}
+
+/// Fill a rectangle with an ARGB color **alpha-blended** (src-over) onto the
+/// existing pixels (full-os guide Part III graphics): `out = src*a + dst*(255-a)`
+/// per channel, where `a` is the top byte of `argb`. Unlike `fb_blit_rect` (which
+/// overwrites), this lets translucent surfaces show what is behind them. Clamped
+/// to screen bounds; returns false if no framebuffer or the origin is off-screen.
+pub fn fb_blit_rect_blend(x: u64, y: u64, w: u64, h: u64, argb: u32) -> bool {
+    unsafe {
+        if !FB.ready || x >= FB.width || y >= FB.height {
+            return false;
+        }
+        let a = (argb >> 24) & 0xFF;
+        let inv = 255 - a;
+        let sr = (argb >> 16) & 0xFF;
+        let sg = (argb >> 8) & 0xFF;
+        let sb = argb & 0xFF;
+        let x_end = core::cmp::min(x + w, FB.width);
+        let y_end = core::cmp::min(y + h, FB.height);
+        let mut yy = y;
+        while yy < y_end {
+            let line = (FB.addr + yy * FB.pitch) as *mut u32;
+            let mut xx = x;
+            while xx < x_end {
+                let dst = *line.add(xx as usize);
+                let dr = (dst >> 16) & 0xFF;
+                let dg = (dst >> 8) & 0xFF;
+                let db = dst & 0xFF;
+                let or = (sr * a + dr * inv) / 255;
+                let og = (sg * a + dg * inv) / 255;
+                let ob = (sb * a + db * inv) / 255;
+                *line.add(xx as usize) = (or << 16) | (og << 8) | ob;
+                xx += 1;
+            }
+            yy += 1;
+        }
+        true
+    }
+}
+
+/// Self-test the alpha blend on a single saved+restored pixel (so the on-screen
+/// console is left untouched): paint an opaque blue background, blend 50%-alpha
+/// red over it, read the result back, and confirm it equals the src-over mix.
+/// Returns 1 = ok, 0 = mismatch, 2 = no framebuffer.
+pub fn fb_alpha_selftest() -> u64 {
+    unsafe {
+        if !FB.ready {
+            return 2;
+        }
+        let p = ((FB.addr + 10 * FB.pitch) as *mut u32).add(10);
+        let saved = *p;
+        let _ = fb_blit_rect(10, 10, 1, 1, 0x0000_00FF); // opaque blue
+        let _ = fb_blit_rect_blend(10, 10, 1, 1, 0x80FF_0000); // 50% red (a=128)
+        let got = *p & 0x00FF_FFFF;
+        *p = saved; // restore the pixel
+        let a = 128u32;
+        let inv = 255 - a;
+        let er = (255 * a) / 255; // red: src 255 over dst 0
+        let eg = 0u32; // green: both 0
+        let eb = (255 * inv) / 255; // blue: src 0 over dst 255
+        let expect = (er << 16) | (eg << 8) | eb;
+        if got == expect {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+// Mouse cursor compositing with save-under (full-os guide Part III): drawing the
+// cursor over the screen must not destroy what is underneath, so the pixels the
+// cursor covers are saved before it is drawn and restored when it moves -- the
+// classic "save-under" technique a windowing system uses for a hardware-less
+// cursor. v1 cursor is a solid 8x8 sprite.
+const CURSOR_W: u64 = 8;
+const CURSOR_H: u64 = 8;
+const CURSOR_COLOR: u32 = 0x00FF_FFFF; // white
+static mut CURSOR_SAVE: [u32; (CURSOR_W * CURSOR_H) as usize] = [0; (CURSOR_W * CURSOR_H) as usize];
+static mut CURSOR_X: u64 = 0;
+static mut CURSOR_Y: u64 = 0;
+static mut CURSOR_ACTIVE: bool = false;
+
+/// Restore the pixels saved under the cursor (undraw it), leaving the framebuffer
+/// exactly as it was before fb_cursor_draw. A no-op if no cursor is drawn.
+pub fn fb_cursor_restore() -> bool {
+    unsafe {
+        if !FB.ready || !CURSOR_ACTIVE {
+            return false;
+        }
+        let mut j = 0u64;
+        while j < CURSOR_H {
+            let py = CURSOR_Y + j;
+            if py < FB.height {
+                let line = (FB.addr + py * FB.pitch) as *mut u32;
+                let mut i = 0u64;
+                while i < CURSOR_W {
+                    let px = CURSOR_X + i;
+                    if px < FB.width {
+                        *line.add(px as usize) = CURSOR_SAVE[(j * CURSOR_W + i) as usize];
+                    }
+                    i += 1;
+                }
+            }
+            j += 1;
+        }
+        CURSOR_ACTIVE = false;
+        true
+    }
+}
+
+/// Draw the mouse cursor at (x,y), first saving the pixels underneath so the next
+/// fb_cursor_draw / fb_cursor_restore can undraw it cleanly (the cursor can move
+/// without corrupting the screen it passes over). Any previously-drawn cursor is
+/// restored first. Returns false if no framebuffer or the origin is off-screen.
+pub fn fb_cursor_draw(x: u64, y: u64) -> bool {
+    unsafe {
+        if !FB.ready {
+            return false;
+        }
+        if CURSOR_ACTIVE {
+            fb_cursor_restore();
+        }
+        if x >= FB.width || y >= FB.height {
+            return false;
+        }
+        // Save the pixels the cursor will cover (clamped; off-screen cells save 0).
+        let mut j = 0u64;
+        while j < CURSOR_H {
+            let py = y + j;
+            let mut i = 0u64;
+            while i < CURSOR_W {
+                let px = x + i;
+                let idx = (j * CURSOR_W + i) as usize;
+                CURSOR_SAVE[idx] = if px < FB.width && py < FB.height {
+                    *((FB.addr + py * FB.pitch) as *const u32).add(px as usize)
+                } else {
+                    0
+                };
+                i += 1;
+            }
+            j += 1;
+        }
+        let _ = fb_blit_rect(x, y, CURSOR_W, CURSOR_H, CURSOR_COLOR);
+        CURSOR_X = x;
+        CURSOR_Y = y;
+        CURSOR_ACTIVE = true;
+        true
+    }
+}
+
+/// Self-test the cursor save-under (full-os guide Part III): paint a known
+/// background patch, draw the cursor over it (the cursor color must appear),
+/// restore (the background must come back pixel-for-pixel), then leave the screen
+/// exactly as found. Proves the cursor can be drawn/moved without corrupting what
+/// is underneath. Returns 1 = ok, 0 = mismatch, 2 = no framebuffer.
+pub fn fb_cursor_selftest() -> u64 {
+    unsafe {
+        if !FB.ready {
+            return 2;
+        }
+        const N: usize = (CURSOR_W * CURSOR_H) as usize;
+        let (cx, cy) = (40u64, 40u64);
+        if cx + CURSOR_W >= FB.width || cy + CURSOR_H >= FB.height {
+            return 2;
+        }
+        // Snapshot the original patch so the screen is left untouched afterwards.
+        let mut orig = [0u32; N];
+        let mut j = 0u64;
+        while j < CURSOR_H {
+            let line = (FB.addr + (cy + j) * FB.pitch) as *const u32;
+            let mut i = 0u64;
+            while i < CURSOR_W {
+                orig[(j * CURSOR_W + i) as usize] = *line.add((cx + i) as usize);
+                i += 1;
+            }
+            j += 1;
+        }
+        // Paint a known, non-cursor-coloured background, then exercise the cursor.
+        let bg = 0x0000_2040u32;
+        let _ = fb_blit_rect(cx, cy, CURSOR_W, CURSOR_H, bg);
+        let p = ((FB.addr + cy * FB.pitch) as *const u32).add(cx as usize);
+        let bg_seen = *p & 0x00FF_FFFF;
+        fb_cursor_draw(cx, cy);
+        let drawn = *p & 0x00FF_FFFF; // cursor colour over the bg
+        fb_cursor_restore();
+        let restored = *p & 0x00FF_FFFF; // save-under brings the bg back
+        // Leave the framebuffer exactly as we found it.
+        j = 0;
+        while j < CURSOR_H {
+            let line = (FB.addr + (cy + j) * FB.pitch) as *mut u32;
+            let mut i = 0u64;
+            while i < CURSOR_W {
+                *line.add((cx + i) as usize) = orig[(j * CURSOR_W + i) as usize];
+                i += 1;
+            }
+            j += 1;
+        }
+        if bg_seen == (bg & 0x00FF_FFFF)
+            && drawn == (CURSOR_COLOR & 0x00FF_FFFF)
+            && restored == (bg & 0x00FF_FFFF)
+        {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+/// Blit a client-provided `w`x`h` ARGB pixel buffer (`src`, row-major, 4 bytes
+/// per pixel, little-endian, top byte ignored) to the framebuffer at (x,y),
+/// clamped to screen bounds (full-os guide Part III, per-client pixel surfaces).
+/// Unlike `fb_blit_rect` (one solid color) this paints REAL per-pixel bitmaps --
+/// the basis for a compositor rendering app surfaces. Returns false if no
+/// framebuffer, the origin is off-screen, or `src` is too small for `w*h`.
+pub fn fb_blit_pixels(x: u64, y: u64, w: u64, h: u64, src: &[u8]) -> bool {
+    unsafe {
+        if !FB.ready || x >= FB.width || y >= FB.height {
+            return false;
+        }
+        if src.len() < (w * h * 4) as usize {
+            return false;
+        }
+        let x_end = core::cmp::min(x + w, FB.width);
+        let y_end = core::cmp::min(y + h, FB.height);
+        let mut yy = y;
+        while yy < y_end {
+            let line = (FB.addr + yy * FB.pitch) as *mut u32;
+            let srow = ((yy - y) * w) as usize;
+            let mut xx = x;
+            while xx < x_end {
+                let si = (srow + (xx - x) as usize) * 4;
+                let px = u32::from_le_bytes([src[si], src[si + 1], src[si + 2], src[si + 3]]);
+                *line.add(xx as usize) = px & 0x00FF_FFFF;
+                xx += 1;
+            }
+            yy += 1;
+        }
+        true
+    }
+}
+
 /// Adopt the Limine framebuffer if one was provided (32 bpp only).
 pub fn fb_init() {
     unsafe {

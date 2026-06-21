@@ -19,7 +19,7 @@ def _boot_smp(iso, smp, input_text=None, with_devices=False, timeout=30):
     serial_port = conftest._pick_serial_port()
     cmd = [
         conftest.QEMU_BIN,
-        "-machine", "q35", "-cpu", "qemu64", "-smp", str(smp), "-m", "256",
+        "-machine", "q35", "-cpu", "qemu64,+x2apic", "-smp", str(smp), "-m", "256",
         "-display", "none", "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
         "-cdrom", iso,
@@ -91,8 +91,29 @@ def test_aps_check_in_on_quad_core(find_in_order):
         "RUGO: boot ok",
         "SMP: cpus=0x0000000000000004",
         "SMP: aps online=0x0000000000000003",
+        # Spinlock contention: 4 CPUs x 2000 locked increments = 8000 = 0x1F40,
+        # with no lost updates -> the lock serialized every core.
+        "SMP: lock count=0x0000000000001F40 ok",
+        # IPI: the BSP broadcasts to all 3 APs, each takes vector 240 and acks.
+        "SMP: ipi ack=0x0000000000000003",
+        # Per-CPU LAPIC timers: every AP's own preemption clock fired.
+        "SMP: ap timers ok",
+        # TLB shootdown: the BSP directed all 3 APs to invalidate an address
+        # and every one acknowledged (cross-CPU TLB invalidation works).
+        "SMP: tlb shootdown ok",
+        # Per-CPU storage: each AP recorded its index through its own GS base.
+        "SMP: percpu ok",
+        # Cross-CPU work dispatch: an AP claimed + ran a dispatched computation.
+        "SMP: ap work ok",
+        # Per-CPU run queues: each AP drained its own queue to the right total.
+        "SMP: runqueue ok",
+        # Per-CPU affinity: the BSP routed DISTINCT work to each core and each ran
+        # only its own (the load-balancing basis), with the batch fully distributed.
+        "SMP: affinity ok",
         "RUGO: halt ok",
     ])
+    assert "SMP: lock count" in out
+    assert " FAIL" not in out
 
 
 def test_default_lane_boots_clean_on_multicore(find_in_order):
@@ -105,9 +126,129 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
     find_in_order(out, [
         "SMP: cpus=0x0000000000000002",
         "SMP: aps online=0x0000000000000001",
+        # 2 CPUs x 2000 locked increments = 4000 = 0xFA0, no lost updates.
+        "SMP: lock count=0x0000000000000FA0 ok",
+        # IPI: the BSP signals the single AP, which takes vector 240 and acks.
+        "SMP: ipi ack=0x0000000000000001",
+        # The AP's own LAPIC timer fired.
+        "SMP: ap timers ok",
+        # TLB shootdown: the BSP directed the single AP to invalidate and it acked.
+        "SMP: tlb shootdown ok",
+        # Per-CPU storage: the AP recorded its index through its own GS base.
+        "SMP: percpu ok",
+        # Cross-CPU work dispatch: the AP claimed + ran a dispatched computation.
+        "SMP: ap work ok",
+        # Per-CPU run queues: the AP drained its own queue to the right total.
+        "SMP: runqueue ok",
+        # Kernel-wide locking (slice 5): the BSP and the AP allocated physical frames
+        # concurrently and the batches were disjoint -- the PMM spinlock serialized
+        # the bitmap read-modify-write across cores.
+        "SMP: pmm smp ok",
+        # Kernel-wide locking (slice 5b): the BSP and the AP allocated kernel-heap
+        # blocks concurrently, each stamping its own pattern; every block stayed
+        # distinct with its pattern intact -- the heap spinlock serialized the
+        # free-list across cores (no block double-handed-out or overlapped).
+        "SMP: heap smp ok",
+        # Workload-distribution lock infrastructure (slice 1): the coarse FS/STORAGE/
+        # NET leaf spinlocks + the IRQ-save/restore pair + per-lock contention counters
+        # are sound before any path wires them -- each lock acquires (word->1) and
+        # releases (word->0), the cli/sti pair round-trips at IF=0, and each counter
+        # bumps by one on a failed acquire. These guard the FS/net/block state an
+        # AP-migrated go-shell task touches concurrently (slices 2-5 wire them in).
+        "SMP-LOCKS: fs/storage/net init ok",
+        # Affinity invariant (live per-CPU scheduler): with AP-eligible tasks
+        # planted INSIDE the BSP's live rotation [1,R4_NUM_TASKS), the BSP's
+        # r4_find_ready only ever returns the non-eligible task and is starved
+        # when the whole window is AP-eligible -- proof the BSP and the APs run
+        # disjoint sets of the same task table, so no task runs on two CPUs.
+        "SMP: affinity live-skip ok",
+        # Capstone: a real ring-3 USER task ran on the application processor
+        # (not the BSP). The AP entered ring 3 on its own per-CPU TSS rsp0, set
+        # its per-CPU `current` task through GS, serviced TWO real syscalls
+        # (int 0x80 sys_time_now) whose tick delta is exactly 1 -- proof real
+        # kernel code ran for each on the AP's own core -- then reported arg*2+1
+        # via int 0x81 and returned to the kernel cleanly.
+        "SMP: ap-syscall delta=0x0000000000000001",
+        "SMP: ap-current=0x000000000000005A",
+        "SMP: ap user task ok",
+        # A REAL R4 task (an R4_TASKS scheduler entry created via r4_init_task) was
+        # migrated to the AP: the AP ran its CR3 + ring-3 context, tracked its real
+        # tid (slot 0x1F) as its per-CPU `current`, and serviced its syscalls. Two of
+        # its own real syscalls resolved its own slot through per-CPU state on the AP:
+        # a READ (getuid -> R4_TASKS[r4_current_smp()].uid == 0x77, the BSP's sentinel)
+        # and a WRITE (op 16 bumped this slot's yield_count -> scyc=0x1). The per-CPU
+        # R4_CURRENT reroute working both directions on the AP, indexing the real table.
+        "SMP: ap r4 migrate tid=0x000000000000001F cur=0x000000000000001F scuid=0x0000000000000077 scyc=0x0000000000000001 ok",
+        # Concurrency: a ring-3 task on the AP and the BSP completed a rendezvous
+        # (the AP signalled arrival + waited in-kernel for the BSP's ack while the
+        # BSP, having dispatched ASYNCHRONOUSLY, supplied it). This can only close if
+        # both CPUs run at the same instant -> two tasks on two CPUs at once.
+        "SMP: ap+bsp concurrent rv=0x00000000000000AC ok",
+        # Live scheduler with PER-CPU AFFINITY: the 3 tasks are flagged ap_eligible,
+        # so the BSP's r4_find_ready SKIPS them and an AP claims them by scanning the
+        # live task table for ap_eligible Ready tasks (under the run-queue lock) and
+        # runs them in ring 3 -- no per-task dispatch from the BSP, each exactly once.
+        "SMP: live sched ran=0x0000000000000003 ap-affinity ok",
+        # Preemptive time-slicing on an AP (live per-CPU scheduler slice 4): an AP
+        # runs TWO CPU-bound tasks in ring 3 with IF=1; its OWN periodic LAPIC timer
+        # fires INSIDE the running task (hits= field, >0) and RESCHEDULES the core to
+        # the other task (switches= field, >=2) -- a real two-way context switch
+        # driven by the AP's clock with no BSP involvement. Each task's full register
+        # context (incl. its loop counter) is saved/restored across every preemption,
+        # so BOTH run to completion (ran=2) -- proof the save/restore round-trip is
+        # correct. Deadlock-safe: the only IF=1 holder of the run-queue lock cli's
+        # around its claim, so the timer's reschedule never self-deadlocks.
+        "SMP: ap preempt ok",
+        # Workload-distribution slice 2: the BSP and the AP wrote 8 sectors each to
+        # DISTINCT scratch LBAs CONCURRENTLY, and every sector read back its exact
+        # per-CPU pattern (head + mid-sector) -- the STORAGE_LOCK serialized the shared
+        # BLK_DATA_PAGE bounce buffer + virtio ring across cores so neither clobbered
+        # the other mid-write. contend= (the lock-contention spin count) is nonzero and
+        # varies per boot, so only the fixed ran= prefix is matched; a failure or
+        # cross-clobber would emit " FAIL" (caught by the assert below). This runs in
+        # the kmain go region (after the block device is up), not the smp_init block.
+        "SMP: blk smp ran=0x0000000000000008",
+        # Workload-distribution slice 3: the BSP and the AP CONCURRENTLY created +
+        # wrote 4 distinct /data files each, and the BSP read every one back byte-exact
+        # -- FS_LOCK serialized the VFS node/bitmap cache + journal txn across cores
+        # (with STORAGE_LOCK nested inside each block flush) so neither clobbered the
+        # other's free node slot / bitmap / JTXN snapshot. Files are unlinked after
+        # (net-neutral). contend= varies per boot; a failure emits " FAIL".
+        "SMP: vfs smp ran=0x0000000000000004",
+        # Workload-distribution slice 4: the BSP and the AP each did 2000 NET_LOCK-
+        # guarded non-atomic increments of a shared counter CONCURRENTLY, and the total
+        # is EXACTLY 4000 (0xFA0) -- not one update was lost, proving NET_LOCK is a
+        # correct mutex across cores (the lock the BSP PIT net pump + the socket syscalls
+        # take). A broken lock would lose updates -> guarded < 0xFA0 -> " FAIL".
+        "SMP: net smp guarded=0x0000000000000FA0",
+        # Workload-distribution slice 5: the BSP toggled a futex-style WAKE multi-field
+        # RMW (futex_uaddr + state) on a reserved task slot under R4_RQ_LOCK while the AP
+        # read (state, futex_uaddr) together under the lock 1000x -- ZERO torn pairs, so
+        # R4_RQ_LOCK makes the wake's multi-field transition atomic against a concurrent
+        # scheduler read (the cross-CPU wake-of-an-AP-blocked-task race). torn != 0 -> FAIL.
+        "SMP: crosswake torn=0x0000000000000000 k=0x00000000000003E8 ok",
+        # Workload-distribution CAPSTONE (slice 6, the payoff of slices 2-5): a REAL
+        # ring-3 task was scheduled onto the application processor (cpu=1) and ran 200
+        # iterations of REAL FS work (vfs write+read, byte-verified -> fs=0xC8) + 200
+        # R4_SOCKETS loopback echoes (net=0xC8) ON THE AP, bumping its yield_count to 200
+        # -- all under FS_LOCK/STORAGE_LOCK/NET_LOCK, concurrently with the BSP doing its
+        # own FS+net+block work on the same locks. Every byte/echo verified, proving the
+        # locks kept shared state consistent across cores.
+        "CAPSTONE: ran cpu=0x0000000000000001 fs=0x00000000000000C8 net=0x00000000000000C8 yield=0x00000000000000C8 ok",
+        # The contention counters advanced -- fs_c (millions: the AP held FS_LOCK while the
+        # BSP spun for it) and blk_c (the BSP's direct block I/O raced the AP's in-FS block
+        # I/O on STORAGE_LOCK) -- overwhelming proof the two CPUs TRULY overlapped (not
+        # accidentally serialized). net_c is reported, not asserted (the loopback section
+        # has no I/O, so the cores rarely overlap on NET_LOCK). Values vary per boot; the
+        # fixed prefix is matched and a contention failure emits " FAIL".
+        "CAPSTONE: contend fs=0x",
+        # sys_sysinfo op 13 reports the online CPU count (BSP + 1 AP = 2) via the
+        # real syscall dispatch path, sized from the live SMP state.
+        "CPUS: count=0x0000000000000002",
         "GOSH: session ready",
         "GOINIT: result shutdown-clean",
         "RUGO: halt ok",
     ])
     assert "USERPF" not in out
     assert "GOINIT: err" not in out
+    assert " FAIL" not in out
