@@ -57,6 +57,14 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
         // checked first, so r4_current_smp is only read on the gated path.
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
         {
+            // Distinct errno (full-os guide Part V.11): clear the caller's
+            // last_errno at the start of EVERY syscall except the errno read
+            // itself, so a syscall that fails on a path that does NOT stamp a code
+            // leaves errno at 0 (libc then falls back to EIO) rather than reporting
+            // a STALE code from an earlier failed call.
+            if nr != 62 {
+                r4_clear_errno();
+            }
             if nr < 64 {
                 let cur = r4_current_smp();
                 if cur < R4_MAX_TASKS && (R4_TASKS[cur].sec_filter_mask >> nr) & 1 == 0 {

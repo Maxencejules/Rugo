@@ -48,6 +48,21 @@ _start:
     cmp  r12, r13
     je   .fail
 
+    ; --- a failure that does NOT stamp a code must leave errno CLEARED (0), not
+    ;     the STALE EBADF from the read above. read(len>4096) returns -1 before any
+    ;     errno stamp; the dispatch cleared errno on entry, so sys_errno must be 0. ---
+    xor  edi, edi
+    lea  rsi, [rel rbuf]
+    mov  edx, 5000             ; len > 4096 -> -1, un-stamped
+    mov  eax, 19               ; SYS_READ
+    int  0x80
+    cmp  rax, -1
+    jne  .fail
+    mov  eax, 62               ; SYS_ERRNO
+    int  0x80
+    cmp  rax, 0                ; must be cleared, NOT a stale 9 (EBADF)
+    jne  .fail
+
     lea  rdi, [rel okmsg]
     mov  esi, okmsg_len
     xor  eax, eax

@@ -698,20 +698,34 @@ cfg_m3! {
     /// `sys_errno`). (full-os guide Part V.11, distinct errno.)
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn r4_set_errno(code: i64) {
-        if R4_CURRENT < R4_TASKS.len() {
-            R4_TASKS[R4_CURRENT].last_errno = code;
+        let cur = r4_current_smp(); // the RUNNING task (per-CPU on an AP)
+        if cur < R4_TASKS.len() {
+            R4_TASKS[cur].last_errno = code;
         }
     }
     #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
     unsafe fn r4_set_errno(_code: i64) {}
+
+    /// Clear the current task's `last_errno` (called at syscall entry by the
+    /// dispatch, except for `sys_errno` itself). So a syscall that fails on a path
+    /// that does NOT stamp a code leaves errno at 0 -- libc then falls back to EIO,
+    /// rather than reporting a STALE code from an earlier failed call.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    pub(crate) unsafe fn r4_clear_errno() {
+        let cur = r4_current_smp();
+        if cur < R4_TASKS.len() {
+            R4_TASKS[cur].last_errno = 0;
+        }
+    }
 
     /// sys_errno (ABI v3.2 id 62): return the current task's last error code (0 if
     /// none). Additive, read-only, per-task; never changes another syscall's
     /// return convention. (full-os guide Part V.11, distinct errno.)
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_errno() -> u64 {
-        if R4_CURRENT < R4_TASKS.len() {
-            R4_TASKS[R4_CURRENT].last_errno as u64
+        let cur = r4_current_smp();
+        if cur < R4_TASKS.len() {
+            R4_TASKS[cur].last_errno as u64
         } else {
             0
         }
@@ -758,7 +772,7 @@ cfg_m3! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn sys_nsctl(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let me = R4_CURRENT;
+        let me = r4_current_smp(); // the RUNNING task (per-CPU on an AP)
         if me >= R4_TASKS.len() {
             return ERR;
         }
@@ -3955,6 +3969,9 @@ cfg_r4! {
         // TLS base is NOT inherited: each task/thread sets up its own %fs base
         // (POSIX thread-local storage is per-thread). Starts at 0 (no TLS).
         R4_TASKS[tid].fs_base = 0;
+        // A reused slot must not inherit the prior occupant's error code (the
+        // dispatch clears it per-syscall too, but reset it here for correctness).
+        R4_TASKS[tid].last_errno = 0;
         R4_TASKS[tid].fd_count = 0;
         R4_TASKS[tid].socket_count = 0;
         R4_TASKS[tid].dispatch_count = 0;
