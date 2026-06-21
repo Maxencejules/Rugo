@@ -66,7 +66,7 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                     // Record the denial in the security audit ring (full-os
                     // guide Part IV.10): a sandboxed task probing a filtered
                     // syscall is a security-relevant event.
-                    audit_event(b"sandbox-deny", nr);
+                    crate::audit::audit_event(b"sandbox-deny", nr);
                     *frame.add(14) = 0xFFFF_FFFF_FFFF_FFFF;
                     return;
                 }
