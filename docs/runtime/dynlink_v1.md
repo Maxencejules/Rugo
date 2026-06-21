@@ -70,13 +70,23 @@ The embedded `libdl` exports four functions, each gated on a different relocatio
   stacks `[0x190,0x200)` (MiB) — leaving only `[0x0180_0000, 0x0190_0000)`. The
   loaded object (shipped `.so` spans `<0x4000`) therefore aliases neither the
   caller's heap/mmap/exec segments nor a clone-thread's demand stack (which
-  starts at `0x0190_0000`). Idempotent: a repeat dlopen re-maps/re-copies and
-  returns the same base.
-- **op 2 = dlsym(name):** `dl_resolve` finds `name` in the object's
-  `.dynsym`/`.dynstr` (located via `DT_SYMTAB`/`DT_STRTAB`; the symbol count is
-  the SysV `.hash` `nchain` word) and returns `DLOPEN_BASE + st_value`. Matching
-  is exact (the `.so` name must terminate with `\0` right after the query), and
-  every table access is bounds-checked against the image.
+  starts at `0x0190_0000`). Each dlopen returns a **fresh handle** at a new
+  randomized slot (see the handle table below); repeat dlopens of the same module
+  produce distinct concurrently-live bases, not one shared mapping.
+- **op 2 = dlsym(name):** `dl_resolve` finds `name` in the **most-recently
+  loaded** object's `.dynsym`/`.dynstr` (located via `DT_SYMTAB`/`DT_STRTAB`; the
+  symbol count is the SysV `.hash` `nchain` word) and returns `base + st_value`
+  for that object's randomized base. Matching is exact (the `.so` name must
+  terminate with `\0` right after the query), and every table access is
+  bounds-checked against the image.
+- **op 3 = dlclose(handle):** unmaps exactly the pages of the object loaded at
+  `handle` (the value op 1 returned) and releases their frames; other open
+  handles stay live. Returns `0`, or `-1` if `handle` is not a live object. A
+  double-close fails (the slot is freed). `dlsym` after a close is undefined, as
+  in POSIX.
+- **op 4 = dlsym_h(handle, name):** like op 2 but resolves `name` against the
+  **specific** object at `handle`, at that object's own randomized base — so two
+  concurrently-open copies resolve the same symbol to two distinct VAs.
 
 `dlprobe` resolves and calls all four exports: `getval()==42` (RELATIVE),
 `addtwo(40)==42` (resolve + call), `getgvar()==99` (GLOB_DAT via the GOT), and
@@ -108,13 +118,33 @@ wherever it lands — so two loads of the same module get **different code bases
 is bounded to its slot (a crafted huge `p_memsz` is rejected) so a load never spills
 into a neighbour object or the demand-stack region.
 
+## dlopen handle table (POSIX multi-object)
+
+Up to `DL_MAX_HANDLES` (4) shared objects may be open **concurrently**, each at
+its own non-overlapping ASLR slot (`dl_aslr_base` skips every live handle's
+slot). `dl_load_elf` records each load in `DL_HANDLES[{base, lo, hi, ondisk}]`;
+`op 4 dlsym_h` resolves against a specific handle's `.dynsym` at that handle's
+base, and `op 3 dlclose` unmaps exactly one object's `[lo, hi)` while the others
+stay mapped. The single-slot globals (`DL_LOAD_BASE`/`DL_MAP_*`) are retained as
+the "most-recent object" the back-compat `op 2`/`dlclose-by-base` use.
+`multidlprobe` proves it from ring 3: `dlopen("libdl")` twice → two live objects
+at different bases; `dlsym_h` of `getval` on each yields **two distinct VAs**,
+both callable (each independently relocated → 42); `dlclose(h1)` then leaves `h2`
+resolvable + runnable while `h1`'s handle returns `-1` (`MULTIDL: handle table
+ok`, `tests/runtime/test_dlhandles_v1.py`). v1 boundary: at most one **on-disk**
+object's bytes are retained (concurrent on-disk handles share the single
+`DL_LOADED` buffer); embedded (`libdl`) handles back onto the static image and
+are unaffected.
+
 ## v1 boundary / carry-forward
 
 - **Embedded *and* on-disk `.so`; randomized load base; RELATIVE + GLOB_DAT +
-  JUMP_SLOT.** The loader reads a `.so` off the filesystem, places it at a randomized
-  slot, and applies relative *and* symbolic (GOT/PLT) relocations, eager-bound. What
-  remains: **lazy** PLT binding (a runtime resolver stub), `DT_NEEDED` dependency
-  chains, multiple simultaneously-loaded objects, and `dlclose` — carry-forward.
+  JUMP_SLOT; multiple concurrent objects + per-handle `dlclose`/`dlsym_h`.** The
+  loader reads a `.so` off the filesystem, places it at a randomized slot, applies
+  relative *and* symbolic (GOT/PLT) relocations eager-bound, and tracks up to 4
+  live handles. What remains: **lazy** PLT binding (a runtime resolver stub),
+  `DT_NEEDED` dependency chains, and >1 concurrent **on-disk** object (the
+  `DL_LOADED` buffer is shared) — carry-forward.
 - **C `.so` authoring** waits on the C `.so` toolchain fix — the documented blocker,
   routed around with the assembly-authored module.
 - **Main-executable ASLR.** Code-base ASLR here is for *dlopen'd* objects; the main

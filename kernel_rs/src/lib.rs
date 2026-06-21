@@ -5642,15 +5642,91 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut DL_MAP_HI: u64 = 0;
 
-    /// Pick a randomized, slot-aligned load base for the next dlopen, different from
-    /// the previous load's slot (so the per-load base provably varies and never
-    /// overlaps the last one). (full-os guide Part IV.10, code-base ASLR.)
+    // dlopen HANDLE TABLE (full-os guide Part V.11, POSIX dlopen semantics). The
+    // single-slot model above tracks only the MOST-RECENT object (for the back-
+    // compat op2 dlsym + dlclose-by-base); this table lets up to DL_MAX_HANDLES
+    // shared objects be open CONCURRENTLY, each at its own non-overlapping ASLR
+    // slot, so `op4 dlsym_h(handle, name)` resolves a symbol from a SPECIFIC
+    // object's .dynsym and `op3 dlclose(handle)` releases exactly that one's pages
+    // while the others stay live. v1 boundary: at most one ON-DISK object's bytes
+    // are retained (they share the single `DL_LOADED` buffer), so a second on-disk
+    // dlopen invalidates an earlier on-disk handle's dlsym; embedded ("libdl")
+    // handles back onto the static `DL_SO` and are unaffected.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct DlHandle {
+        base: u64,
+        lo: u64,
+        hi: u64,
+        ondisk: bool,
+        used: bool,
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const DL_MAX_HANDLES: usize = 4;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut DL_HANDLES: [DlHandle; DL_MAX_HANDLES] = [DlHandle {
+        base: 0,
+        lo: 0,
+        hi: 0,
+        ondisk: false,
+        used: false,
+    }; DL_MAX_HANDLES];
+
+    /// Index of the live handle loaded at `base`, or None.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_handle_find(base: u64) -> Option<usize> {
+        let mut i = 0usize;
+        while i < DL_MAX_HANDLES {
+            if DL_HANDLES[i].used && DL_HANDLES[i].base == base {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// True if any live handle occupies `slot` (used to keep concurrent objects
+    /// in non-overlapping ASLR slots).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_slot_live(slot: u64) -> bool {
+        let b = DLOPEN_BASE + slot * DL_SLOT;
+        dl_handle_find(b).is_some()
+    }
+
+    /// Record a freshly-loaded object in the first free handle slot. Returns false
+    /// if the table is full (the caller then unmaps and fails the dlopen).
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn dl_handle_register(base: u64, lo: u64, hi: u64, ondisk: bool) -> bool {
+        let mut i = 0usize;
+        while i < DL_MAX_HANDLES {
+            if !DL_HANDLES[i].used {
+                DL_HANDLES[i] = DlHandle {
+                    base,
+                    lo,
+                    hi,
+                    ondisk,
+                    used: true,
+                };
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// Pick a randomized, slot-aligned load base for the next dlopen: a slot not
+    /// occupied by any LIVE handle (so concurrent objects never overlap) and, when
+    /// no handle holds it, different from the most-recent base (so a single
+    /// re-open's base provably varies). DL_MAX_HANDLES (4) << DL_NSLOTS (32), so a
+    /// free slot is always found within the bounded scan. (full-os Part IV.10.)
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn dl_aslr_base() -> u64 {
         let prev = (DL_LOAD_BASE - DLOPEN_BASE) / DL_SLOT;
         let mut slot = crate::rng::rng_next() % DL_NSLOTS;
-        if slot == prev {
+        let mut tries = 0u64;
+        while (slot == prev || dl_slot_live(slot)) && tries < DL_NSLOTS {
             slot = (slot + 1) % DL_NSLOTS;
+            tries += 1;
         }
         DLOPEN_BASE + slot * DL_SLOT
     }
@@ -5707,7 +5783,7 @@ cfg_r4! {
         // Switch the dlsym image to the on-disk object ONLY on a successful load,
         // so a failed dlopen leaves dlsym resolving the last good object (matching
         // the libdl branch), not the bad/partial on-disk blob.
-        let r = dl_load_elf(&DL_LOADED[..size]);
+        let r = dl_load_elf(&DL_LOADED[..size], true);
         if r != ERR {
             DL_LOADED_LEN = size;
             DL_CUR_ONDISK = true;
@@ -5822,24 +5898,14 @@ cfg_r4! {
     /// dlopen: map an ELF `.so` (the embedded blob or one read off disk) into the
     /// user address space and apply its relocations. Returns the load base, or ERR.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn dl_load_elf(so: &[u8]) -> u64 {
+    unsafe fn dl_load_elf(so: &[u8], ondisk: bool) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         // Code-base ASLR: load at a fresh randomized base (relocations below are all
-        // applied relative to it). dl_resolve reads DL_LOAD_BASE for the same base.
-        // Reclaim a previously-loaded object's pages before loading another, so a
-        // dlopen without an intervening dlclose does not orphan the prior object's
-        // frames and W^X mappings (single live object). Uses the OLD DL_MAP range
-        // and runs BEFORE dl_aslr_base (which reads the OLD DL_LOAD_BASE to avoid
-        // reusing the same slot). vm_unmap_current is CR3-relative, matching the
-        // vm_map_current that created the mappings; an already-unmapped VA (e.g. a
-        // stale range from another address space) is a harmless no-op. (full-os V.11)
-        if DL_MAP_HI != 0 && DL_MAP_LO < DL_MAP_HI {
-            let mut va = DL_MAP_LO;
-            while va < DL_MAP_HI {
-                crate::mm::vm_unmap_current(va);
-                va += 0x1000;
-            }
-        }
+        // applied relative to it; the new handle records that base for dlsym_h).
+        // dl_aslr_base avoids every LIVE handle's slot, so this object does NOT
+        // overlap (and need NOT reclaim) the other concurrently-open handles --
+        // each is freed only by its own dlclose. vm_map_current is CR3-relative.
+        // (full-os guide Part V.11, dlopen handle table.)
         let base = dl_aslr_base();
         DL_LOAD_BASE = base;
         DL_MAP_LO = u64::MAX; // track the mapped page range so dlclose can unmap it
@@ -5991,13 +6057,28 @@ cfg_r4! {
             }
             i += 1;
         }
+        // Register the live object so dlsym_h/dlclose can find it by base. If the
+        // table is full, unmap this object's pages and fail the dlopen rather than
+        // silently orphan a slot (no more than DL_MAX_HANDLES concurrent objects).
+        if !dl_handle_register(base, DL_MAP_LO, DL_MAP_HI, ondisk) {
+            let mut va = DL_MAP_LO;
+            while va < DL_MAP_HI {
+                crate::mm::vm_unmap_current(va);
+                va += 0x1000;
+            }
+            DL_MAP_LO = 0;
+            DL_MAP_HI = 0;
+            DL_LOAD_BASE = DLOPEN_BASE;
+            return ERR;
+        }
         base
     }
 
-    /// dlsym: resolve `target` from the embedded `.so` .dynsym/.dynstr; returns
-    /// its loaded VA (base + st_value), or ERR.
+    /// dlsym: resolve `target` from a `.so` image's .dynsym/.dynstr; returns its
+    /// loaded VA (`base` + st_value), or ERR. `base` is the object's randomized
+    /// load base (per-handle), so a symbol resolves at the right concurrent copy.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn dl_resolve(so: &[u8], target: &[u8]) -> u64 {
+    unsafe fn dl_resolve(so: &[u8], target: &[u8], base: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         let symtab = match dl_dyn(so, 6).and_then(|v| dl_vaddr_to_off(so, v)) {
             Some(o) => o,
@@ -6037,23 +6118,27 @@ cfg_r4! {
             // Exact match: the .so name must terminate right after `target`.
             if ok && nm + target.len() < so.len() && so[nm + target.len()] == 0 {
                 // Resolve against the module's actual (randomized) load base.
-                return DL_LOAD_BASE + st_value;
+                return base + st_value;
             }
             s += 1;
         }
         ERR
     }
 
-    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> ELF `.so` load base VA,
-    /// op 2 = dlsym(name) -> resolved symbol VA. -1 on unknown module/symbol or a
-    /// mapping/relocation failure.
+    /// sys_dlctl (ABI v3.2 id 60): op 1 = dlopen(name) -> ELF `.so` load base VA
+    /// (the handle); op 2 = dlsym(name) -> VA resolved against the MOST-RECENT
+    /// object; op 3 = dlclose(handle) -> release that one object's pages; op 4 =
+    /// dlsym_h(handle, name) -> VA resolved against the SPECIFIC handle's object
+    /// (so multiple concurrently-open objects each resolve their own symbols).
+    /// -1 on unknown module/symbol/handle or a mapping/relocation failure.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_dlctl(op: u64, a2: u64, _a3: u64) -> u64 {
+    unsafe fn sys_dlctl(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         match op {
             1 => {
                 // dlopen: "libdl" loads the kernel-embedded .so; a "/data/<x>.so"
-                // path loads a shared object off the filesystem.
+                // path loads a shared object off the filesystem. Up to
+                // DL_MAX_HANDLES may be open at once (each its own ASLR slot).
                 let mut name = [0u8; 32];
                 if copyin_user(&mut name, a2, 32).is_err() {
                     return ERR;
@@ -6065,7 +6150,7 @@ cfg_r4! {
                 let nm = &name[..len];
                 if nm == b"libdl" {
                     DL_CUR_ONDISK = false;
-                    dl_load_elf(DL_SO)
+                    dl_load_elf(DL_SO, false)
                 } else if len > 6 && &nm[..6] == b"/data/" {
                     dl_load_from_vfs(nm)
                 } else {
@@ -6073,7 +6158,8 @@ cfg_r4! {
                 }
             }
             2 => {
-                // dlsym: resolve a name from the currently-loaded object's .dynsym.
+                // dlsym: resolve a name from the most-recently-loaded object's
+                // .dynsym (back-compat; op 4 targets a specific handle).
                 let mut nm = [0u8; 16];
                 if copyin_user(&mut nm, a2, 16).is_err() {
                     return ERR;
@@ -6085,27 +6171,63 @@ cfg_r4! {
                 if len == 0 {
                     return ERR;
                 }
-                dl_resolve(dl_current(), &nm[..len])
+                dl_resolve(dl_current(), &nm[..len], DL_LOAD_BASE)
             }
             3 => {
-                // dlclose(a2 = base): unmap the pages of the object currently loaded
-                // at `base` (the most-recent dlopen) and release their frames.
-                // Returns 0, or ERR if `base` is not the live object / nothing is
-                // loaded. A double-close fails (DL_MAP_HI is cleared). dlsym after a
-                // close is undefined, as in POSIX. (full-os guide Part V.11)
-                if a2 != DL_LOAD_BASE || DL_MAP_HI == 0 || DL_MAP_LO >= DL_MAP_HI {
+                // dlclose(a2 = handle/base): unmap exactly THIS object's pages and
+                // release their frames; other open handles stay live. Returns 0, or
+                // ERR if `base` is not a live handle. A double-close fails (the slot
+                // is freed). dlsym after a close is undefined, as in POSIX. (V.11)
+                let slot = match dl_handle_find(a2) {
+                    Some(s) => s,
+                    None => return ERR,
+                };
+                let lo = DL_HANDLES[slot].lo;
+                let hi = DL_HANDLES[slot].hi;
+                DL_HANDLES[slot].used = false;
+                if hi != 0 && lo < hi {
+                    let mut va = lo;
+                    while va < hi {
+                        crate::mm::vm_unmap_current(va);
+                        va += 0x1000;
+                    }
+                }
+                // If this was the most-recent object, clear the back-compat globals
+                // so op2/dlsym and a stale dlclose see "no live object".
+                if a2 == DL_LOAD_BASE {
+                    DL_MAP_LO = 0;
+                    DL_MAP_HI = 0;
+                    DL_LOAD_BASE = DLOPEN_BASE;
+                    DL_CUR_ONDISK = false;
+                }
+                0
+            }
+            4 => {
+                // dlsym_h(a2 = handle/base, a3 = name ptr): resolve `name` from the
+                // .dynsym of the SPECIFIC object loaded at `base`, at that object's
+                // own (randomized) load base -- so two concurrently-open copies
+                // resolve the same symbol to two distinct VAs.
+                let slot = match dl_handle_find(a2) {
+                    Some(s) => s,
+                    None => return ERR,
+                };
+                let mut nm = [0u8; 16];
+                if copyin_user(&mut nm, a3, 16).is_err() {
                     return ERR;
                 }
-                let mut va = DL_MAP_LO;
-                while va < DL_MAP_HI {
-                    crate::mm::vm_unmap_current(va);
-                    va += 0x1000;
+                let mut len = 0usize;
+                while len < 16 && nm[len] != 0 {
+                    len += 1;
                 }
-                DL_MAP_LO = 0;
-                DL_MAP_HI = 0;
-                DL_LOAD_BASE = DLOPEN_BASE; // no live object; a stale dlclose now fails
-                DL_CUR_ONDISK = false;
-                0
+                if len == 0 {
+                    return ERR;
+                }
+                let img: &[u8] = if DL_HANDLES[slot].ondisk {
+                    &DL_LOADED[..DL_LOADED_LEN]
+                } else {
+                    DL_SO
+                };
+                dl_resolve(img, &nm[..len], DL_HANDLES[slot].base)
             }
             _ => ERR,
         }
@@ -6120,14 +6242,14 @@ cfg_r4! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn dlclose_selftest() {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
-        let base = dl_load_elf(DL_SO);
+        let base = dl_load_elf(DL_SO, false);
         let pg = base & !0xFFF;
         let mapped_before =
             base != ERR && check_page_user_perms(pg, HHDM_OFFSET, USER_PERM_READ);
         let closed = sys_dlctl(3, base, 0);
         let mapped_after = check_page_user_perms(pg, HHDM_OFFSET, USER_PERM_READ);
         let double = sys_dlctl(3, base, 0); // nothing live at `base` now -> ERR
-        let base2 = dl_load_elf(DL_SO); // re-open maps fresh
+        let base2 = dl_load_elf(DL_SO, false); // re-open maps fresh
         let reopened =
             base2 != ERR && check_page_user_perms(base2 & !0xFFF, HHDM_OFFSET, USER_PERM_READ);
         let _ = sys_dlctl(3, base2, 0); // clean up the shared-AS mapping

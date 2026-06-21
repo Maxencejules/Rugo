@@ -64,9 +64,12 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   `docs/runtime/pty_v1.md`, `docs/runtime/audio_v1.md`, `docs/runtime/compositor_v1.md`);
   `58` = `sys_power` (op 0 = shutdown via ACPI S5 / debug-exit, op 1 =
   reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
-  `60` = `sys_dlctl` (dynamic loading; op 1 = dlopen(`rsi`=name) → module base VA,
-  op 2 = dlsym(`rsi`=name) → resolved symbol VA; contract in
-  `docs/runtime/dynlink_v1.md`);
+  `60` = `sys_dlctl` (dynamic loading; op 1 = dlopen(`rsi`=name) → module base VA
+  (the handle), op 2 = dlsym(`rsi`=name) → symbol VA resolved against the
+  most-recent object, op 3 = dlclose(`rsi`=handle) → release that one object's
+  pages, op 4 = dlsym_h(`rsi`=handle, `rdx`=name) → symbol VA resolved against
+  that SPECIFIC handle (up to 4 objects open concurrently, each its own ASLR
+  slot; additive ops, non-breaking); contract in `docs/runtime/dynlink_v1.md`);
   `61` = `sys_sysinfo` (op 1 = live task count, op 2 = free physical
   frames, op 3 = uptime ticks, op 4 = dmesg read(`rsi`=buf, `rdx`=cap) →
   bytes copied, op 5 = MBR partition parse → partition count (logs each
