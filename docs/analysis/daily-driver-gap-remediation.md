@@ -280,17 +280,20 @@ Current: `lib.rs` ~13.6k lines / 249 fns holding syscalls + ELF loader + linker 
 GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
 (confirmed), none denied. The unwrap concern is withdrawn (see #8).
 
-- **[DONE, demonstrated] Credential subsystem → `cred.rs`.** Extracted the
-  self-contained password table + iterated salted KDF + lockout + `login_verify`
-  (116 lines) out of `lib.rs` into a focused `kernel_rs/src/cred.rs` module
-  depending only on `crate::sha256`; the login *dispatch* stays in the syscall
-  layer and calls `crate::cred::login_verify`. Verified: `test-login-v1` +
-  audit/users/userid green. Because the credential code is `go_test`-gated, the
-  blast radius is the go lane only, so it is verifiable without the full 50-lane
-  gate. This is the clean **template** for the rest.
-  - Honest caveat: `lib.rs` net *grew* this session (13,517 → 13,635) because
-    epoll (#2) was added; cred.rs pulls 116 lines out but the monolith problem is
-    barely dented in absolute terms.
+- **[DONE] Two clean module extractions — `cred.rs` and `epoll.rs`.**
+  - `cred.rs` (now 189 lines): the password table + iterated salted KDF + lockout
+    + `/shadow` store + `login_verify`, depending only on `crate::sha256` +
+    `crate::vfs`; the login dispatch calls `crate::cred::login_verify`.
+  - `epoll.rs` (110 lines): the epoll-instance state (`EPOLLS`) + `sys_epoll` op
+    dispatch, depending only on `crate::memory::*` and the `epoll_fd_ready`
+    readiness helper (which stays in `lib.rs` with the fd/pipe tables it reads —
+    so no fd internals are exposed). The dispatch calls `crate::epoll::sys_epoll`.
+  - Both are `go_test`-gated, so the blast radius is the go lane (verifiable
+    without the full 50-lane gate). These are the clean **template** for the rest.
+  - Net effect: despite adding TWO whole features this session (epoll + /shadow),
+    `lib.rs` is essentially flat — 13,517 (start) → 13,536 (+19) — because the
+    bulk now lives in the two modules. The monolith bulk still needs the full-gate
+    subsystem extraction below, but the direction is now decompose-not-grow.
 
 Remaining (the bulk, MILESTONE):
 - Extract the remaining self-contained subsystems the same way — GPT/FAT16
