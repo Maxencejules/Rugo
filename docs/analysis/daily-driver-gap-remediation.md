@@ -288,12 +288,18 @@ GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
     dispatch, depending only on `crate::memory::*` and the `epoll_fd_ready`
     readiness helper (which stays in `lib.rs` with the fd/pipe tables it reads —
     so no fd internals are exposed). The dispatch calls `crate::epoll::sys_epoll`.
-  - Both are `go_test`-gated, so the blast radius is the go lane (verifiable
+  - `rng.rs` (125 lines): the xorshift64*/RDRAND CSPRNG + `rng_next` +
+    `sys_getrandom` + hwseed self-test, depending only on `crate::memory::copyout_user`
+    and the entropy sources (`crate::cmos_unix_seconds`, `crate::R4_PREEMPT_TICKS`,
+    `crate::serial_write`) which stay in lib.rs. No new `pub(crate)` needed —
+    child modules read private crate-root items (descendant access).
+  - All three are `go_test`-gated, so the blast radius is the go lane (verifiable
     without the full 50-lane gate). These are the clean **template** for the rest.
   - Net effect: despite adding TWO whole features this session (epoll + /shadow),
-    `lib.rs` is essentially flat — 13,517 (start) → 13,536 (+19) — because the
-    bulk now lives in the two modules. The monolith bulk still needs the full-gate
-    subsystem extraction below, but the direction is now decompose-not-grow.
+    `lib.rs` is **net-REDUCED** — 13,517 (start) → 13,418 (−99) — because the bulk
+    now lives in three modules. The direction is decisively decompose-not-grow;
+    the remaining monolith bulk (fd/pipe layer, ELF/PIE loader, GPT/FAT16) is
+    larger and interconnected, so it needs the full-gate subsystem extraction below.
 
 Remaining (the bulk, MILESTONE):
 - Extract the remaining self-contained subsystems the same way — GPT/FAT16
