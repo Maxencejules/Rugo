@@ -146,6 +146,64 @@ Visible proof paths:
   default Go lane boots and shuts down cleanly on multicore.
   Proof: `tests/runtime/test_smp_runtime_v1.py`, contract
   `docs/runtime/smp_v1.md`
+- `make test-smp-syscall-v1`
+  Boots the default Go image with multiple cores and proves an
+  application processor servicing *real* syscalls for a migrated ring-3
+  task through its own per-CPU `current` (`gs:[16]`), plus AP-side task
+  exit and reschedule on a live second core - beyond the check-in-and-park
+  groundwork of `test-smp-v1`.
+  Proof: `tests/runtime/test_smp_syscall_v1.py`, contract
+  `docs/runtime/smp_v1.md`
+- `make test-pidns-v1`
+  Boots the default Go image and proves PID + UTS namespaces via
+  `sys_nsctl` (id 57): an unshared task sees only its own namespace,
+  reads a namespace-local pid starting at 1 (becomes its namespace's
+  `init`), and carries a per-namespace hostname.
+  Proof: `tests/runtime/test_pidns_v1.py`, contract
+  `docs/runtime/pidns_v1.md`
+- `make test-tls-v1`
+  Boots the default Go image and proves per-task thread-local storage via
+  `sys_vm_ctl` op 5 (`set_tls`): each task gets its own `%fs` base,
+  restored on every context switch, so `%fs:offset` reaches a per-task TLS
+  block across yields.
+  Proof: `tests/runtime/test_tls_v1.py`, contract
+  `docs/runtime/tls_v1.md`
+- `make test-dynlink-v1` (plus `make test-dlopen-ondisk-v1`)
+  Boots the default Go image and proves real ELF dynamic loading via
+  `sys_dlctl` (id 60): `dlopen` maps a shared object (embedded or read
+  off `/data`) at a randomized code-base-ASLR load base, applies
+  RELATIVE / GLOB_DAT / JUMP_SLOT relocations, and `dlsym` resolves
+  symbols that run in ring 3; a concurrent handle table (`dlsym_h` /
+  `dlclose`, with handles reclaimed on task exit) keeps multiple objects
+  live at once.
+  Proof: `tests/runtime/test_dynlink_v1.py`,
+  `tests/runtime/test_dlhandles_v1.py`,
+  `tests/runtime/test_dlopen_ondisk_v1.py`, contract
+  `docs/runtime/dynlink_v1.md`
+- `make test-winsrv-v1`
+  Boots the default Go image and proves a standing window server with a
+  persistent, owner-stamped surface registry and per-client lifecycle
+  (`sys_ioctl` ops 8-10): multiple clients' windows coexist and a dead
+  client's surfaces are reclaimed on task exit.
+  Proof: `tests/runtime/test_winsrv_v1.py`, contract
+  `docs/desktop/window_manager_contract_v1.md`
+- `make test-pqsig-v1`
+  Boots the default Go image and proves public-key package signing: a
+  real asymmetric Lamport one-time signature (the kernel embeds only the
+  256-pair SHA-256 public key) replaces the old symmetric HMAC the kernel
+  could itself forge.
+  Proof: `tests/runtime/test_pqsig_v1.py`
+- epoll, distinct errno, and per-address-space `brk` across clone are
+  proved by additional ring-3 lanes (run directly with pytest):
+  `sys_epoll` (id 55) level-triggered readiness over fds/pipes with
+  instances reclaimed on task exit
+  (`tests/runtime/test_epoll_v1.py`); `sys_errno` (id 62) per-task error
+  codes - well-defined paths stamp ENOENT/EBADF/... instead of collapsing
+  every `-1` to EIO (`tests/runtime/test_errno_v1.py`); and POSIX `brk`
+  kept consistent across pml4-sharing clone threads by
+  copy-at-clone + propagate-on-write
+  (`tests/runtime/test_clonebrk_v1.py`). ABI surface in
+  `docs/abi/syscall_v3.md`.
 - `make test-perf-regression-v1`
   Boots `out/os-go.iso`, captures boot-backed runtime metrics, and enforces
   performance regression budgets on the shipped default image.
@@ -263,6 +321,12 @@ Primary scoring rule:
 - current core closure order is `M10/M16 -> M25 -> M12/M13 -> boot-backed artifacts -> M18/M19 -> M22/M42 runtime-backed closure`
 - `G1` is the default Go-service lane
 - `G2` is the supported stock-Go lane, not the default repo state
+- the 2026-06 daily-driver general-purpose parity audit then closed its 10
+  "missing pieces vs a real daily-driver OS" findings into live ring-3 lanes
+  (PID/UTS namespaces, per-task TLS, real `dlopen`/`dlsym` dynamic linking,
+  `epoll`, distinct `errno`, a standing window server, AP-side syscall/exit,
+  CoW `fork`, and Lamport public-key package signing); see
+  [docs/analysis/daily-driver-gap-remediation.md](docs/analysis/daily-driver-gap-remediation.md)
 
 ## Architecture And Archive
 
@@ -271,6 +335,7 @@ Primary scoring rule:
 - architecture overview: [docs/architecture/README.md](docs/architecture/README.md)
 - exhaustive milestone ledger: [MILESTONES.md](MILESTONES.md)
 - detailed validation ledger: [docs/STATUS.md](docs/STATUS.md)
+- daily-driver general-purpose parity audit + what landed: [docs/analysis/daily-driver-gap-remediation.md](docs/analysis/daily-driver-gap-remediation.md)
 
 Historical milestone backlogs are archived in [docs/archive/README.md](docs/archive/README.md).
 Execution backlog index: [docs/archive/EXECUTION_BACKLOGS.md](docs/archive/EXECUTION_BACKLOGS.md)
