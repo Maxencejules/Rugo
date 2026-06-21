@@ -316,6 +316,21 @@ Remediation (ordered):
 3. Boot the installed target standalone in QEMU as the gate (not a restore).
 4. Self-hosting (Rugo building Rugo) is a separate, much larger milestone.
 
+**Investigated this pass — the provisioning is real; the residual is the OS bytes.**
+`install_write_and_verify` ([lib.rs:10838](../../kernel_rs/src/lib.rs#L10838))
+already writes a **structurally-valid bootable MBR** to a fresh second disk — boot
+flag `0x80`, a real 16-byte partition entry (type/LBA/sector-count at offset 446),
+and the `0x55AA` signature — then reads it back and verifies the partition entry
+round-tripped. `install_payload_and_verify` writes + verifies a payload. So the
+*provisioning mechanism* (target-disk switch, partition table, write+read-back
+verification) is genuine, not a stub. The blocker is step 1's **real bytes**: the
+payload is a deterministic fill, because writing a bootable copy needs the kernel
+ELF + fs image *accessible at runtime* — the kernel is loaded by Limine as
+segments, not as a readable file, so it would have to read its own image back off
+the boot medium (ISO9660/boot-FAT parse) before it can copy it. That, plus
+installing Limine stages and a standalone (non-restoring) boot gate, is the
+genuine milestone — the provisioning scaffolding it builds on is already in place.
+
 ---
 
 ## 8. Security hardening depth  [salt DONE; rest MILESTONE + DECISION]
