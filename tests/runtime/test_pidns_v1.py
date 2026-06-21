@@ -71,6 +71,9 @@ def test_pid_namespace_isolation(find_in_order):
     find_in_order(out, [
         "EXEC: nsprobe ok",
         "NS: pid-namespace isolated ok",
+        # UTS namespace: a fresh namespace inherits the global "rugo" hostname,
+        # then sets its own ("ctr") -- the hostname view is namespace-scoped.
+        "NS: uts-namespace hostname ok",
         "RUGO: halt ok",
     ])
     assert "NS: FAIL" not in out

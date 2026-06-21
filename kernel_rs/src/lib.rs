@@ -684,16 +684,41 @@ cfg_m3! {
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     static mut NS_NEXT_PID: u32 = 1;
 
+    /// UTS namespace (full-os guide Part I): each PID namespace carries its own
+    /// hostname, so a task's view of the hostname is namespace-scoped. v1 stores an
+    /// 8-byte hostname encoded little-endian (a longer name is a carry-forward).
+    /// The global namespace (`pid_ns == 0`) uses `GLOBAL_HOSTNAME8`; an unshared
+    /// namespace gets its own entry in `NS_HOSTNAMES` on first `sethostname`.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut GLOBAL_HOSTNAME8: u64 = 0x6F67_7572; // "rugo" (little-endian)
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct NsHostname {
+        ns: u32,
+        name8: u64,
+        active: bool,
+    }
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut NS_HOSTNAMES: [NsHostname; 8] = [NsHostname {
+        ns: 0,
+        name8: 0,
+        active: false,
+    }; 8];
+
     /// sys_nsctl (ABI v3.2 id 57, PID namespaces — full-os guide Part I): isolate a
     /// task's process view. op 1 = unshare_pid: move the caller into a FRESH PID
     /// namespace (so it sees only itself + tasks it later clones) and return the new
     /// ns id. op 2 = ns_task_count: number of live tasks visible in the caller's
     /// namespace (the whole system in the global ns 0, just the namespace members
     /// otherwise). op 3 = ns_getpid: the caller's namespace-LOCAL pid (1 for the
-    /// first task in a fresh namespace, i.e. its "init"), vs its global tid.
-    /// Additive; reads/sets only the per-task `pid_ns` tag (no quota interaction).
+    /// first task in a fresh namespace, i.e. its "init"), vs its global tid. op 4 =
+    /// sethostname(a2=ptr, a3=len): set the caller's UTS-namespace hostname (the
+    /// global hostname when in ns 0). op 5 = gethostname: the caller's namespace
+    /// hostname, 8 bytes little-endian -- a task in a fresh namespace reads the
+    /// global "rugo" until it sets its own.
+    /// Additive; reads/sets only the per-task `pid_ns` tag + the hostname store.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn sys_nsctl(op: u64) -> u64 {
+    unsafe fn sys_nsctl(op: u64, a2: u64, a3: u64) -> u64 {
         const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         let me = R4_CURRENT;
         if me >= R4_TASKS.len() {
@@ -745,6 +770,53 @@ cfg_m3! {
                     t += 1;
                 }
                 rank
+            }
+            4 => {
+                // sethostname: store the caller's UTS-namespace hostname (8 bytes).
+                let ns = R4_TASKS[me].pid_ns;
+                let mut buf = [0u8; 8];
+                let n = core::cmp::min(a3 as usize, 8);
+                if n > 0 && copyin_user(&mut buf[..n], a2, n).is_err() {
+                    return ERR;
+                }
+                let name8 = u64::from_le_bytes(buf);
+                if ns == 0 {
+                    GLOBAL_HOSTNAME8 = name8;
+                    return 0;
+                }
+                // Find this namespace's slot, or claim a free one.
+                let mut i = 0usize;
+                let mut free = usize::MAX;
+                while i < NS_HOSTNAMES.len() {
+                    if NS_HOSTNAMES[i].active && NS_HOSTNAMES[i].ns == ns {
+                        NS_HOSTNAMES[i].name8 = name8;
+                        return 0;
+                    }
+                    if !NS_HOSTNAMES[i].active && free == usize::MAX {
+                        free = i;
+                    }
+                    i += 1;
+                }
+                if free == usize::MAX {
+                    return ERR; // hostname table full
+                }
+                NS_HOSTNAMES[free] = NsHostname { ns, name8, active: true };
+                0
+            }
+            5 => {
+                // gethostname: the caller's namespace hostname (global until set).
+                let ns = R4_TASKS[me].pid_ns;
+                if ns == 0 {
+                    return GLOBAL_HOSTNAME8;
+                }
+                let mut i = 0usize;
+                while i < NS_HOSTNAMES.len() {
+                    if NS_HOSTNAMES[i].active && NS_HOSTNAMES[i].ns == ns {
+                        return NS_HOSTNAMES[i].name8;
+                    }
+                    i += 1;
+                }
+                GLOBAL_HOSTNAME8 // a fresh namespace inherits the global name
             }
             _ => ERR,
         }

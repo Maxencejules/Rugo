@@ -30,6 +30,11 @@ unsharing a namespace never perturbs quota grouping.
 - **op 3 = ns_getpid** — the caller's namespace-**local** pid: its real tid in the
   global namespace, or its rank (by tid) among same-namespace tasks otherwise, so
   the first member of a fresh namespace is **pid 1**.
+- **op 4 = sethostname(`a2`=ptr, `a3`=len)** — set the caller's **UTS-namespace**
+  hostname (the global hostname when in ns 0). v1 stores 8 bytes.
+- **op 5 = gethostname** — the caller's namespace hostname (8 bytes,
+  little-endian). A fresh namespace inherits the global `"rugo"` until it sets its
+  own, so the hostname view is namespace-scoped (a UTS namespace).
 
 ## Acceptance
 
@@ -40,6 +45,11 @@ exactly **1** (only itself is in the fresh namespace); and reads `ns_getpid` and
 gets **1** (its namespace-local "init" pid, distinct from its global tid). Prints
 `NS: pid-namespace isolated ok` — the process-view isolation + namespace-local pid
 that define a PID namespace, proven without spawn/clone choreography.
+
+It then proves the **UTS namespace**: `gethostname` returns the global `"rugo"`
+(a fresh namespace inherits it), `sethostname("ctr")` sets the namespace's own,
+and `gethostname` returns `"ctr"` — the hostname view is namespace-scoped (`NS:
+uts-namespace hostname ok`).
 
 ## v1 boundary / carry-forward
 

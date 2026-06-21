@@ -48,6 +48,34 @@ _start:
     mov  esi, okmsg_len
     xor  eax, eax
     int  0x80
+
+    ; --- UTS namespace: the hostname is namespace-scoped ---
+    mov  edi, 5                 ; gethostname (this namespace, none set yet)
+    mov  eax, 57
+    int  0x80
+    mov  rbx, 0x6F677572        ; "rugo" little-endian (the global default)
+    cmp  rax, rbx
+    jne  .fail                  ; a fresh namespace inherits the global hostname
+
+    mov  edi, 4                 ; sethostname("ctr") for this namespace
+    lea  rsi, [rel hostname]
+    mov  edx, 3
+    mov  eax, 57
+    int  0x80
+    cmp  rax, 0
+    jne  .fail
+
+    mov  edi, 5                 ; gethostname again
+    mov  eax, 57
+    int  0x80
+    mov  rbx, 0x00727463        ; "ctr" little-endian
+    cmp  rax, rbx
+    jne  .fail                  ; the namespace now has its OWN hostname
+
+    lea  rdi, [rel utsmsg]
+    mov  esi, utsmsg_len
+    xor  eax, eax
+    int  0x80
     mov  eax, 2
     int  0x80
 .fail:
@@ -59,7 +87,10 @@ _start:
     int  0x80
 
 section .data
+hostname: db "ctr"
 okmsg:   db "NS: pid-namespace isolated ok", 10
 okmsg_len equ $ - okmsg
+utsmsg:  db "NS: uts-namespace hostname ok", 10
+utsmsg_len equ $ - utsmsg
 failmsg: db "NS: FAIL", 10
 failmsg_len equ $ - failmsg

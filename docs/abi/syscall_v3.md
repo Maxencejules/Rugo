@@ -65,11 +65,12 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   op 9 = wm_compose → composite the whole registry in z-order, op 10 =
   wm_clear(`rsi`=slot) owner-checked; contract in `docs/runtime/graphics_v1.md`,
   `docs/runtime/pty_v1.md`, `docs/runtime/audio_v1.md`, `docs/runtime/compositor_v1.md`);
-  `57` = `sys_nsctl` (PID namespaces; op 1 = unshare_pid → move the caller into a
-  fresh PID namespace, returns the ns id; op 2 = ns_task_count → live tasks visible
-  in the caller's namespace; op 3 = ns_getpid → namespace-local pid (1 = the
-  namespace's init). Additive, sets only the per-task `pid_ns` tag; contract in
-  `docs/runtime/pidns_v1.md`);
+  `57` = `sys_nsctl` (PID + UTS namespaces; op 1 = unshare_pid → move the caller
+  into a fresh PID namespace, returns the ns id; op 2 = ns_task_count → live tasks
+  visible in the caller's namespace; op 3 = ns_getpid → namespace-local pid (1 =
+  the namespace's init); op 4 = sethostname(`rsi`=ptr, `rdx`=len); op 5 =
+  gethostname → the namespace hostname (8 bytes LE). Additive, sets only the
+  per-task `pid_ns` tag + the hostname store; contract in `docs/runtime/pidns_v1.md`);
   `58` = `sys_power` (op 0 = shutdown via ACPI S5 / debug-exit, op 1 =
   reboot via 8042; uid 0 only; contract in `docs/runtime/power_v1.md`);
   `60` = `sys_dlctl` (dynamic loading; op 1 = dlopen(`rsi`=name) → module base VA

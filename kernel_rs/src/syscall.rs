@@ -290,7 +290,7 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             57 => {
-                *frame.add(14) = sys_nsctl(arg1);
+                *frame.add(14) = sys_nsctl(arg1, arg2, arg3);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             58 => {
