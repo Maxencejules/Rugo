@@ -280,7 +280,8 @@ Current: `lib.rs` ~13.6k lines / 249 fns holding syscalls + ELF loader + linker 
 GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
 (confirmed), none denied. The unwrap concern is withdrawn (see #8).
 
-- **[DONE] Two clean module extractions — `cred.rs` and `epoll.rs`.**
+- **[DONE] Seven clean module extractions — `cred`, `epoll`, `rng`, `audit`,
+  `dmesg`, `gpt`, `fat16`.**
   - `cred.rs` (now 189 lines): the password table + iterated salted KDF + lockout
     + `/shadow` store + `login_verify`, depending only on `crate::sha256` +
     `crate::vfs`; the login dispatch calls `crate::cred::login_verify`.
@@ -308,13 +309,28 @@ GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
     internal state must live *in* that module.)
   - All four are `go_test`-gated, so the blast radius is the go lane (verifiable
     without the full 50-lane gate). These are the clean **template** for the rest.
+  - `fat16.rs` (346 lines): the FAT16 on-disk parser — `fat16_read_named`,
+    `fat16_read_chain`, `fat16_write_named`, `fat16_list` — moved verbatim,
+    depending on `crate::{block_io_dispatch, storage, BLK_DATA_PAGE, serial_write*}`
+    via descendant access. The `/mnt` `FAT_FILE` cache and fd integration stay in
+    lib.rs and call through `crate::fat16::` (7 call sites rewritten). This is the
+    single largest #9 bulk item the earlier passes had flagged as deferred — it
+    proved a *clean* extraction after GPT left the four functions contiguous and
+    inter-call-free. Verified: FAT16 read/chain/write + partitions + login/epoll
+    sanity all green.
+  - **Key technique: no `pub(crate)` widening needed** — child modules can read
+    *private* crate-root items (the descendant-access privacy rule), so the
+    entropy/tid/serial helpers stay private in lib.rs and are consumed via
+    `crate::` paths. (One caveat learned: the rule is one-directional — a parent
+    can't read a child module's privates, so a self-test that touches a module's
+    internal state must live *in* that module.)
   - Net effect: despite adding TWO whole features this session (epoll + /shadow),
-    `lib.rs` is **net-REDUCED 362 lines** — 13,517 (start) → 13,155 — with 705
-    lines now in **six** focused modules. The direction is decisively
-    decompose-not-grow. The remaining monolith bulk (the FAT16 *parser* + its
-    fd-integrated cache, the fd/pipe layer, the ELF/PIE loader) is larger,
-    interconnected, and spread across the file (many call sites), so it needs the
-    full-gate subsystem extraction.
+    `lib.rs` is **net-REDUCED 695 lines** — 13,517 (start) → 12,822 — with ~1,050
+    lines now in **seven** focused modules. The direction is decisively
+    decompose-not-grow. The remaining monolith bulk (the fd-integrated `/mnt`
+    cache, the fd/pipe layer, the ELF/PIE loader) is larger, interconnected, and
+    spread across the file (many call sites), so it needs the full-gate subsystem
+    extraction.
 
 Remaining (the bulk, MILESTONE):
 - Extract the remaining self-contained subsystems the same way — GPT/FAT16
