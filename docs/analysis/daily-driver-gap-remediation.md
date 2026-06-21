@@ -393,6 +393,19 @@ but writes a fill pattern (not the real kernel/fs), installs no bootloader, and
 restores the boot disk so nothing boots standalone. `build_installer_v2.py` and
 the graphical smoke tool are report generators. Self-hosting is absent.
 
+**[DONE — kernel-bytes-at-runtime prerequisite] Installer writes real kernel
+bytes.** The blocker (the kernel can't read its own image at runtime) is solved
+with a **Limine kernel-file request** (`LIMINE_KERNEL_FILE_REQUEST`): its response
+gives the in-memory address + size of the kernel's OWN loaded ELF.
+`install_self_image_and_verify` reads it, confirms the `\x7FELF` magic, writes an
+8 KiB chunk of the real image to the target (while bound), and reads it back to
+confirm the magic round-tripped. So the installer now writes a valid bootable MBR
++ partition + payload **and** real kernel bytes it accessed at runtime
+(`INSTALL: self-image elf size=0x<n> written+verified ok`, `test_installer_v1.py`).
+Remaining for self-host: write the FULL kernel + fs image (vs an 8 KiB proof
+chunk), install the Limine bootloader stages to the target, and add a standalone
+(non-restoring) boot gate — the prerequisite below is now in place.
+
 Remediation (ordered):
 1. Installer writes the **real** kernel ELF + SimpleFS image to the target disk.
 2. Install the Limine bootloader stages to the target so it boots unaided.
