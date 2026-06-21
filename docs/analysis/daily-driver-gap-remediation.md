@@ -295,6 +295,11 @@ GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
   - `audit.rs` (98 lines): the security audit ring + `audit_event` + `audit_read`
     + checkpoint self-test, depending only on `crate::R4_CURRENT`,
     `crate::memory::copyout_user`, and `crate::{slice_contains,serial_write}`.
+  - `dmesg.rs` (47 lines): the kernel-log ring (`klog_append`/`klog_read`) that
+    `serial_write` mirrors into; depends only on `crate::memory::copyout_user`.
+  - `gpt.rs` (136 lines): GPT partition-table parse + IEEE CRC-32 + CRC self-test,
+    depending on `crate::storage`, `crate::block_io_dispatch`, `crate::BLK_DATA_PAGE`
+    (incl. its tuple field, via descendant access), and `crate::serial_write*`.
   - **Key technique: no `pub(crate)` widening needed** — child modules can read
     *private* crate-root items (the descendant-access privacy rule), so the
     entropy/tid/serial helpers stay private in lib.rs and are consumed via
@@ -304,11 +309,12 @@ GPT/FAT16 + serial despite 22 sibling modules. Build emits **91 warnings**
   - All four are `go_test`-gated, so the blast radius is the go lane (verifiable
     without the full 50-lane gate). These are the clean **template** for the rest.
   - Net effect: despite adding TWO whole features this session (epoll + /shadow),
-    `lib.rs` is **net-REDUCED 195 lines** — 13,517 (start) → 13,322 — with 522
-    lines now in four focused modules. The direction is decisively
-    decompose-not-grow. The remaining monolith bulk (fd/pipe layer, ELF/PIE loader,
-    GPT/FAT16) is larger and interconnected (used by many syscalls), so it needs
-    the full-gate subsystem extraction.
+    `lib.rs` is **net-REDUCED 362 lines** — 13,517 (start) → 13,155 — with 705
+    lines now in **six** focused modules. The direction is decisively
+    decompose-not-grow. The remaining monolith bulk (the FAT16 *parser* + its
+    fd-integrated cache, the fd/pipe layer, the ELF/PIE loader) is larger,
+    interconnected, and spread across the file (many call sites), so it needs the
+    full-gate subsystem extraction.
 
 Remaining (the bulk, MILESTONE):
 - Extract the remaining self-contained subsystems the same way — GPT/FAT16
