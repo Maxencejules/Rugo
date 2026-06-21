@@ -771,7 +771,11 @@ cfg_m3! {
                     };
                 let node = match tmpfs_open(rel, create) {
                     Some(n) => n,
-                    None => return 0xFFFF_FFFF_FFFF_FFFF,
+                    None => {
+                        // Missing /tmp file (no create) or the tmpfs table is full.
+                        r4_set_errno(if create { RUGO_EINVAL } else { RUGO_ENOENT });
+                        return 0xFFFF_FFFF_FFFF_FFFF;
+                    }
                 };
                 let max = m10_rights_for_kind(M8FdKind::TmpFile);
                 let effective = requested | M10_RIGHT_POLL;
@@ -1011,6 +1015,8 @@ cfg_m3! {
                 return fd;
             }
         }
+        // No path matcher claimed this name -> no such file/directory.
+        r4_set_errno(RUGO_ENOENT);
         0xFFFF_FFFF_FFFF_FFFF
     }
 
@@ -1718,12 +1724,17 @@ cfg_m3! {
 
     unsafe fn sys_close_v1(fd: u64) -> u64 {
         let idx = fd as usize;
-        if idx >= M8_FD_MAX { return 0xFFFF_FFFF_FFFF_FFFF; }
+        if idx >= M8_FD_MAX {
+            r4_set_errno(RUGO_EBADF); // out-of-range fd (Part V.11, distinct errno)
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
         if idx < 3 {
             // Keep stdio descriptors stable for compatibility-profile startup.
+            r4_set_errno(RUGO_EBADF);
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         if M8_FD_TABLE[idx].kind == M8FdKind::Free {
+            r4_set_errno(RUGO_EBADF); // not an open descriptor
             return 0xFFFF_FFFF_FFFF_FFFF;
         }
         #[cfg(feature = "go_test")]
