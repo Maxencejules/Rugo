@@ -25,6 +25,19 @@ _start:
     int  0x80
     cmp  rax, -1
     jne  .fail
+    ; the credential store /data/shadow (root-owned, owner-only, provisioned at
+    ; boot) must NOT be readable by this unprivileged (uid 100) app.
+    lea  rdi, [rel shadowpath]
+    xor  esi, esi
+    xor  edx, edx
+    mov  eax, 18            ; sys_open(path, O_RDONLY, 0)
+    int  0x80
+    cmp  rax, -1
+    jne  .fail             ; uid-100 read of the shadow store must be denied
+    lea  rdi, [rel shadowmsg]
+    mov  esi, shadowmsg_len
+    xor  eax, eax
+    int  0x80
     ; uid unchanged after a failed login
     mov  edi, 3
     mov  eax, 51
@@ -45,6 +58,19 @@ _start:
     int  0x80
     test rax, rax
     jnz  .fail
+    ; root CAN read the shadow store -> it exists (proves it is a real file,
+    ; not merely absent in the denial above), then close it.
+    lea  rdi, [rel shadowpath]
+    xor  esi, esi
+    xor  edx, edx
+    mov  eax, 18
+    int  0x80
+    cmp  rax, -1
+    je   .fail             ; root must be able to open the credential store
+    mov  r13, rax
+    mov  rdi, r13
+    mov  eax, 21           ; sys_close
+    int  0x80
     lea  rdi, [rel okmsg]
     mov  esi, okmsg_len
     xor  eax, eax
@@ -90,6 +116,9 @@ badpw:  db "wrong", 0                   ; NUL-terminated wrong password
 goodpw: db "toor", 0                    ; NUL-terminated correct root password
 okmsg:   db "LOGINPROBE: ok", 10
 okmsg_len equ $ - okmsg
+shadowpath: db "/data/shadow", 0
+shadowmsg:  db "LOGINPROBE: shadow protected ok", 10
+shadowmsg_len equ $ - shadowmsg
 lockmsg: db "LOGINPROBE: lockout ok", 10
 lockmsg_len equ $ - lockmsg
 failmsg: db "LOGINPROBE: FAIL", 10

@@ -13483,6 +13483,10 @@ pub extern "C" fn kmain() -> ! {
         // window page tables dl_load_elf's vm_map_current needs are now present), in
         // the free DLOPEN window; cleans up after itself so the Go image is untouched.
         dlclose_selftest();
+        // Provision the on-disk credential store (/data/shadow, root-owned and
+        // owner-only) from the compiled seed, in this known-good VFS context.
+        // login_verify reads it as the runtime source of truth (gap #8).
+        crate::cred::cred_store_provision();
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         // The boot task and its service threads run on the shared table;

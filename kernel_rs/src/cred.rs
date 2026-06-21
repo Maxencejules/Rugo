@@ -89,23 +89,96 @@ static mut LOGIN_FAILS: [u8; 2] = [0, 0];
 /// Consecutive failures that lock an account, throttling online brute force.
 const LOGIN_LOCKOUT: u8 = 3;
 
-/// Verify a username/password against `PASSWD`; returns the account uid on a
-/// match. The matched account's salt and iteration count derive
-/// `PBKDF2-HMAC-SHA256(pw, salt, PBKDF2_ITERS)`, which is compared to the stored
-/// key, so the cleartext is never held in the table, the hash is
-/// account-specific, and each guess costs the full iterated KDF. After
+/// On-disk credential store: a root-owned, owner-only `/data/shadow` file — the
+/// `/etc/shadow` analogue in the writable VFS tree (rooted at `/data`). Each
+/// record is `name[8] | salt[16] | pw_hash[32] | uid[1]`. NOTE: the kernel-side
+/// `vfs_*` API takes paths with the `/data` mount prefix already stripped (see
+/// `vfs::resolve`), so the internal path is `/shadow`; userspace reaches the
+/// same file as `/data/shadow` (sys_open strips the prefix).
+const SHADOW_PATH: &[u8] = b"/shadow";
+const REC_LEN: usize = 57;
+/// VFS mode bits (vfs.rs): owner read + owner write, NO other access — so an
+/// unprivileged process cannot read the credential store.
+const SHADOW_MODE: u8 = 0b0011;
+
+/// Serialize the compiled seed records to the on-disk record format.
+fn shadow_seed_bytes() -> [u8; REC_LEN * 2] {
+    let mut buf = [0u8; REC_LEN * 2];
+    let mut i = 0usize;
+    while i < PASSWD.len() {
+        let off = i * REC_LEN;
+        buf[off..off + 8].copy_from_slice(&PASSWD[i].name);
+        buf[off + 8..off + 24].copy_from_slice(&PASSWD[i].salt);
+        buf[off + 24..off + 56].copy_from_slice(&PASSWD[i].pw_hash);
+        buf[off + 56] = PASSWD[i].uid;
+        i += 1;
+    }
+    buf
+}
+
+/// Provision `/data/shadow` from the compiled seed as a root-owned, owner-only
+/// credential store. MUST be called once at boot from a known-good VFS context
+/// (e.g. alongside `dlclose_selftest`, NOT lazily from the login syscall path —
+/// VFS create/write is unreliable from there). Idempotent: if the file already
+/// exists (carried over on a persistent disk, possibly admin-modified) it is
+/// left untouched, so the file — not the compiled seed — is the source of truth.
+pub(crate) unsafe fn cred_store_provision() {
+    if !crate::vfs::vfs_ready() {
+        return;
+    }
+    if crate::vfs::vfs_lookup(SHADOW_PATH).is_some() {
+        return;
+    }
+    let idx = match crate::vfs::vfs_open(SHADOW_PATH, true) {
+        Some(i) => i,
+        None => return,
+    };
+    let seed = shadow_seed_bytes();
+    crate::vfs::vfs_write(idx, 0, &seed);
+    crate::vfs::set_node_owner(idx, 0);
+    crate::vfs::set_node_mode(idx, SHADOW_MODE);
+}
+
+/// Verify a username/password against the credential store; returns the account
+/// uid on a match. Credentials are read from `/data/shadow` (the runtime source
+/// of truth, provisioned at boot), falling back to the compiled seed only if the
+/// store is unreadable. The matched record's salt derives
+/// `PBKDF2-HMAC-SHA256(pw, salt, PBKDF2_ITERS)`, compared to the stored key, so
+/// the cleartext is never held and each guess costs the full iterated KDF. After
 /// `LOGIN_LOCKOUT` consecutive failures the account is locked and even the
 /// correct password is refused (a successful login resets the counter).
 pub(crate) unsafe fn login_verify(name: &[u8; 8], pw: &[u8]) -> Option<u8> {
+    let mut store = [0u8; REC_LEN * 2];
+    let read = match crate::vfs::vfs_lookup(SHADOW_PATH) {
+        Some(idx) => crate::vfs::vfs_read(idx, 0, &mut store),
+        None => 0,
+    };
+    let from_file = read == REC_LEN * PASSWD.len();
     let mut i = 0usize;
     while i < PASSWD.len() {
-        if PASSWD[i].name == *name {
+        let mut rec_name = [0u8; 8];
+        let mut rec_salt = [0u8; 16];
+        let mut rec_hash = [0u8; 32];
+        let rec_uid;
+        if from_file {
+            let off = i * REC_LEN;
+            rec_name.copy_from_slice(&store[off..off + 8]);
+            rec_salt.copy_from_slice(&store[off + 8..off + 24]);
+            rec_hash.copy_from_slice(&store[off + 24..off + 56]);
+            rec_uid = store[off + 56];
+        } else {
+            rec_name = PASSWD[i].name;
+            rec_salt = PASSWD[i].salt;
+            rec_hash = PASSWD[i].pw_hash;
+            rec_uid = PASSWD[i].uid;
+        }
+        if rec_name == *name {
             if LOGIN_FAILS[i] >= LOGIN_LOCKOUT {
                 return None; // locked: refuse regardless of the password
             }
-            if PASSWD[i].pw_hash == pbkdf2_sha256_dk32(pw, &PASSWD[i].salt) {
+            if rec_hash == pbkdf2_sha256_dk32(pw, &rec_salt) {
                 LOGIN_FAILS[i] = 0;
-                return Some(PASSWD[i].uid);
+                return Some(rec_uid);
             }
             LOGIN_FAILS[i] += 1;
             return None;
