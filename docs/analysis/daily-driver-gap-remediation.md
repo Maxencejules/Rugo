@@ -91,6 +91,23 @@ Remediation (slices, each its own `test-*-v1` boot gate):
 Risk: high — concurrency bugs are non-deterministic and the `-smp1` lanes can't
 reproduce them. Each slice must land behind a multi-core boot gate.
 
+**Investigated this pass (2026-06-21) — why this is the capstone, not a slice.**
+The live-scheduler *mechanism* fully works: `smp_live_sched_selftest`
+([smp.rs:2199](../../kernel_rs/src/smp.rs#L2199)) creates real per-address-space
+tasks, marks them `ap_eligible`, flips `SMP_LIVE_MODE=1`, and APs autonomously
+pull + run them under `R4_RQ_LOCK` ([smp.rs:2105](../../kernel_rs/src/smp.rs#L2105)).
+BUT those tasks run a tiny code blob and retire via a **dedicated `int 0x81` path**
+(`ap_user_trap`/`ap_user_done`). A real `sys_spawn` app does general `int 0x80`
+syscalls and exits via `r4_exit_and_switch` — and **AP-side task exit / blocking /
+rescheduling is the unimplemented part**. `ap_resume_r4_task` sets the AP's
+per-CPU current (`gs:[16]`) so an app's syscalls would dispatch via
+`r4_current_smp()`, but returning the AP to its park loop on the app's exit/block
+is not handled. So the first *real* slice is: implement AP-side exit/block/resched
+(generalize `ap_user_done` to the real scheduler), then mark spawned external apps
+`ap_eligible` with `SMP_LIVE_MODE` on. `test-smp-v1` today exercises the `int 0x81`
+selftest path, **not** a real app's path, so a new spawn-an-app-on-an-AP gate is
+also required. This is genuine capstone work, not a flag flip.
+
 ---
 
 ## 2. POSIX/runtime surface  [epoll DONE; rest MILESTONE]
