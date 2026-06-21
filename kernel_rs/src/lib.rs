@@ -5576,6 +5576,13 @@ cfg_r4! {
         // The child inherits caps/uid/limits from the parent (r4_init_task)
         // and resumes at the exact same point in its own CoW copy.
         r4_init_task(child, *frame.add(17), *frame.add(20), parent);
+        // Inherit the parent's program break: address_space_fork cloned the
+        // grown heap pages, so the child's brk boundary must match (r4_init_task
+        // reset it to 0). Without this, the child's first brk() resets to
+        // VM_BRK_BASE -- brk(0) would report the base instead of the inherited
+        // break, and a later grow/shrink would run against the wrong boundary
+        // over an already-mapped heap.
+        R4_TASKS[child].heap_brk = R4_TASKS[parent].heap_brk;
         for i in 0..22 {
             R4_TASKS[child].saved_frame[i] = *frame.add(i);
         }

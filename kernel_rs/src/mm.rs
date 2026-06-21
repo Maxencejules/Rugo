@@ -982,8 +982,10 @@ pub unsafe fn vm_unmap_current(va: u64) -> bool {
 }
 
 /// Change the protection of one mapped user page at `va` in the current
-/// address space (prot 1=R, 2=W, 4=X), preserving its frame. Clears any
-/// CoW mark. Returns true if the page was present.
+/// address space (prot 1=R, 2=W, 4=X). Preserves the frame, EXCEPT when write
+/// is granted to a still-shared (forked) frame: then the share is broken with a
+/// private copy first, so mprotect can never alias a sibling's frame. Returns
+/// true if the page was present.
 pub unsafe fn vm_protect_current(va: u64, prot: u64) -> bool {
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
@@ -1008,14 +1010,40 @@ pub unsafe fn vm_protect_current(va: u64, prot: u64) -> bool {
     if pte & 1 == 0 {
         return false;
     }
+    let want_write = prot & 2 != 0;
+    // If we are about to grant WRITE to a page whose frame is still SHARED with a
+    // forked sibling (CoW refcount > 0 -- whether this PTE carries PTE_COW or is a
+    // genuinely read-only shared mapping), break the share FIRST. Otherwise
+    // mprotect(PROT_WRITE) would hand out direct write access to a frame another
+    // address space still maps, silently bypassing the CoW fault path (cow_break)
+    // and destroying fork isolation. Take a private copy and drop our reference to
+    // the shared frame (mirrors cow_break's shared-owner path).
+    let frame_old = pte & PHYS_MASK;
+    let idx = (frame_old / FRAME_SIZE) as usize;
+    let frame = if want_write && idx < MAX_FRAMES && COW_REFCOUNT[idx] > 0 {
+        let fresh = match alloc_frame() {
+            Some(f) => f,
+            None => return false,
+        };
+        core::ptr::copy_nonoverlapping(
+            phys_to_virt(frame_old) as *const u8,
+            phys_to_virt(fresh) as *mut u8,
+            FRAME_SIZE as usize,
+        );
+        COW_REFCOUNT[idx] -= 1;
+        DEMAND_MAPPED += 1;
+        fresh
+    } else {
+        frame_old
+    };
     let mut flags = PTE_P_U;
-    if prot & 2 != 0 {
+    if want_write {
         flags |= PTE_W;
     }
     if prot & 4 == 0 {
         flags |= PTE_NX;
     }
-    *pt.add(pt_idx) = (pte & PHYS_MASK) | flags;
+    *pt.add(pt_idx) = frame | flags;
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack));
     true
 }
