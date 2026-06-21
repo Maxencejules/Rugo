@@ -89,6 +89,11 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   causes instead of collapsing every failure to EIO. Additive, read-only, per-task;
   it never changes another syscall's return convention. Contract in
   `docs/runtime/libc_v1.md`.
+  `63` = `sys_sigverify` (public-key package signing; op 1 = verify the embedded
+  Lamport reference signature → 1, op 2 = tampered message → 0, op 3 = tampered
+  signature → 0). The kernel embeds only the PUBLIC key + a signature, so it can
+  verify but never forge — unlike the old symmetric HMAC scheme. Contract in
+  `docs/runtime/pqsig_v1.md`.
 
 Spawned tasks get a copy-on-write-isolated private address space, a random
 page-aligned stack offset (stack ASLR, drawn from `sys_getrandom`'s pool),

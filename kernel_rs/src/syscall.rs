@@ -301,6 +301,10 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                 *frame.add(14) = sys_errno();
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            63 => {
+                *frame.add(14) = crate::pqsig::sys_sigverify(arg1);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             61 => {
                 *frame.add(14) = sys_sysinfo(arg1, arg2, arg3);
             }

@@ -65,6 +65,8 @@ mod gpt;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 mod fat16;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod pqsig;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod mount;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tty;
@@ -12860,6 +12862,10 @@ pub extern "C" fn kmain() -> ! {
         // owner-only) from the compiled seed, in this known-good VFS context.
         // login_verify reads it as the runtime source of truth (gap #8).
         crate::cred::cred_store_provision();
+        // full-os Part IV.10: public-key (Lamport) signature verify -- the genuine
+        // embedded signature passes; a message tamper and a signature tamper are
+        // both rejected (the kernel holds only the public key, so it cannot forge).
+        crate::pqsig::sigverify_selftest();
         R4_NUM_TASKS = 1;
         r4_init_task(0, USER_CODE_VA, USER_STACK_TOP, 0);
         // The boot task and its service threads run on the shared table;
