@@ -4445,7 +4445,15 @@ cfg_r4! {
     }
 
     unsafe fn r4_exit_and_switch(frame: *mut u64, exit_status: u64) {
-        let cur = R4_CURRENT;
+        // Per-CPU current (full-os Part I.3, live SMP scheduler): on an application
+        // processor the exiting task is THIS CPU's current (gs:[16]), not the BSP's
+        // R4_CURRENT. `on_ap` is false on the BSP and in non-SMP lanes, so the
+        // BSP/legacy path below is byte-for-byte unchanged.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        let on_ap = !crate::smp::is_bsp();
+        #[cfg(not(all(feature = "go_test", not(feature = "compat_real_test"))))]
+        let on_ap = false;
+        let cur = if on_ap { r4_current_smp() } else { R4_CURRENT };
         let parent = R4_TASKS[cur].parent_tid;
         r4_cleanup_task_resources(cur);
         #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
@@ -4477,8 +4485,13 @@ cfg_r4! {
                     t += 1;
                 }
                 if !shared {
-                    core::arch::asm!("mov cr3, {}", in(reg) SHARED_PML4_PHYS,
-                                     options(nostack));
+                    // Step CR3 onto a kernel table BEFORE freeing the one we stand
+                    // on. The BSP uses SHARED_PML4_PHYS; an AP must use its OWN saved
+                    // kernel CR3, where its per-CPU kernel stack is mapped (the
+                    // shared table does not necessarily map it -- the cause of the
+                    // earlier AP-exit fault). (full-os Part I.3.)
+                    let kcr3 = if on_ap { crate::smp::ap_saved_cr3() } else { SHARED_PML4_PHYS };
+                    core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack));
                     mm::address_space_release(cur_pml4);
                     R4_TASKS[cur].pml4_phys = SHARED_PML4_PHYS;
                     // Reclaim our own already-exited clone threads that shared
@@ -4516,6 +4529,14 @@ cfg_r4! {
             && r4_wait_matches(R4_TASKS[parent].wait_target, cur)
         {
             r4_wake_waiter(parent, cur);
+        }
+        // AP-side exit (full-os Part I.3): the task ran on an application processor
+        // and has now been retired + its address space released above. Return THIS
+        // CPU to its pull-loop (claim the next ready task) instead of the BSP
+        // reschedule, which uses R4_CURRENT / r4_find_ready. Never returns.
+        #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+        if on_ap {
+            crate::smp::ap_exit_park();
         }
         match r4_find_ready(R4_CURRENT) {
             Some(tid) => { r4_switch_to(frame, tid); }
