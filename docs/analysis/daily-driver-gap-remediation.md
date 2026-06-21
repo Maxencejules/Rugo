@@ -269,6 +269,24 @@ Real remediation: a persistent window-server task that owns surfaces + an event
 loop pumping the real input ring, with one userspace client drawing through the
 compose syscall. That is the first genuinely "standing" slice.
 
+**[DONE — first standing slice] Persistent owner-stamped surface registry.** The
+compositor was a one-shot z-order of a client's *throwaway* per-call list (op 4) —
+no persistence, no ownership, no lifecycle. Added a persistent registry
+(`WM_SURFACES`, 8 slots) on `sys_ioctl`: **op 8 `wm_register`** (stamps the
+caller's tid, persists across calls, no cross-client hijack), **op 9 `wm_compose`**
+(z-orders the *whole* registry — every live client's window), **op 10 `wm_clear`**
+(owner-checked). `wm_release_owner` runs from `r4_exit_and_switch`, so a dead
+client's windows disappear — the server-owned per-client lifecycle. Now driven by
+**real userspace callers** (closing the "zero userspace callers" gap): `wmprobe`
+registers two windows, composes (=2), clears one, composes (=1), exits leaving one;
+a *different* client `wmcheck` composes and sees **0** — the kernel exit-cleaned
+the dead owner's window (`test_winsrv_v1.py`). This is the registry + lifecycle a
+window server is built on. Still carry-forward: a **resident user-space compositor
+process** driving the compose loop (vs clients triggering it), **two concurrently-
+live clients** on screen (proven here across two *sequential* clients), shared-
+memory pixel surfaces, and input routing to the focused window. The fabricated
+`DESK*` transcript-grep DECISION is unchanged (separate doc-honesty debt).
+
 ---
 
 ## 7. Installer / self-hosting  [MILESTONE]
