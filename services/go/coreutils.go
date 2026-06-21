@@ -110,8 +110,13 @@ func splitFirstWord(s string) (string, string) {
 }
 
 // runPipeline executes `left | right`: left's output feeds right's stdin
-// through a kernel pipe. Sequential in v1 - left runs to completion
-// first, bounded by the pipe's 512-byte ring.
+// through a kernel pipe. Both stages run CONCURRENTLY - left streams into
+// the pipe while right drains it in parallel, each in its own address
+// space (the same co-residency asConc proves). Because the reader keeps
+// the ring drained, left's total output is no longer bounded by the
+// pipe's 512-byte ring; only the in-flight backlog is. Each pipe end's
+// ownership moves to its child on spawn, so a child's exit releases it
+// and propagates EOF to the reader.
 func runPipeline(left string, right string) bool {
 	leftName, leftArgs := splitFirstWord(left)
 	rightName, rightArgs := splitFirstWord(right)
@@ -130,11 +135,18 @@ func runPipeline(left string, right string) bool {
 	rfd := pair >> 8
 	wfd := pair & 0xFF
 
-	if !spawnRunIO(leftApp, leftArgs, noFd, wfd) {
-		sysClose(rfd)
+	// Spawn both WITHOUT waiting (spawnIO, not the blocking spawnRunIO):
+	// left first so its EXEC marker orders before right's, then reap both.
+	tidLeft := spawnIO(leftApp, leftArgs, noFd, wfd)
+	tidRight := spawnIO(rightApp, rightArgs, rfd, noFd)
+	if tidLeft == sysErr || tidRight == sysErr {
+		log(msgShellRunErr)
 		return false
 	}
-	if !spawnRunIO(rightApp, rightArgs, rfd, noFd) {
+	okLeft := sysWait(tidLeft, nil, 0) != sysErr
+	okRight := sysWait(tidRight, nil, 0) != sysErr
+	if !okLeft || !okRight {
+		log(msgShellRunErr)
 		return false
 	}
 	log(msgShellPipeOK)

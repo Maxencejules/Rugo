@@ -51,6 +51,8 @@ pub(crate) mod dma;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod sha256;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod cred;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod mount;
 #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
 pub(crate) mod tty;
@@ -2427,6 +2429,175 @@ cfg_m3! {
             }
         }
         ready
+    }
+
+    // ---- sys_epoll (ABI v3.x id 55): a level-triggered readiness set over the
+    // existing fd/pipe tables - "stateful poll". Register a set of fds once,
+    // then wait repeatedly. op 1 = create (returns an epoll instance id), op 2 =
+    // ctl_add(ep, fd, events), op 3 = wait(ep, out_ptr, max) writing ready
+    // {fd:i32, revents:u16, pad:u16} 8-byte records and returning the count,
+    // op 4 = close(ep). EPOLLIN/EPOLLOUT use the same 0x1/0x4 bits as poll. ----
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EPOLL_MAX: usize = 4;
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    const EPOLL_REG_MAX: usize = 16;
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    #[derive(Clone, Copy)]
+    struct EpollReg {
+        fd: i32,
+        events: u16,
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    struct EpollInst {
+        active: bool,
+        n: usize,
+        regs: [EpollReg; EPOLL_REG_MAX],
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    static mut EPOLLS: [EpollInst; EPOLL_MAX] = [
+        EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+        EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+        EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+        EpollInst { active: false, n: 0, regs: [EpollReg { fd: 0, events: 0 }; EPOLL_REG_MAX] },
+    ];
+
+    /// Level-triggered readiness for one fd (the subset of sys_poll_v1's rules an
+    /// event loop needs: pipes, vfs files/dirs, console). EPOLLIN = 0x1,
+    /// EPOLLOUT = 0x4. Honors the fd's POLL/READ/WRITE rights like poll does.
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn epoll_fd_ready(fd: i32, events: u16) -> u16 {
+        if fd < 0 {
+            return 0;
+        }
+        let idx = fd as usize;
+        if idx >= M8_FD_MAX {
+            return 0;
+        }
+        let rights = M8_FD_TABLE[idx].rights;
+        if rights & M10_RIGHT_POLL == 0 {
+            return 0;
+        }
+        let mut r: u16 = 0;
+        match M8_FD_TABLE[idx].kind {
+            M8FdKind::PipeR => {
+                let p = M8_FD_PIPE[idx] as usize;
+                if events & 0x1 != 0
+                    && rights & M10_RIGHT_READ != 0
+                    && p < PIPE_MAX
+                    && (PIPES[p].len > 0 || PIPES[p].writers == 0)
+                {
+                    r |= 0x1;
+                }
+            }
+            M8FdKind::PipeW => {
+                let p = M8_FD_PIPE[idx] as usize;
+                if events & 0x4 != 0
+                    && rights & M10_RIGHT_WRITE != 0
+                    && p < PIPE_MAX
+                    && PIPES[p].len < PIPE_CAP
+                {
+                    r |= 0x4;
+                }
+            }
+            M8FdKind::VfsFile | M8FdKind::VfsDir => {
+                if events & 0x1 != 0 && rights & M10_RIGHT_READ != 0 {
+                    r |= 0x1;
+                }
+                if events & 0x4 != 0 && rights & M10_RIGHT_WRITE != 0 {
+                    r |= 0x4;
+                }
+            }
+            M8FdKind::Console => {
+                if events & 0x1 != 0 && rights & M10_RIGHT_READ != 0 && serial_can_read() {
+                    r |= 0x1;
+                }
+                if events & 0x4 != 0 && rights & M10_RIGHT_WRITE != 0 {
+                    r |= 0x4;
+                }
+            }
+            _ => {}
+        }
+        r
+    }
+
+    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+    unsafe fn sys_epoll(op: u64, a2: u64, a3: u64, a4: u64) -> u64 {
+        const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        match op {
+            1 => {
+                // create: claim a free instance
+                let mut e = 0usize;
+                while e < EPOLL_MAX {
+                    if !EPOLLS[e].active {
+                        EPOLLS[e].active = true;
+                        EPOLLS[e].n = 0;
+                        return e as u64;
+                    }
+                    e += 1;
+                }
+                ERR
+            }
+            2 => {
+                // ctl_add(ep, fd, events)
+                let ep = a2 as usize;
+                if ep >= EPOLL_MAX || !EPOLLS[ep].active || EPOLLS[ep].n >= EPOLL_REG_MAX {
+                    return ERR;
+                }
+                let n = EPOLLS[ep].n;
+                EPOLLS[ep].regs[n] = EpollReg { fd: a3 as i32, events: a4 as u16 };
+                EPOLLS[ep].n += 1;
+                0
+            }
+            3 => {
+                // wait(ep, out_ptr, max) -> ready count; writes 8-byte {fd,revents,pad}
+                let ep = a2 as usize;
+                let out_ptr = a3;
+                let max = a4 as usize;
+                if ep >= EPOLL_MAX || !EPOLLS[ep].active || max == 0 {
+                    return ERR;
+                }
+                let total = match max.checked_mul(8) {
+                    Some(v) => v,
+                    None => return ERR,
+                };
+                if !user_range_ok(out_ptr, total)
+                    || !user_pages_ok(out_ptr, total, USER_PERM_READ | USER_PERM_WRITE)
+                {
+                    return ERR;
+                }
+                let mut count = 0usize;
+                let mut i = 0usize;
+                while i < EPOLLS[ep].n && count < max {
+                    let reg = EPOLLS[ep].regs[i];
+                    let re = epoll_fd_ready(reg.fd, reg.events);
+                    if re != 0 {
+                        let mut rec = [0u8; 8];
+                        rec[0..4].copy_from_slice(&reg.fd.to_le_bytes());
+                        rec[4..6].copy_from_slice(&re.to_le_bytes());
+                        if copyout_user(out_ptr + (count * 8) as u64, &rec, 8).is_err() {
+                            return ERR;
+                        }
+                        count += 1;
+                    }
+                    i += 1;
+                }
+                count as u64
+            }
+            4 => {
+                // close
+                let ep = a2 as usize;
+                if ep < EPOLL_MAX {
+                    EPOLLS[ep].active = false;
+                    EPOLLS[ep].n = 0;
+                }
+                0
+            }
+            _ => ERR,
+        }
     }
 
 }
@@ -5421,7 +5592,7 @@ cfg_r4! {
                 while plen < 16 && pw[plen] != 0 {
                     plen += 1;
                 }
-                match login_verify(&name, &pw[..plen]) {
+                match crate::cred::login_verify(&name, &pw[..plen]) {
                     Some(uid) => {
                         R4_TASKS[r4_current_smp()].uid = uid;
                         audit_event(b"login-ok", 51);
@@ -5437,59 +5608,6 @@ cfg_r4! {
                 *frame.add(14) = ERR;
             }
         }
-    }
-
-    /// One account in the credential database (full-os guide Part IV.10). The
-    /// password is stored as its SHA-256 digest (`sha256.rs`), never the cleartext.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    struct PasswdEntry {
-        name: [u8; 8],
-        uid: u8,
-        pw_hash: [u8; 32],
-    }
-
-    /// The credential database: root (uid 0) and a regular user (uid 100). The
-    /// stored hashes are the SHA-256 digests of the cleartext — `sha256(b"toor")`
-    /// and `sha256(b"pass")` — a real cryptographic password hash (replacing the
-    /// prior djb2 demo). `login_verify` recomputes `sha256(pw)` and compares, so the
-    /// cleartext is never stored. (A per-user salt + iterated KDF, and moving the db
-    /// to a root-owned `/etc/passwd` VFS file, are the next hardening steps.)
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    static PASSWD: [PasswdEntry; 2] = [
-        PasswdEntry {
-            name: *b"root\0\0\0\0",
-            uid: 0,
-            pw_hash: [
-                0xCE, 0x5C, 0xA6, 0x73, 0xD1, 0x3B, 0x36, 0x11, 0x8D, 0x54, 0xA7, 0xCF, 0x13,
-                0xAE, 0xB0, 0xCA, 0x01, 0x23, 0x83, 0xBF, 0x77, 0x1E, 0x71, 0x34, 0x21, 0xB4,
-                0xD1, 0xFD, 0x84, 0x1F, 0x53, 0x9A,
-            ],
-        },
-        PasswdEntry {
-            name: *b"user\0\0\0\0",
-            uid: 100,
-            pw_hash: [
-                0xD7, 0x4F, 0xF0, 0xEE, 0x8D, 0xA3, 0xB9, 0x80, 0x6B, 0x18, 0xC8, 0x77, 0xDB,
-                0xF2, 0x9B, 0xBD, 0xE5, 0x0B, 0x5B, 0xD8, 0xE4, 0xDA, 0xD7, 0xA3, 0xA7, 0x25,
-                0x00, 0x0F, 0xEB, 0x82, 0xE8, 0xF1,
-            ],
-        },
-    ];
-
-    /// Verify a username/password against `PASSWD`; returns the account uid on a
-    /// match. The password is SHA-256 hashed and compared to the stored digest, so
-    /// the cleartext is never held in the table.
-    #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
-    unsafe fn login_verify(name: &[u8; 8], pw: &[u8]) -> Option<u8> {
-        let h = crate::sha256::sha256(pw);
-        let mut i = 0usize;
-        while i < PASSWD.len() {
-            if PASSWD[i].name == *name && PASSWD[i].pw_hash == h {
-                return Some(PASSWD[i].uid);
-            }
-            i += 1;
-        }
-        None
     }
 
     /// sys_futex (ABI v3.2 id 52): op 1 = wait(uaddr, val) — block while the

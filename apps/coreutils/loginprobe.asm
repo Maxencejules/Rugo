@@ -49,6 +49,31 @@ _start:
     mov  esi, okmsg_len
     xor  eax, eax
     int  0x80
+    ; --- lockout proof: LOGIN_LOCKOUT (3) consecutive wrong root logins lock
+    ; the account, after which even the correct password is refused ---
+    mov  r12d, 3
+.lock_bad:
+    mov  edi, 5
+    lea  rsi, [rel uname]
+    lea  rdx, [rel badpw]
+    mov  eax, 51
+    int  0x80
+    cmp  rax, -1
+    jne  .fail              ; each wrong password must be denied
+    dec  r12d
+    jnz  .lock_bad
+    ; account locked now: the CORRECT password is also refused
+    mov  edi, 5
+    lea  rsi, [rel uname]
+    lea  rdx, [rel goodpw]
+    mov  eax, 51
+    int  0x80
+    cmp  rax, -1
+    jne  .fail              ; locked -> correct password still denied
+    lea  rdi, [rel lockmsg]
+    mov  esi, lockmsg_len
+    xor  eax, eax
+    int  0x80
     mov  eax, 2
     int  0x80
 .fail:
@@ -65,5 +90,7 @@ badpw:  db "wrong", 0                   ; NUL-terminated wrong password
 goodpw: db "toor", 0                    ; NUL-terminated correct root password
 okmsg:   db "LOGINPROBE: ok", 10
 okmsg_len equ $ - okmsg
+lockmsg: db "LOGINPROBE: lockout ok", 10
+lockmsg_len equ $ - lockmsg
 failmsg: db "LOGINPROBE: FAIL", 10
 failmsg_len equ $ - failmsg

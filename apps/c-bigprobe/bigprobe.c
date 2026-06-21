@@ -308,6 +308,36 @@ int main(void) {
     }
     printf("BIGC: ok sum=0x%x high=0x%x pages>2\n",
            (unsigned long)sum, (unsigned long)high);
+
+    /* rlibc v2/v3, exercised here on the dedicated disk (kept off the
+     * size-tight shared app region): real free() with block reuse, and a
+     * bidirectional buffered FILE* round-trip. */
+    void *h1 = malloc(48);
+    free(h1);
+    void *h2 = malloc(48);
+    void *h3 = malloc(48);
+    printf("BIGC: heap reuse=%d distinct=%d\n", (long)(h2 == h1),
+           (long)(h3 != h1 && h3 != h2));
+
+    FILE *wf = fopen("/data/bigc.txt", "w");
+    if (wf) {
+        fwrite("rlibc-stdio", 1, 11, wf);
+        fclose(wf);
+        FILE *rf = fopen("/data/bigc.txt", "r");
+        if (rf) {
+            char rb[16];
+            size_t g = fread(rb, 1, sizeof(rb) - 1, rf);
+            rb[g] = 0;
+            int at_eof = feof(rf);
+            fclose(rf);
+            printf("BIGC: stdio rw[%d]=%s eof=%d\n", (long)g, rb, (long)at_eof);
+        } else {
+            puts("BIGC: stdio reopen err");
+        }
+    } else {
+        puts("BIGC: stdio fopen err");
+    }
+
     puts("BIGC: done");
     return 0;
 }

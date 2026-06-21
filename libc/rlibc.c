@@ -87,7 +87,11 @@ void exit(int code) {
         ;
 }
 
-/* ---- heap: bump allocator in the demand-paged exec window ---- */
+/* ---- heap: free-list allocator over a bump region in the demand-paged
+ * exec window. malloc carves 16-byte-aligned blocks behind a size header;
+ * free pushes them onto a LIFO free list so the next fitting malloc reuses
+ * the freed block instead of growing the heap (rlibc v2: a real free(),
+ * replacing the v1 no-op). ---- */
 
 #define HEAP_BASE 0x01600000UL
 #define HEAP_END 0x017F0000UL
@@ -102,13 +106,46 @@ void *sbrk(intptr_t inc) {
     return (void *)old;
 }
 
+/* 16-byte block header (keeps the payload 16-byte aligned); `size` is the
+ * usable payload size. A freed block stores the next free pointer in its
+ * own payload, which is always >= 16 bytes. */
+typedef struct blk_hdr {
+    size_t size;
+    size_t _pad;
+} blk_hdr;
+
+static void *free_head; /* LIFO list of free payload pointers */
+
 void *malloc(size_t n) {
     n = (n + 15) & ~(size_t)15;
-    void *p = sbrk((intptr_t)n);
-    return p == (void *)-1 ? NULL : p;
+    if (n < 16)
+        n = 16; /* the payload must be able to hold the free-list link */
+    /* first-fit reuse from the free list */
+    void **prev = &free_head;
+    void *cur = free_head;
+    while (cur) {
+        blk_hdr *h = (blk_hdr *)((uintptr_t)cur - sizeof(blk_hdr));
+        if (h->size >= n) {
+            *prev = *(void **)cur; /* unlink */
+            return cur;
+        }
+        prev = (void **)cur;
+        cur = *(void **)cur;
+    }
+    /* otherwise bump a fresh header+payload block */
+    void *raw = sbrk((intptr_t)(sizeof(blk_hdr) + n));
+    if (raw == (void *)-1)
+        return NULL;
+    ((blk_hdr *)raw)->size = n;
+    return (void *)((uintptr_t)raw + sizeof(blk_hdr));
 }
 
-void free(void *p) { (void)p; /* bump heap: no-op in v1 */ }
+void free(void *p) {
+    if (!p)
+        return;
+    *(void **)p = free_head; /* push onto the free list */
+    free_head = p;
+}
 
 /* ---- string.h subset ---- */
 
@@ -258,6 +295,127 @@ int puts(const char *s) {
     out_flush(s, strlen(s));
     out_flush("\n", 1);
     return 0;
+}
+
+/* ---- buffered FILE* stdio (rlibc v3): a read buffer over the fd layer, so
+ * C ports get fopen/fgetc/fread/feof/fclose instead of raw open/read. ---- */
+
+struct __FILE {
+    long fd;
+    int used;
+    int eof;
+    int wmode;  /* opened for writing: buf holds pending output, len = count */
+    size_t pos; /* next unread byte in buf (read mode) */
+    size_t len; /* read mode: valid bytes in buf; write mode: buffered count */
+    unsigned char buf[256];
+};
+
+#define FOPEN_MAX 8
+static struct __FILE file_pool[FOPEN_MAX];
+
+FILE *fopen(const char *path, const char *mode) {
+    long flags = O_RDONLY;
+    if (mode && mode[0] == 'w')
+        flags = O_WRONLY | O_CREAT;
+    else if (mode && mode[0] == 'r' && mode[1] == '+')
+        flags = O_RDWR;
+    long fd = open(path, flags, 0);
+    if (fd == RUGO_ERR)
+        return NULL;
+    for (int i = 0; i < FOPEN_MAX; i++) {
+        if (!file_pool[i].used) {
+            FILE *f = &file_pool[i];
+            f->fd = fd;
+            f->used = 1;
+            f->eof = 0;
+            f->wmode = (mode && mode[0] == 'w') ? 1 : 0;
+            f->pos = 0;
+            f->len = 0;
+            return f;
+        }
+    }
+    close(fd); /* pool exhausted */
+    return NULL;
+}
+
+/* Ensure at least one buffered byte; returns 0 at EOF/error. */
+static int frefill(FILE *f) {
+    if (f->pos < f->len)
+        return 1;
+    ssize_t n = read(f->fd, f->buf, sizeof(f->buf));
+    if (n <= 0) {
+        f->eof = 1;
+        return 0;
+    }
+    f->pos = 0;
+    f->len = (size_t)n;
+    return 1;
+}
+
+int fgetc(FILE *f) {
+    if (!f || !frefill(f))
+        return EOF;
+    return f->buf[f->pos++];
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f) {
+    if (!f || size == 0)
+        return 0;
+    size_t total = size * nmemb;
+    size_t got = 0;
+    unsigned char *out = ptr;
+    while (got < total && frefill(f))
+        out[got++] = f->buf[f->pos++];
+    return got / size;
+}
+
+int feof(FILE *f) { return f ? f->eof : 1; }
+
+/* Drain the write buffer to the fd (write mode only). */
+int fflush(FILE *f) {
+    if (!f || !f->wmode)
+        return 0;
+    size_t off = 0;
+    while (off < f->len) {
+        ssize_t w = write(f->fd, f->buf + off, f->len - off);
+        if (w == RUGO_ERR) {
+            f->eof = 1;
+            return EOF;
+        }
+        off += (size_t)w;
+    }
+    f->len = 0;
+    return 0;
+}
+
+int fputc(int c, FILE *f) {
+    if (!f || !f->wmode)
+        return EOF;
+    f->buf[f->len++] = (unsigned char)c;
+    if (f->len == sizeof(f->buf) && fflush(f) == EOF)
+        return EOF;
+    return c;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f) {
+    if (!f || !f->wmode || size == 0)
+        return 0;
+    const unsigned char *in = ptr;
+    size_t total = size * nmemb, i;
+    for (i = 0; i < total; i++)
+        if (fputc(in[i], f) == EOF)
+            break;
+    return i / size;
+}
+
+int fclose(FILE *f) {
+    if (!f || !f->used)
+        return RUGO_ERR;
+    if (f->wmode)
+        fflush(f);
+    long r = close(f->fd);
+    f->used = 0;
+    return r == RUGO_ERR ? RUGO_ERR : 0;
 }
 
 /* printf subset: %s %c %d %u %x %% with single-write line buffering so

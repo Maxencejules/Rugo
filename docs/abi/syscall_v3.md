@@ -49,6 +49,10 @@ Syscall ABI identifier: `rugo.syscall_abi.v3`.
   fd; contract in `docs/runtime/clock_v1.md`);
   `54` = `sys_getrandom` (`rdi`=buf, `rsi`=len → bytes written; contract in
   `docs/runtime/rng_v1.md`);
+  `55` = `sys_epoll` (level-triggered readiness over the fd/pipe tables; op 1 =
+  create → epoll id, op 2 = ctl_add(`rsi`=ep, `rdx`=fd, `r10`=events), op 3 =
+  wait(`rsi`=ep, `rdx`=out, `r10`=max) → ready count, writing `{fd:i32,
+  revents:u16, pad:u16}` records, op 4 = close; EPOLLIN=0x1, EPOLLOUT=0x4);
   `59` = `sys_sandbox` (`rdi`=allow_mask → restrict the caller to the
   syscalls whose bit is set; monotonic; syscalls 0 and 2 always kept;
   contract in `docs/runtime/sandbox_v1.md`);

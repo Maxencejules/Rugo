@@ -94,4 +94,16 @@ int putchar(int c);
 int puts(const char *s);
 int printf(const char *fmt, ...);
 
+/* ---- buffered FILE* stdio (rlibc v3) over the fd layer ---- */
+#define EOF (-1)
+typedef struct __FILE FILE;
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *f);
+int fgetc(FILE *f);
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
+int feof(FILE *f);
+int fputc(int c, FILE *f);
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+int fflush(FILE *f);
+
 #endif /* RUGO_LIBC_H */

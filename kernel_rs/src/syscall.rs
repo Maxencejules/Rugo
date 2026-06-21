@@ -276,6 +276,11 @@ pub(crate) unsafe fn syscall_dispatch(frame: *mut u64) {
                 *frame.add(14) = sys_getrandom(arg1, arg2);
             }
             #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+            55 => {
+                let arg4 = *frame.add(5); // r10
+                *frame.add(14) = sys_epoll(arg1, arg2, arg3, arg4);
+            }
+            #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
             59 => {
                 *frame.add(14) = sys_sandbox(arg1);
             }

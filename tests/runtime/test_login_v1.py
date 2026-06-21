@@ -19,6 +19,9 @@ def test_login_authenticated_privilege_change(qemu_go_c4_runtime, find_in_order)
     find_in_order(out, [
         "SPAWN: loginprobe",
         "LOGINPROBE: ok",
+        # After LOGIN_LOCKOUT consecutive wrong root logins the account locks and
+        # even the correct password is refused (online brute-force throttle).
+        "LOGINPROBE: lockout ok",
         "RUGO: halt ok",
     ])
     assert "LOGINPROBE: FAIL" not in out
