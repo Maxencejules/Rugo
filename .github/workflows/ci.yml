@@ -19,15 +19,41 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            nasm xorriso qemu-system-x86 \
+            nasm xorriso \
             gcc-mingw-w64-x86-64 \
             python3 python3-pytest python3-pip \
-            git make curl wget binutils ca-certificates
+            git make curl wget binutils ca-certificates \
+            ninja-build pkg-config libglib2.0-dev libpixman-1-dev \
+            libslirp-dev flex bison python3-venv
 
       # ruff backs `make lint-py`, which gates test-qemu/gate-all. Not packaged
       # in Ubuntu 24.04 apt; pinned to match the Dockerfile.
       - name: Install ruff
         run: python3 -m pip install --break-system-packages "ruff==0.16.8"
+
+      # QEMU >= 9.0 is required: Ubuntu 24.04's 8.2 cannot emulate x2APIC under
+      # TCG, which the SMP and native-NVMe lanes boot with. tools/build_qemu.sh
+      # pins the version; the cache key covers it and the OS release, since the
+      # binary links against the system's glib/slirp.
+      - name: QEMU cache key
+        id: qemu-key
+        run: echo "os=$(. /etc/os-release && echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache QEMU build
+        id: qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/qemu
+          key: qemu-${{ steps.qemu-key.outputs.os }}-${{ hashFiles('tools/build_qemu.sh') }}
+
+      - name: Build QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        run: bash tools/build_qemu.sh "$HOME/qemu"
+
+      - name: Put QEMU on PATH
+        run: |
+          echo "$HOME/qemu/bin" >> "$GITHUB_PATH"
+          "$HOME/qemu/bin/qemu-system-x86_64" --version
 
       # Go + TinyGo pinned to match Dockerfile/tools.
       - name: Install Go
