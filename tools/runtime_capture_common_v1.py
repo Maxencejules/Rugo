@@ -204,7 +204,9 @@ def _event_kind(prefix: str, message: str) -> str:
         return "snapshot"
     if "reply" in lowered or "recv" in lowered or "send" in lowered or "connect" in lowered:
         return "io"
-    if "err" in lowered or "fail" in lowered:
+    # A service restart policy (gosvcm's "rst=on-failure/3") names a condition,
+    # not an error; keep it out of the substring match.
+    if "err" in lowered or "fail" in re.sub(r"\brst=\S+", "", lowered):
         return "error"
     return "marker"
 
