@@ -127,6 +127,11 @@ NATIVE_GO_KERNEL_LIB = $(NATIVE_GO_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_k
 NATIVE_GO_DESKTOP_TARGET_DIR = kernel_rs/target/native-go-desktop
 NATIVE_GO_DESKTOP_KERNEL_LIB = $(NATIVE_GO_DESKTOP_TARGET_DIR)/$(CARGO_TARGET)/release/librugo_kernel.a
 
+# Assembly objects. Must be defined before any rule lists it as a prerequisite:
+# make expands prerequisite lists as it reads them, so a later definition leaves
+# the list empty and the objects are never assembled on a clean checkout.
+ASM_OBJS = $(OUT)/entry.o $(OUT)/isr.o $(OUT)/context.o
+
 # --- Targets ------------------------------------------------------------------
 
 build: $(ASM_OBJS) boot/linker.ld
@@ -159,9 +164,6 @@ $(FS_TEST_IMG): tools/mkfs.py | $(OUT)
 
 $(FS_BADMAGIC_IMG): tools/mkfs.py | $(OUT)
 	$(PYTHON) tools/mkfs.py $(FS_BADMAGIC_IMG) --corrupt-superblock-magic
-
-# Assembly objects
-ASM_OBJS = $(OUT)/entry.o $(OUT)/isr.o $(OUT)/context.o
 
 # --- Assembly -----------------------------------------------------------------
 
