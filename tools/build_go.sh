@@ -10,7 +10,8 @@ OUT_ELF="$OUT/gousr.elf"
 OUT_BIN="$OUT/gousr.bin"
 TARGET_JSON="$OUT/rugo-target.json"
 BUILD_TAGS=()
-MAX_BIN_BYTES=32768
+# Must match GO_IMAGE_MAX_PAGES * 4096 in kernel_rs/src/runtime/process.rs.
+MAX_BIN_BYTES=49152
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -146,6 +147,10 @@ OBJCOPY_BIN="$(find_tool objcopy objcopy.exe "$MINGW_WIN_BIN/objcopy.exe" "$MING
     echo "ERROR: objcopy not found in PATH"
     exit 1
 }
+READELF_BIN="$(find_tool readelf readelf.exe "$MINGW_WIN_BIN/readelf.exe" "$MINGW_WIN_BIN_ALT/readelf.exe")" || {
+    echo "ERROR: readelf not found in PATH"
+    exit 1
+}
 
 SERVICE_NAME="$(basename "$SVC")"
 NASM_OUT="$OUT/${SERVICE_NAME}_start.o"
@@ -235,4 +240,26 @@ if [ "$BIN_SIZE" -gt "$MAX_BIN_BYTES" ]; then
     echo "ERROR: Go user binary exceeds the current ${MAX_BIN_BYTES}-byte userspace image limit ($BIN_SIZE bytes)"
     exit 1
 fi
-echo "==> Go user binary: $OUT_BIN ($BIN_SIZE bytes)"
+# The flat binary omits .bss, but the kernel maps the whole in-memory image
+# into the same fixed window, so also check the ELF's LOAD span (lowest vaddr
+# to highest vaddr + memsz). A .bss past the window faults at boot (USERPF).
+READELF_IN="$OUT_ELF"
+if tool_uses_host_paths "$READELF_BIN"; then
+    READELF_IN="$(to_host_path "$READELF_IN")"
+fi
+IMAGE_SPAN=$("$READELF_BIN" -lW "$READELF_IN" | awk '$1 == "LOAD" { print $3, $6 }' | {
+    lo=-1
+    hi=0
+    while read -r vaddr memsz; do
+        start=$((vaddr))
+        end=$((vaddr + memsz))
+        if [ "$lo" -lt 0 ] || [ "$start" -lt "$lo" ]; then lo=$start; fi
+        if [ "$end" -gt "$hi" ]; then hi=$end; fi
+    done
+    echo $((hi - lo))
+})
+if [ "$IMAGE_SPAN" -le 0 ] || [ "$IMAGE_SPAN" -gt "$MAX_BIN_BYTES" ]; then
+    echo "ERROR: Go user image spans $IMAGE_SPAN bytes in memory (incl. .bss); the userspace image limit is ${MAX_BIN_BYTES} bytes"
+    exit 1
+fi
+echo "==> Go user binary: $OUT_BIN ($BIN_SIZE bytes, $IMAGE_SPAN in memory)"
