@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qemu-system-x86 \
     python3 \
     python3-pytest \
+    python3-pip \
     git \
     make \
     dos2unix \
@@ -18,6 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+# ruff backs `make lint-py` (gates test-qemu); not packaged in Ubuntu 24.04 apt.
+RUN python3 -m pip install --break-system-packages "ruff==0.16.8"
 
 # Install Rust nightly with rust-src (required for build-std)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
