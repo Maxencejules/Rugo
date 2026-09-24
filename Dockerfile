@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gccgo \
     libc6-dev \
     binutils \
+    gcc-mingw-w64-x86-64 \
     xorriso \
     qemu-system-x86 \
     python3 \

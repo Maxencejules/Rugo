@@ -230,16 +230,25 @@ RLIBC_CFLAGS = -ffreestanding -nostdlib -mabi=sysv -mno-red-zone \
                -fno-asynchronous-unwind-tables -fno-unwind-tables \
                -ffunction-sections -fdata-sections \
                -fno-builtin -Ilibc/include -Wall -Wextra -O2 -c
-MINGW_LD = /c/mingw64/mingw64/bin/ld.exe
+# The *-pe.o objects must be PE/COFF for the PE link below. On Windows the host
+# mingw gcc already emits COFF; elsewhere $(CC) emits ELF, so use the mingw-w64
+# cross toolchain (Debian/Ubuntu: gcc-mingw-w64-x86-64).
+ifeq ($(OS),Windows_NT)
+MINGW_CC ?= $(CC)
+MINGW_LD ?= /c/mingw64/mingw64/bin/ld.exe
+else
+MINGW_CC ?= x86_64-w64-mingw32-gcc
+MINGW_LD ?= x86_64-w64-mingw32-ld
+endif
 
 $(OUT)/rlibc-crt0-pe.o: libc/crt0.asm | $(OUT)
 	$(NASM) -f win64 $< -o $@
 
 $(OUT)/rlibc-pe.o: libc/rlibc.c libc/include/rugo/libc.h | $(OUT)
-	$(CC) $(RLIBC_CFLAGS) $< -o $@
+	$(MINGW_CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-hello-main-pe.o: apps/hello-c/hello.c libc/include/rugo/libc.h | $(OUT)
-	$(CC) $(RLIBC_CFLAGS) $< -o $@
+	$(MINGW_CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
 	$(MINGW_LD) -m i386pep --gc-sections --dynamicbase --image-base 0x0 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-hello.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/rlibc-pe.o
@@ -249,7 +258,7 @@ $(OUT)/app-hello.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-hello-main-pe.o $(OUT)/r
 # in .rdata + an 8 KiB .bss array), proving the PE->ELF toolchain and the exec
 # loader handle a multi-page C image end to end (companion to the asm page3probe).
 $(OUT)/app-bigcprobe-main-pe.o: apps/c-bigprobe/bigprobe.c libc/include/rugo/libc.h | $(OUT)
-	$(CC) $(RLIBC_CFLAGS) $< -o $@
+	$(MINGW_CC) $(RLIBC_CFLAGS) $< -o $@
 
 $(OUT)/app-bigcprobe.elf: $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o tools/pe_to_elf_v1.py | $(OUT)
 	$(MINGW_LD) -m i386pep --gc-sections --dynamicbase --image-base 0x0 --section-alignment 0x200 --file-alignment 0x200 -e _start -nostdlib -static -o $(OUT)/app-bigcprobe.pe $(OUT)/rlibc-crt0-pe.o $(OUT)/app-bigcprobe-main-pe.o $(OUT)/rlibc-pe.o
