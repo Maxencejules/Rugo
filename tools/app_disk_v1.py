@@ -27,6 +27,9 @@ from pathlib import Path
 SECTOR = 512
 SIMPLEFS_MAGIC = 0x53465331  # "SFS1" little-endian bytes "1SFS" on disk
 PKG_MAGIC_V1 = 0x01474B50
+# The kernel VFS region starts here (BASE_SECTOR in kernel_rs/src/vfs.rs) and
+# is formatted at boot, so the app payloads must end before it.
+VFS_BASE_SECTOR = 512
 
 
 def build_pkg(name: str, payload: bytes) -> bytes:
@@ -77,6 +80,13 @@ def main() -> int:
         table[index * 32 : (index + 1) * 32] = entry
         payloads += pkg.ljust(pkg_sectors * SECTOR, b"\x00")
         cursor += pkg_sectors
+
+    if cursor > VFS_BASE_SECTOR:
+        raise SystemExit(
+            f"app-disk: apps span sectors {data_sector}..{cursor - 1}, past the VFS "
+            f"region at sector {VFS_BASE_SECTOR} (kernel_rs/src/vfs.rs BASE_SECTOR), "
+            "which the boot-time VFS format would overwrite; pack fewer apps"
+        )
 
     superblock = struct.pack("<IIII", SIMPLEFS_MAGIC, len(apps), data_sector, cursor)
 

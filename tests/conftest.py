@@ -899,21 +899,23 @@ def qemu_serial_net_missing():
 
 
 APP_DISK_V1_TOOL = os.path.join(REPO_ROOT, "tools", "app_disk_v1.py")
-APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps", "wc", "hello", "nxprobe", "sigprobe", "fsperm", "asprobe", "forkprobe", "vmprobe", "timeprobe", "rngprobe", "sandboxprobe", "devprobe", "sysinfoprobe", "futexprobe", "lseekprobe", "sleepprobe", "gfxprobe", "waitprobe", "timerfdprobe", "dmesgprobe", "ptyprobe", "partprobe", "fatprobe", "page3probe", "beepprobe", "auditprobe", "fatlsprobe", "cryptprobe", "journalprobe", "userprobe", "compositorprobe", "dlprobe", "fatwrprobe", "fatbigprobe", "loginprobe"]
+APP_REGION_APPS = ["base-shell", "echo", "cat", "ls", "ps", "wc", "hello", "nxprobe", "sigprobe", "fsperm", "asprobe", "forkprobe", "vmprobe", "timeprobe", "rngprobe", "sandboxprobe", "devprobe", "sysinfoprobe", "futexprobe", "lseekprobe", "sleepprobe", "gfxprobe", "waitprobe", "timerfdprobe", "dmesgprobe", "ptyprobe", "partprobe", "fatprobe", "page3probe", "beepprobe", "auditprobe", "fatlsprobe", "cryptprobe", "journalprobe", "userprobe", "compositorprobe", "dlprobe", "fatwrprobe", "fatbigprobe"]
 
 
-def _ensure_app_region(disk_path):
+def _ensure_app_region(disk_path, apps=APP_REGION_APPS):
     """Write the exec app region (sector 64+) onto a go-lane boot disk."""
     if not os.path.isfile(disk_path):
         with open(disk_path, "wb") as f:
             f.write(b"\x00" * (1024 * 1024))
     cmd = [sys.executable, APP_DISK_V1_TOOL, "--disk", disk_path]
-    for name in APP_REGION_APPS:
+    for name in apps:
         elf = os.path.join(REPO_ROOT, "out", f"app-{name}.elf")
         if not os.path.isfile(elf):
             pytest.skip(f"app ELF not built: {elf}")
         cmd += ["--app", f"{name}={elf}"]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.fail(result.stderr.strip() or result.stdout.strip())
 
 
 @pytest.fixture
