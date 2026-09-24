@@ -10,6 +10,7 @@ VENDOR_LIMINE="$ROOT/vendor/limine"
 CC_BIN="${CC:-cc}"
 ISO_TOOL="${XORRISO:-xorriso}"
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 ISO_ROOT="$(mktemp -d "$OUT/iso_root.XXXXXX")"
 trap 'rm -rf "$ISO_ROOT"' EXIT
 
@@ -47,7 +48,7 @@ if [ ! -f "$LIMINE_CLI" ]; then
     mkdir -p "$OUT"
     (
         cd "$ROOT"
-        "$CC_BIN" -O2 -pipe -Wall -Wextra -std=c99 -o "out/limine-cli" "vendor/limine/limine.c"
+        "$CC_BIN" -O2 -pipe -Wall -Wextra -std=c99 -o "${LIMINE_CLI#"$ROOT"/}" "vendor/limine/limine.c"
     )
     if [ -f "$OUT/limine-cli.exe" ]; then
         LIMINE_CLI="$OUT/limine-cli.exe"

@@ -6,10 +6,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gccgo \
     libc6-dev \
     binutils \
+    gcc-mingw-w64-x86-64 \
     xorriso \
-    qemu-system-x86 \
+    ninja-build \
+    pkg-config \
+    libglib2.0-dev \
+    libpixman-1-dev \
+    libslirp-dev \
+    flex \
+    bison \
+    python3-venv \
     python3 \
     python3-pytest \
+    python3-pip \
     git \
     make \
     dos2unix \
@@ -17,6 +26,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+# ruff backs `make lint-py` (gates test-qemu); not packaged in Ubuntu 24.04 apt.
+RUN python3 -m pip install --break-system-packages "ruff==0.16.8"
+
+# QEMU >= 9.0 (Ubuntu 24.04's 8.2 cannot emulate x2APIC under TCG, which the
+# SMP and native-NVMe lanes boot with); pinned in tools/build_qemu.sh.
+COPY tools/build_qemu.sh /tmp/build_qemu.sh
+RUN bash /tmp/build_qemu.sh /opt/qemu && rm /tmp/build_qemu.sh
+ENV PATH="/opt/qemu/bin:${PATH}"
 
 # Install Rust nightly with rust-src (required for build-std)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \

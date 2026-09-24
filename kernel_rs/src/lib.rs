@@ -3202,6 +3202,14 @@ cfg_m3! {
             6 => Some(USER_CODE_PAGE_7.0.as_mut_ptr()),
             #[cfg(feature = "go_test")]
             7 => Some(USER_CODE_PAGE_8.0.as_mut_ptr()),
+            #[cfg(feature = "go_test")]
+            8 => Some(USER_CODE_PAGE_9.0.as_mut_ptr()),
+            #[cfg(feature = "go_test")]
+            9 => Some(USER_CODE_PAGE_10.0.as_mut_ptr()),
+            #[cfg(feature = "go_test")]
+            10 => Some(USER_CODE_PAGE_11.0.as_mut_ptr()),
+            #[cfg(feature = "go_test")]
+            11 => Some(USER_CODE_PAGE_12.0.as_mut_ptr()),
             _ => None,
         }
     }
@@ -3356,6 +3364,10 @@ cfg_m3! {
             *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
             *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
             *pt_code.add(7) = kv2p(USER_CODE_PAGE_8.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(8) = kv2p(USER_CODE_PAGE_9.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(9) = kv2p(USER_CODE_PAGE_10.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(10) = kv2p(USER_CODE_PAGE_11.0.as_ptr() as u64) | code_flags;
+            *pt_code.add(11) = kv2p(USER_CODE_PAGE_12.0.as_ptr() as u64) | code_flags;
         }
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
@@ -3645,6 +3657,14 @@ cfg_r4! {
     static mut USER_CODE_PAGE_7:  Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
     static mut USER_CODE_PAGE_8:  Page = Page([0; 4096]);
+    #[cfg(feature = "go_test")]
+    static mut USER_CODE_PAGE_9:  Page = Page([0; 4096]);
+    #[cfg(feature = "go_test")]
+    static mut USER_CODE_PAGE_10: Page = Page([0; 4096]);
+    #[cfg(feature = "go_test")]
+    static mut USER_CODE_PAGE_11: Page = Page([0; 4096]);
+    #[cfg(feature = "go_test")]
+    static mut USER_CODE_PAGE_12: Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
     static mut USER_STACK_PAGE_5: Page = Page([0; 4096]);
     #[cfg(feature = "go_test")]
@@ -8157,6 +8177,10 @@ cfg_r4! {
         *pt_code.add(5) = kv2p(USER_CODE_PAGE_6.0.as_ptr() as u64) | code_flags;
         *pt_code.add(6) = kv2p(USER_CODE_PAGE_7.0.as_ptr() as u64) | code_flags;
         *pt_code.add(7) = kv2p(USER_CODE_PAGE_8.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(8) = kv2p(USER_CODE_PAGE_9.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(9) = kv2p(USER_CODE_PAGE_10.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(10) = kv2p(USER_CODE_PAGE_11.0.as_ptr() as u64) | code_flags;
+        *pt_code.add(11) = kv2p(USER_CODE_PAGE_12.0.as_ptr() as u64) | code_flags;
 
         let pt_stack = USER_PT_STACK.0.as_mut_ptr() as *mut u64;
         *pt_stack.add(511) = kv2p(USER_STACK_PAGE.0.as_ptr() as u64) | 0x07;
@@ -8182,6 +8206,10 @@ cfg_r4! {
         core::ptr::write_bytes(USER_CODE_PAGE_6.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
         core::ptr::write_bytes(USER_CODE_PAGE_7.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
         core::ptr::write_bytes(USER_CODE_PAGE_8.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_9.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_10.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_11.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
+        core::ptr::write_bytes(USER_CODE_PAGE_12.0.as_mut_ptr(), 0, runtime::process::GO_IMAGE_PAGE_SIZE);
 
         let chunks = [
             runtime::process::go_image_chunk(blob, 0),
@@ -8192,6 +8220,10 @@ cfg_r4! {
             runtime::process::go_image_chunk(blob, 5),
             runtime::process::go_image_chunk(blob, 6),
             runtime::process::go_image_chunk(blob, 7),
+            runtime::process::go_image_chunk(blob, 8),
+            runtime::process::go_image_chunk(blob, 9),
+            runtime::process::go_image_chunk(blob, 10),
+            runtime::process::go_image_chunk(blob, 11),
         ];
         let pages = [
             USER_CODE_PAGE.0.as_mut_ptr(),
@@ -8202,6 +8234,10 @@ cfg_r4! {
             USER_CODE_PAGE_6.0.as_mut_ptr(),
             USER_CODE_PAGE_7.0.as_mut_ptr(),
             USER_CODE_PAGE_8.0.as_mut_ptr(),
+            USER_CODE_PAGE_9.0.as_mut_ptr(),
+            USER_CODE_PAGE_10.0.as_mut_ptr(),
+            USER_CODE_PAGE_11.0.as_mut_ptr(),
+            USER_CODE_PAGE_12.0.as_mut_ptr(),
         ];
         for i in 0..runtime::process::GO_IMAGE_MAX_PAGES {
             if chunks[i].is_empty() {
