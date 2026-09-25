@@ -15,11 +15,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import conftest  # noqa: E402
 
 
-def _boot_smp(iso, smp, input_text=None, with_devices=False, timeout=30):
+def _boot_smp(iso, smp, input_text=None, with_devices=False, timeout=30, cpu="qemu64,+x2apic"):
     serial_port = conftest._pick_serial_port()
     cmd = [
         conftest.QEMU_BIN,
-        "-machine", "q35", "-cpu", "qemu64,+x2apic", "-smp", str(smp), "-m", "256",
+        "-machine", "q35", "-cpu", cpu, "-smp", str(smp), "-m", "256",
         "-display", "none", "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
         "-cdrom", iso,
@@ -258,3 +258,45 @@ def test_default_lane_boots_clean_on_multicore(find_in_order):
     assert "USERPF" not in out
     assert "GOINIT: err" not in out
     assert " FAIL" not in out
+
+
+# Without x2APIC (CPUID.01H:ECX[21] clear) the kernel must not release the APs:
+# every SMP path after check-in uses x2APIC MSRs, and setting the x2APIC enable
+# bit on such a CPU raises #GP. Plain qemu64 does not advertise x2APIC, so this
+# boots multicore on a CPU without it; before the CPUID check the AP's enable
+# faulted ("TRAP: gpf") right after "SMP: cpus".
+def test_no_x2apic_leaves_aps_parked(find_in_order):
+    iso = os.path.join(conftest.REPO_ROOT, "out", "os.iso")
+    if not os.path.isfile(iso):
+        import pytest
+
+        pytest.skip(f"ISO not built: {iso}")
+    out = _boot_smp(iso, 2, cpu="qemu64")
+    find_in_order(out, [
+        "SMP: cpus=0x0000000000000002",
+        "SMP: x2apic unsupported, aps left parked",
+        "SMP: aps online=0x0000000000000000",
+        # Only the BSP ran the lock hammer: 1 CPU x 2000 = 0x7D0.
+        "SMP: lock count=0x00000000000007D0 ok",
+        "RUGO: halt ok",
+    ])
+    assert "TRAP:" not in out
+    assert "SMP: ipi ack" not in out
+
+
+def test_default_lane_boots_on_multicore_without_x2apic(find_in_order):
+    iso = os.path.join(conftest.REPO_ROOT, "out", "os-go.iso")
+    if not os.path.isfile(iso):
+        import pytest
+
+        pytest.skip(f"ISO not built: {iso}")
+    out = _boot_smp(iso, 2, input_text="shutdown\n", with_devices=True, timeout=40, cpu="qemu64")
+    find_in_order(out, [
+        "SMP: x2apic unsupported, aps left parked",
+        "SMP: aps online=0x0000000000000000",
+        "GOSH: session ready",
+        "GOSH: shutdown",
+        "RUGO: halt ok",
+    ])
+    assert "TRAP:" not in out
+    assert "USERPF" not in out
