@@ -72,11 +72,21 @@ pub(crate) unsafe fn is_bsp() -> bool {
     current_apic_id() == BSP_LAPIC_ID.load(Ordering::Relaxed)
 }
 
+/// True if the CPU supports x2APIC (CPUID.01H:ECX[21]). Everything SMP does
+/// after AP check-in (IPIs, per-AP LAPIC timers, TLB shootdown, AP scheduling,
+/// `is_bsp`'s ID read) goes through x2APIC MSRs, and setting the x2APIC enable
+/// bit on a CPU without it raises #GP, so `smp_init` only releases APs when
+/// this holds.
+unsafe fn cpu_has_x2apic() -> bool {
+    core::arch::x86_64::__cpuid(1).ecx & (1 << 21) != 0
+}
+
 /// Enable x2APIC mode + software-enable the local APIC. The spurious vector is
 /// 65, whose IDT gate is installed unconditionally in `idt_init` (so a spurious
 /// delivery always lands on a present gate, in every lane). Requires CPU x2APIC
-/// support (the SMP test boots `-cpu qemu64,+x2apic`). Called per-CPU only when
-/// SMP is active.
+/// support, which `smp_init` checks (`cpu_has_x2apic`) before releasing any AP;
+/// the SMP test boots `-cpu qemu64,+x2apic`. Called per-CPU only when SMP is
+/// active.
 unsafe fn x2apic_enable() {
     const IA32_APIC_BASE: u32 = 0x1B;
     const X2APIC_SVR: u32 = 0x80F;
@@ -2868,7 +2878,15 @@ pub fn smp_init() {
         serial_write(b"\n");
         let mut first_ap: u32 = 0;
         let mut have_ap = false;
-        if !resp.is_null() {
+        // Without x2APIC the APs are left parked in Limine (never released) and
+        // the kernel runs uniprocessor: SMP_AP_COUNT stays 0, so every SMP path
+        // (is_bsp, tlb_shootdown, AP scheduling) takes its uniprocessor branch
+        // and nothing touches an x2APIC MSR.
+        let x2apic = cpu_has_x2apic();
+        if count > 1 && !x2apic {
+            serial_write(b"SMP: x2apic unsupported, aps left parked\n");
+        }
+        if !resp.is_null() && x2apic {
             let bsp = (*resp).bsp_lapic_id;
             BSP_LAPIC_ID.store(bsp, Ordering::Release); // for is_bsp() in the syscall path
             let mut i = 0u64;
@@ -2893,7 +2911,7 @@ pub fn smp_init() {
         smp_lock_hammer();
         // Wait for check-ins (bounded; ~enough for QEMU at any load). Each AP
         // checks in only after finishing its locked increments.
-        let expected = count.saturating_sub(1);
+        let expected = if have_ap { count.saturating_sub(1) } else { 0 };
         let mut spins = 0u64;
         while APS_ONLINE.load(Ordering::SeqCst) < expected && spins < 200_000_000 {
             core::hint::spin_loop();
@@ -2915,7 +2933,8 @@ pub fn smp_init() {
         // an AP could still be hammering, so this plain read would race it.
         if online >= expected {
             let total = core::ptr::read_volatile(core::ptr::addr_of!(SMP_GUARDED));
-            let want = count.wrapping_mul(SMP_LOCK_ITERS);
+            // Only the CPUs that actually ran: the BSP plus every released AP.
+            let want = (expected + 1).wrapping_mul(SMP_LOCK_ITERS);
             serial_write(b"SMP: lock count=0x");
             serial_write_hex(total);
             if total == want {

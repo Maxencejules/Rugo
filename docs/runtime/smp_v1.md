@@ -18,12 +18,18 @@ scheduling stays on the BSP — that boundary is the contract.
   (the serial path is not multi-CPU safe) and never touch non-atomic
   kernel state.
 - The BSP waits (bounded spin) for all check-ins and reports.
+- APs are released only if the CPU supports x2APIC (CPUID.01H:ECX[21]):
+  every SMP path after check-in (IPIs, per-AP timers, TLB shootdown, AP
+  scheduling) uses x2APIC MSRs, and enabling x2APIC without it raises
+  #GP. Without it the APs stay parked in Limine and the kernel runs
+  uniprocessor.
 
 ## Markers
 
 | Marker | Meaning |
 |---|---|
 | `SMP: cpus=0x<n>` | CPU count from the Limine SMP response (1 if absent) |
+| `SMP: x2apic unsupported, aps left parked` | multi-CPU machine without x2APIC; no AP released |
 | `SMP: aps online=0x<n>` | APs that executed kernel code and parked |
 
 ## Multicore-exposed protocol fix
