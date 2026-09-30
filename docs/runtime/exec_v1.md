@@ -47,8 +47,8 @@ propagates EOF; the child sees them in `rdx`/`rcx`.
 The shell's `left | right` pipeline joins two external programs this
 way (`cat /data/etc/motd | wc`). v1 pipelines run sequentially — left
 to completion, then right — bounded by the pipe's ring; concurrent
-pipeline stages need per-process address spaces (the exec window is
-single-occupancy), which is the documented next architectural step.
+pipeline scheduling is a separate limitation; the current product loader
+already creates per-process address spaces.
 Proof: `make test-pipes-v1`, `tests/runtime/test_pipes_runtime_v1.py`.
 
 ## On-disk app region
@@ -57,7 +57,7 @@ Written by `tools/app_disk_v1.py` at sector 64 of the boot disk (clear of
 the runtime-state sectors 8–11):
 
 - sector 64: SimpleFS superblock (magic `SFS1`, file count, data start)
-- sector 65: file table, 16 × 32-byte entries (name[24], start sector u32,
+- sectors 65–67: file table, 48 × 32-byte entries (name[24], start sector u32,
   size u32)
 - data sectors: PKG v1 frame per file — magic u32, bin_size u32, name[24],
   sha256[32], then the ELF payload (max 64 KiB)
@@ -67,12 +67,16 @@ is `EXEC: <name> badhash` and the spawn fails.
 
 ## Exec app window
 
-ET_EXEC ELF64 segments must live entirely in `[0x0140_0000, 0x0180_0000)`
-inside the demand-paged region — pages are pre-mapped by `copyout_user`
-during the load. v1 semantics: the window is **single-occupancy**; spawning
-while an app is resident fails with `EXEC: <name> busy`. The window is
-released on any child exit path, including fault containment. Real
-multi-program address spaces are a later phase.
+In the current product lane, ET_EXEC segments live in
+`[0x0140_0000, 0x017F_F000)`; the following page is reserved for arguments.
+The complete static image is preflighted before load writes, and each child
+loads into its own private address space through `mm::as_copyout` and
+`mm::as_map_zeroed`. A failed load releases that space before any task starts.
+The earlier single-occupancy v1 restriction is superseded by this per-process
+implementation (see `tests/runtime/test_concurrent_exec_v1.py`). The separately
+loaded PIE base-shell retains its ASLR path. Static format restrictions and
+the direct-code/native evidence distinction are in
+[Product static ELF preflight v1](exec_static_v1.md).
 
 ## Marker contract
 
@@ -81,7 +85,6 @@ multi-program address spaces are a later phase.
 | `EXEC: <name> ok` | app verified, loaded, child task created |
 | `EXEC: <name> missing` | name not present in the app region |
 | `EXEC: <name> badhash` | SHA-256 mismatch — payload rejected |
-| `EXEC: <name> busy` | app window occupied |
 | `EXEC: <name> noregion / nodisk / ioerr / badpkg / badsize / badelf / full` | other deterministic failure classes |
 | `BASESH: hello from disk` | emitted by the running app itself (only exists in the ELF payload) |
 | `APP: base-shell ok` | shell reaped the child after a clean exit |

@@ -6,6 +6,8 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 mod runtime;
+#[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
+mod elf_static;
 
 // Shorthand for "any M3 user-mode test feature is active (includes M5 blk_test, M6 fs_test, G1 go_test, G2 spike go_std_test, M10 security tests)"
 macro_rules! cfg_m3 {
@@ -4656,68 +4658,13 @@ cfg_r4! {
     /// the load targets the new process, not the spawner.
     #[cfg(all(feature = "go_test", not(feature = "compat_real_test")))]
     unsafe fn exec_load_app(pml4_phys: u64, image: &[u8]) -> Option<u64> {
-        if image.len() < 64 {
-            return None;
-        }
-        if &image[0..4] != b"\x7FELF" || image[4] != 2 || image[5] != 1 {
-            return None;
-        }
-        let e_type = u16::from_le_bytes([image[16], image[17]]);
-        if e_type != 2 {
-            return None;
-        }
-        let e_entry = u64::from_le_bytes(image[24..32].try_into().ok()?);
-        if e_entry < EXEC_APP_BASE || e_entry >= EXEC_APP_END {
-            return None;
-        }
-        let e_phoff = u64::from_le_bytes(image[32..40].try_into().ok()?) as usize;
-        let e_phentsize = u16::from_le_bytes([image[54], image[55]]) as usize;
-        let e_phnum = u16::from_le_bytes([image[56], image[57]]) as usize;
-        if e_phentsize < 56 || e_phnum == 0 || e_phnum > 8 {
-            return None;
-        }
-        let mut i = 0usize;
-        while i < e_phnum {
-            let ph = e_phoff + i * e_phentsize;
-            if ph + 56 > image.len() {
-                return None;
-            }
-            let p_type = u32::from_le_bytes(image[ph..ph + 4].try_into().ok()?);
-            if p_type == 1 {
-                let p_offset =
-                    u64::from_le_bytes(image[ph + 8..ph + 16].try_into().ok()?) as usize;
-                let p_vaddr = u64::from_le_bytes(image[ph + 16..ph + 24].try_into().ok()?);
-                let p_filesz =
-                    u64::from_le_bytes(image[ph + 32..ph + 40].try_into().ok()?) as usize;
-                let p_memsz =
-                    u64::from_le_bytes(image[ph + 40..ph + 48].try_into().ok()?) as usize;
-                if p_filesz > p_memsz
-                    || p_offset + p_filesz > image.len()
-                    || p_vaddr < EXEC_APP_BASE
-                    || p_vaddr + p_memsz as u64 > EXEC_APP_END
-                {
-                    return None;
-                }
-                if !mm::as_copyout(pml4_phys, p_vaddr, &image[p_offset..p_offset + p_filesz])
-                {
-                    return None;
-                }
-                // BSS: map (zeroed) the rest of the segment. Fresh frames
-                // arrive zeroed, and the file-backed tail page was copied
-                // into an already-zeroed frame, so no explicit memset.
-                if p_memsz > p_filesz
-                    && !mm::as_map_zeroed(
-                        pml4_phys,
-                        p_vaddr + p_filesz as u64,
-                        p_memsz - p_filesz,
-                    )
-                {
-                    return None;
-                }
-            }
-            i += 1;
-        }
-        Some(e_entry)
+        elf_static::load_static(
+            image,
+            EXEC_APP_BASE,
+            core::cmp::min(EXEC_APP_END, EXEC_ARGS_VA),
+            |va, bytes| mm::as_copyout(pml4_phys, va, bytes),
+            |va, len| mm::as_map_zeroed(pml4_phys, va, len),
+        )
     }
 
     // Code-base ASLR for main apps (full-os guide Part IV.10). An ET_DYN (PIE) app has

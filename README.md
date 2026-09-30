@@ -72,6 +72,12 @@ Visible proof paths:
   and reaps it.
   Proof: `tests/runtime/test_exec_from_fs_v1.py`, contract
   `docs/runtime/exec_v1.md`
+- `make test-exec-static-v1`
+  Checks the default static ELF loader directly in debug/release host builds and
+  boots checksum-valid malformed packages through real `sys_spawn`, followed by
+  valid static/PIE programs and clean shutdown.
+  Proof and limits: [static ELF preflight contract](docs/runtime/exec_static_v1.md),
+  `tests/host/exec_static_v1.rs`, `tests/runtime/test_exec_static_v1.py`.
 - `make test-vfs-v1`
   Boots the default Go image and verifies a writable on-disk file tree
   with directories under `/data`: create, write, read back, list, unlink,
