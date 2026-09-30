@@ -128,7 +128,9 @@ def test_sys_spawn_rejects_malformed_static_apps_then_runs_static_and_pie(
         tmp_path, {**negatives, "page3probe": static, "base-shell": pie}
     )
     commands = "".join(f"probe {name}\n" for name in negatives)
-    commands += "probe page3probe\nrun base-shell\nhealth\nshutdown\n"
+    # `run` checks installed-package state populated by the `pkg` command;
+    # generic malformed probes intentionally exercise sys_spawn directly.
+    commands += "probe page3probe\npkg\nrun base-shell\nhealth\nshutdown\n"
     result = conftest._boot_iso_with_disk_and_net(
         conftest.ISO_GO_PATH, str(disk), input_text=commands
     )
@@ -142,6 +144,7 @@ def test_sys_spawn_rejects_malformed_static_apps_then_runs_static_and_pie(
             *(f"EXEC: {name} badelf" for name in negatives),
             "EXEC: page3probe ok",
             "PAGE3: ok",
+            "GOSH: pkg ok",
             "EXEC: base-shell ok",
             "BASESH: hello from disk",
             "APP: base-shell ok",
