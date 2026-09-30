@@ -103,7 +103,17 @@ jobs:
         run: make repro-check
 
       - name: QEMU smoke tests
+        env:
+          RUGO_EXEC_STATIC_STRICT: "1"
         run: make gate-all
+
+      - name: Upload static ELF real-spawn transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exec-static-qemu
+          path: out/exec-static-v1/qemu-serial.txt
+          if-no-files-found: warn
 
       - name: Compatibility profile v1 gate
         env:
@@ -1292,3 +1302,28 @@ jobs:
             out/os-go-desktop-native.iso
             out/kernel-go-desktop-native.elf
             out/product-alpha-supporting
+
+  static-elf-host:
+    name: Shared static ELF parser (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Check focused Rust formatting
+        run: rustfmt --check --edition 2021 kernel_rs/src/elf_static.rs tests/host/exec_static_v1.rs
+      - name: Compile no_std and run direct debug/release tests
+        run: python tools/test_exec_static_v1.py
+      - name: Upload compiler provenance and direct-test transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exec-static-host-${{ matrix.os }}
+          path: out/exec-static-v1/*.txt
+          if-no-files-found: error

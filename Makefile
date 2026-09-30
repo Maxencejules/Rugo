@@ -1608,3 +1608,12 @@ test-mouse-irq-v1: image-go
 
 test-tcp-sndwin-v1: image-go
 	$(PYTHON) -m pytest tests/runtime/test_tcp_sndwin_v1.py -v --junitxml=$(OUT)/pytest-tcp-sndwin-v1.xml
+
+# Product ET_EXEC preflight: shared Rust host code plus real package-spawn boot.
+.PHONY: test-exec-static-host-v1 test-exec-static-v1
+
+test-exec-static-host-v1:
+	$(PYTHON) tools/test_exec_static_v1.py --out $(OUT)/exec-static-v1
+
+test-exec-static-v1: image-go test-exec-static-host-v1
+	RUGO_EXEC_STATIC_STRICT=1 $(PYTHON) -m pytest tests/runtime/test_exec_static_v1.py -v --junitxml=$(OUT)/pytest-exec-static-v1.xml
